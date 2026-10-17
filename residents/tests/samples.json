@@ -1,5 +1,5 @@
 {
- "_doc": "27 messages (#21 is DEMO.md beat 4, verbatim; #22-27 are the drill's location and DONE replies) a resident or operator might text during the drill, with the expected extraction. `expect.kinds` = fact kinds in order; other keys are checked on the fact of that kind. `context` = what we last sent / what we're waiting on. Run: uv run python scripts/eval_extract.py",
+ "_doc": "27 messages (#21 is DEMO.md beat 4, verbatim; #22-27 are the drill's location and DONE replies; #28-32 question topics, a decline with a question, a garbled need) a resident or operator might text during the drill, with the expected extraction. `expect.kinds` = fact kinds in order; other keys are checked on the fact of that kind. `context` = what we last sent / what we're waiting on. Run: uv run python scripts/eval_extract.py",
  "samples": [
   {
    "role": "resident",
@@ -325,6 +325,73 @@
     "kinds": [
      "done"
     ]
+   }
+  },
+  {
+   "role": "resident",
+   "text": "HOW MUCH TIME",
+   "context": {
+    "last_outbound": "[EMBER drill] Confirmed: Accessible Van 3 is coming to your door. Step 1 of 4: Stay inside at 123 Western Ave. The crew arrives in about 3 min. Reply DONE when you're ready."
+   },
+   "expect": {
+    "kinds": [
+     "question"
+    ],
+    "question_topic": "eta"
+   }
+  },
+  {
+   "role": "resident",
+   "text": "no, we want to travel with others, is there another person near me?",
+   "context": {
+    "last_outbound": "[EMBER drill] Accessible Van 3 will pick you up at your door in about 17 min and take you to Boston EMS Station 14 (drill staging). Reply YES to confirm, or tell us what changed. (plan v5)"
+   },
+   "expect": {
+    "kinds": [
+     "reject",
+     "question"
+    ],
+    "question_topic": "others"
+   }
+  },
+  {
+   "role": "resident",
+   "text": "are there any other vans?",
+   "context": {
+    "last_outbound": "[EMBER drill] Accessible Van 3 will pick you up at your door in about 17 min and take you to Boston EMS Station 14 (drill staging). Reply YES to confirm, or tell us what changed. (plan v5)"
+   },
+   "expect": {
+    "kinds": [
+     "question"
+    ],
+    "question_topic": "vehicles"
+   }
+  },
+  {
+   "role": "resident",
+   "text": "where do we meet the van?",
+   "context": {
+    "last_outbound": "[EMBER drill] Accessible Van 3 will pick you up at your door in about 17 min and take you to Boston EMS Station 14 (drill staging). Reply YES to confirm, or tell us what changed. (plan v5)"
+   },
+   "expect": {
+    "kinds": [
+     "question"
+    ],
+    "question_topic": "pickup_place"
+   }
+  },
+  {
+   "role": "resident",
+   "text": "4 people and we need a Welch's",
+   "context": {
+    "last_outbound": "[EMBER drill] How many people are with you, and does anyone need a wheelchair-accessible vehicle?"
+   },
+   "expect": {
+    "kinds": [
+     "need"
+    ],
+    "people": 4,
+    "question": true
    }
   }
  ]

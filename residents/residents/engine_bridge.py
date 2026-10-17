@@ -194,6 +194,8 @@ class EngineBridge:
     def flood_corners(self, k: int = 4) -> list[tuple[float, str]]:
         """Street corners the forecast flood reaches first: [(deadline_s, "Flagg Street and Memorial Drive")].
         For the drill console: places a tester can text to get an evacuation (elsewhere: shelter in place)."""
+        if getattr(self, "_corners", None) and len(self._corners) >= k:  # the flood forecast doesn't change
+            return self._corners[:k]
         from ember_engine.scenario import deadlines
         scn = {**self.scenario, "households": [{"household_id": int(h), "needs": "unknown"} for h in self.world.hh_id]}
         best: dict[int, float] = {}
@@ -203,7 +205,8 @@ class EngineBridge:
                 best[node] = min(d, best.get(node, d))
         out = sorted((d, " and ".join(sorted(self.places.streets.get(n, set()))[:2]), n) for n, d in best.items()
                      if len(self.places.streets.get(n, set())) >= 2)
-        return [(d, label) for d, label, _ in out[:k]]
+        self._corners = [(d, label) for d, label, _ in out[:max(k, 4)]]
+        return self._corners[:k]
 
     def household_node(self, hid: int) -> int:
         if not hasattr(self, "_hh_rows"):

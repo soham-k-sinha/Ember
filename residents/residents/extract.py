@@ -44,6 +44,10 @@ class Fact(BaseModel):
     endurance_min: float | None = Field(description="facility_status: MINUTES of backup power/fuel left, e.g. '10 minutes' = 10, '6 hours' = 360")
     facility_state: Literal["ok", "backup", "down"] | None = Field(
         description="facility_status: ok = on grid power, backup = running on backup/generator, down = no power / not operating")
+    question_topic: Literal["eta", "pickup_place", "destination", "others", "vehicles", "bring", "other"] | None = Field(
+        description="question: eta = when / how long; pickup_place = where to go or wait; destination = where they'll be "
+                    "taken; others = other people near them / travelling together / neighbours; vehicles = which vehicles "
+                    "are free, why this one, other options; bring = what to pack; other = anything else")
 
 
 class Extraction(BaseModel):
@@ -62,12 +66,13 @@ Fact kinds:
 - location: where the sender is right now (an address, an intersection, a landmark, coordinates). Copy it as written into address; for an intersection put one street in address and the other in cross_street.
 - done: they report finishing the step we last asked them to do ("done", "we're at the corner", "on the van", "we've arrived", "it's connected").
 - confirm: yes / accepting the instruction we last sent. reject: no / can't do it / declining it.
-- question: they ask something. other: anything else (greetings, thanks, chatter).
+- question: they ask something; set question_topic. other: anything else (greetings, thanks, chatter).
 
 Rules:
 - Leave a field null unless the message states it or makes it unambiguous ("me and my mom" = 2 people; "she uses a wheelchair" = mobility and accessible_vehicle true).
 - A short reply like "3" or "yes" answers the last message we sent or the pending question; use that context.
-- One message can hold several facts (e.g. a need and a closure_report).
+- One message can hold several facts (e.g. a need and a closure_report). "No, we want to travel with others, is anyone near me?" is a reject AND a question (topic others).
+- If a word looks garbled or autocorrected (e.g. "we need a Welch's"), don't drop it or guess: ask about it in clarifying_question.
 - If the facts are ambiguous or something essential is missing (a need with no head count, a closure with no street name), set clarifying_question to ONE short, plain question. Otherwise leave it null.
 - confidence reflects how certain you are of the facts, not how urgent they are."""
 
@@ -118,6 +123,8 @@ class Outcome:
     pending: dict | None = None                        # partial need to remember for the next reply
     clear_pending: bool = False
     location: dict | None = None                       # {"address", "cross_street"}: where they say they are
+    topics: list[str] = field(default_factory=list)    # question topics, answered from the plan (briefing.py)
+    follow_up: str | None = None                       # the model's own question next to a need ("Did you mean…?")
     step_done: bool = False                            # they finished the step we last asked for
 
 
@@ -189,6 +196,7 @@ def to_outcome(ex: Extraction, *, role: str, thread: dict, text: str, pending: d
         elif f.kind == "done":
             out.step_done = True
         elif f.kind == "question":
+            out.topics.append(f.question_topic or "other")
             out.reports.append({"source": source, "kind": "question", "confidence": ex.confidence, "text": text,
                                 **({"household_id": hid} if hid is not None else {}),
                                 **({"facility_id": fid} if fid is not None else {})})
@@ -197,6 +205,8 @@ def to_outcome(ex: Extraction, *, role: str, thread: dict, text: str, pending: d
         out.question_is_missing_info = True
     elif ex.clarifying_question and not out.reports:
         out.question = ex.clarifying_question
+    elif ex.clarifying_question and any(r["kind"] == "need" for r in out.reports):
+        out.follow_up = ex.clarifying_question  # e.g. "we need a Welch's": plan on what's clear, ask about the rest
     return out
 
 

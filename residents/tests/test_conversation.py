@@ -47,14 +47,14 @@ def judge(c):
 
 def test_partial_need_keeps_what_we_knew():
     o = to_outcome(Extraction(facts=[Fact(kind="need", people=2, mobility=None, accessible_vehicle=None, medical=None,
-                                          road_hint=None, cross_street=None, address=None, endurance_min=None, facility_state=None)],
+                                          road_hint=None, cross_street=None, address=None, endurance_min=None, facility_state=None, question_topic=None)],
                               confidence=0.9, clarifying_question=None),
                    role="resident", thread=JT, text="Yes, 2 people", pending=None, resolve_road=lambda *a: [],
                    last_assignment_id=None, known_needs={"people": 2, "mobility": True, "accessible_vehicle": True})
     assert o.reports[0]["payload"] == {"people": 2, "mobility": True, "accessible_vehicle": True}
     # an explicit correction still wins
     o = to_outcome(Extraction(facts=[Fact(kind="need", people=3, mobility=False, accessible_vehicle=False, medical=None,
-                                          road_hint=None, cross_street=None, address=None, endurance_min=None, facility_state=None)],
+                                          road_hint=None, cross_street=None, address=None, endurance_min=None, facility_state=None, question_topic=None)],
                               confidence=0.9, clarifying_question=None),
                    role="resident", thread=JT, text="actually 3, nobody needs a wheelchair", pending=None,
                    resolve_road=lambda *a: [], last_assignment_id=None, known_needs={"people": 2, "accessible_vehicle": True})
