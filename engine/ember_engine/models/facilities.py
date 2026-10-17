@@ -95,7 +95,7 @@ class FacilityModel:
         if k in self.generator:
             return "ok"
         deps = [d for d in f.get("depends_on", []) if self.by_id[d]["type"] not in POWER_EXEMPT]
-        if any(self.state[d] == "down" for d in deps):
+        if self.own[k] == "backup" or any(self.state[d] == "down" for d in deps):   # reported or forced onto backup
             return "backup" if self.endurance[k] - self.used[k] > 0 else "down"
         return self.own[k]
 

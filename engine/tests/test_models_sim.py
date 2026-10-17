@@ -64,6 +64,24 @@ def test_substation_failure_puts_hospital_on_backup_and_endurance_counts_down(sc
     assert fm.state["mt_auburn"] == "ok"
 
 
+def test_reported_backup_counts_down_while_the_grid_is_up(scn):
+    """Operator: 'we're on backup, 10 minutes left' before the substation fails → down 10 min later, not at
+    the substation failure."""
+    fm = FacilityModel(scn["facilities"])
+    fm.step(0.0, 60.0)
+    assert fm.state["sub_putnam_ave"] == "ok"
+    fm.apply_status("mt_auburn", {"state": "backup", "backup_endurance_s": 600})
+    t = 60.0
+    while t < 600:
+        fm.step(t, 60.0); t += 60.0
+    assert fm.state["mt_auburn"] == "backup"
+    fm.step(t, 60.0); fm.step(t + 60, 60.0)
+    assert fm.state["mt_auburn"] == "down" and fm.state["sub_putnam_ave"] == "ok"
+    fm.apply_status("mt_auburn", {"state": "ok"})                 # grid restored
+    fm.step(t + 120, 60.0)
+    assert fm.state["mt_auburn"] == "ok"
+
+
 def test_compatibility_rules(scn):
     gens = {r["id"]: r for r in scn["resources"] if r["kind"] == "generator"}
     cf = next(f for f in scn["facilities"] if f["id"] == "cottage_farm")
