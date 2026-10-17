@@ -1,0 +1,32 @@
+# data artifacts (rebuild with `uv run ember build`)
+data/*
+!data/.gitkeep
+
+# python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# node
+node_modules/
+dist/
+.next/
+
+# secrets
+.env
+.env.*
+!.env.example
+
+# os / editors
+.DS_Store
+.idea/
+.vscode/
+*.log
+
+# large binaries
+*.pkl
+*.npz
+*.parquet
