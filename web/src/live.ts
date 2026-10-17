@@ -104,7 +104,7 @@ function eventFrom(type: string, data: unknown): LiveEvent | null {
   return null;
 }
 
-/** Envelope from contracts/ws-events.schema.json (aryaman/ws-events, PR #11). Not residents/ws-events.schema.json. */
+/** Envelope from contracts/ws-events.schema.json. Not residents/ws-events.schema.json. */
 export type Envelope =
   | { kind: "invalid" }
   | { kind: "envelope"; seq: number; t_s: number; event: LiveEvent | null };
@@ -123,6 +123,18 @@ export function readEnvelope(payload: unknown): Envelope {
   };
 }
 
+export function scatterFromEnvelopes(events: unknown[]): ScatterPoint[] {
+  if (!Array.isArray(events)) return [];
+  const points: ScatterPoint[] = [];
+  for (const raw of events) {
+    const envelope = readEnvelope(raw);
+    if (envelope.kind === "envelope" && envelope.event?.type === "scatter_point") {
+      points.push(envelope.event.point);
+    }
+  }
+  return points;
+}
+
 /** null expected means this is the first envelope on the connection and any seq is the baseline. */
 export function seqDecision(expected: number | null, seq: number): "accept" | "duplicate" | "gap" {
   if (expected === null || seq === expected) return "accept";
@@ -136,18 +148,18 @@ async function readError(response: Response): Promise<string> {
   return trimmed ? `${response.status} ${trimmed.slice(0, 280)}` : `${response.status} ${response.statusText}`;
 }
 
-export async function getJson(url: string): Promise<unknown> {
-  const response = await fetch(url, { signal: AbortSignal.timeout(8000) });
+export async function getJson(url: string, timeoutMs = 8000): Promise<unknown> {
+  const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
   if (!response.ok) throw new Error(await readError(response));
   return response.json() as Promise<unknown>;
 }
 
-export async function postJson(url: string, body: unknown): Promise<unknown> {
+export async function postJson(url: string, body: unknown, timeoutMs = 8000): Promise<unknown> {
   const response = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(8000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) throw new Error(await readError(response));
   const text = await response.text();

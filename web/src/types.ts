@@ -55,6 +55,17 @@ export type TownHousehold = {
   vehicles: number;
 };
 
+export type TownNode = { id: number; lon: number; lat: number };
+
+export type TownAsset = {
+  id: number;
+  type: string;
+  name: string;
+  lon: number;
+  lat: number;
+  node: number;
+};
+
 export type Town = {
   meta: {
     version: string;
@@ -63,8 +74,10 @@ export type Town = {
     counts: { households: number; edges: number };
   };
   venue: { name: string; lon: number; lat: number; node: number; source?: string };
+  nodes: TownNode[];
   edges: TownEdge[];
   households: TownHousehold[];
+  assets: TownAsset[];
 };
 
 export type ScenarioKeyframe = {
@@ -263,7 +276,7 @@ export type StateSnapshot = {
   scenario_id: string;
   t_s: number;
   plan_version: number | null;
-  source?: "engine-example" | "simulator" | "backend";
+  source?: "engine-example" | "simulator" | "backend" | "scenario";
   synthetic?: string[];
   hazard: {
     keyframe_t_s: number | null;
@@ -310,6 +323,7 @@ export type EmberPlanVersion = {
 export type Comparison = {
   version: string;
   scenario_id: string;
+  seeds?: number[];
   headline: string[];
   notes: string[];
   nominal: { baseline: PlanMetrics; ember: PlanMetrics };
@@ -320,7 +334,7 @@ export type Comparison = {
   metrics: ComparisonMetric[];
 };
 
-/** One robustness run. Shape follows contracts/ws-events.schema.json on aryaman/ws-events and is provisional until Soham signs off. */
+/** One robustness run from contracts/ws-events.schema.json scatter_point (D38, still proposed). */
 export type ScatterPoint = {
   runId: string;
   batchId: string;

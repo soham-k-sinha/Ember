@@ -35,6 +35,7 @@ export function activeKeyframe(t: number): ScenarioKeyframe | null {
 }
 
 export function floodGeometry(state: StateSnapshot, t: number): FloodGeometry | null {
+  if (state.scenario_id !== scenario.scenario_id) return state.hazard.geometry;
   const frame = activeKeyframe(t);
   if (
     frame &&
@@ -44,12 +45,12 @@ export function floodGeometry(state: StateSnapshot, t: number): FloodGeometry | 
   ) {
     return state.hazard.geometry;
   }
-  return frame?.geometry ?? null;
+  return frame?.geometry ?? state.hazard.geometry;
 }
 
-/** Closures published in the state snapshot, plus judge clicks, plus edges the
- * later flood polygons cover. The 80-minute fixture is used verbatim for its
- * own keyframe so the map matches `state.fixture.json`. */
+/** Closures published in the state snapshot, plus judge clicks, plus edges that
+ * later flood polygons of the same scenario cover. A snapshot's own keyframe is
+ * left to `state.closures` so a published list is not redrawn. */
 export function closedEdges(
   state: StateSnapshot,
   t: number,
@@ -69,12 +70,14 @@ export function closedEdges(
     }
   }
 
+  if (state.scenario_id !== scenario.scenario_id) return [...byId.values()];
+
   const publishedHorizon = state.closures.reduce(
     (max, closure) => Math.max(max, closure.closed_from_t_s),
     0,
   );
-  const frame = activeKeyframe(t);
-  if (frame && frame.t_s > publishedHorizon) {
+  for (const frame of scenario.hazard.keyframes) {
+    if (frame.t_s > t || frame.t_s <= publishedHorizon) continue;
     for (const edge of town.edges) {
       if (byId.has(edge.id)) continue;
       if (lineIntersectsGeometry(edge.geom, frame.geometry)) {

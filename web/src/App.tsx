@@ -1,7 +1,14 @@
-import { useEffect, useMemo, useReducer } from "react";
+import { useEffect, useMemo, useReducer, useRef } from "react";
 import { MapView } from "./components/MapView";
 import { Panels, snapshotNote, type PanelId } from "./components/Panels";
-import { API_BASE, publishedComparison, publishedState, scenario } from "./fixtures";
+import {
+  API_BASE,
+  fixtureClock,
+  publishedComparison,
+  publishedScatter,
+  publishedState,
+  scenario,
+} from "./fixtures";
 import { formatSim } from "./format";
 import { asComparison, asState, getJson, openSocket, postJson, type LiveStatus } from "./live";
 import { activeKeyframe, closedEdges } from "./model";
@@ -69,6 +76,12 @@ type Action =
   | { type: "close"; edgeId: number; t: number }
   | { type: "undo"; edgeId: number };
 
+function isRecordVersion(value: unknown): number | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const version = (value as { plan_version?: unknown }).plan_version;
+  return typeof version === "number" ? version : null;
+}
+
 function planFromBody(value: unknown): PlanSnapshot | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
@@ -106,24 +119,40 @@ function reducer(state: Model, action: Action): Model {
           liveDetail: null,
           snapshot: publishedState,
           previous: null,
+          clock: fixtureClock,
           plans: withPlan([], publishedState.plan),
           comparison: publishedComparison,
-          notice: "Fixture mode. The map is the published contracts, with no backend.",
+          scatter: publishedScatter,
+          scatterBatch: publishedScatter[0]?.batchId ?? null,
+          scatterTotal: publishedScatter[0]?.nTotal ?? null,
+          notice: "Fixture mode. The map is allston_flood_v1. The comparison table is the published fixture until Live loads GET /comparison.",
         };
       }
-      return { ...state, mode: "live", notice: null };
+      return {
+        ...state,
+        mode: "live",
+        scatter: [],
+        scatterBatch: null,
+        scatterTotal: null,
+        notice: null,
+      };
     case "api":
       return { ...state, apiBase: action.apiBase };
     case "live-status":
-      return { ...state, liveStatus: action.status, liveDetail: action.detail ?? null };
+      return {
+        ...state,
+        liveStatus: action.status,
+        liveDetail: action.detail === undefined ? state.liveDetail : action.detail,
+      };
     case "state": {
       const previous = action.state.t_s === state.snapshot.t_s ? state.previous : state.snapshot;
+      const follow = state.mode === "live" && state.playing;
       return {
         ...state,
         snapshot: action.state,
         previous,
         plans: withPlan(state.plans, action.state.plan),
-        clock: action.state.t_s,
+        clock: follow ? state.clock : action.state.t_s,
       };
     }
     case "plan":
@@ -219,13 +248,13 @@ const initial: Model = {
   liveDetail: null,
   snapshot: publishedState,
   previous: null,
-  clock: publishedState.t_s,
+  clock: fixtureClock,
   playing: false,
   speed: 60,
   comparison: publishedComparison,
-  scatter: [],
-  scatterBatch: null,
-  scatterTotal: null,
+  scatter: publishedScatter,
+  scatterBatch: publishedScatter[0]?.batchId ?? null,
+  scatterTotal: publishedScatter[0]?.nTotal ?? null,
   plans: withPlan([], publishedState.plan),
   judge: [],
   selection: null,
@@ -242,7 +271,7 @@ export function App() {
     () => closedEdges(model.snapshot, model.clock, model.judge),
     [model.snapshot, model.clock, model.judge],
   );
-  const frame = activeKeyframe(model.clock);
+  const frame = model.snapshot.scenario_id === scenario.scenario_id ? activeKeyframe(model.clock) : null;
   const awayFromSnapshot = Math.abs(model.clock - model.snapshot.t_s) > 30;
 
   useEffect(() => {
@@ -268,7 +297,14 @@ export function App() {
       try {
         const body = await getJson(`${model.apiBase.replace(/\/$/, "")}/state`);
         const snapshot = asState(body);
-        if (!cancelled && snapshot) dispatch({ type: "state", state: snapshot });
+        if (!cancelled && snapshot) {
+          dispatch({ type: "state", state: snapshot });
+          dispatch({
+            type: "live-status",
+            status: "connecting",
+            detail: `state v${snapshot.version} · ${snapshot.scenario_id}`,
+          });
+        }
         if (!cancelled && !snapshot) {
           dispatch({
             type: "live-status",
@@ -313,6 +349,49 @@ export function App() {
     };
   }, [model.mode, model.apiBase]);
 
+  const clockRef = useRef(model.clock);
+  clockRef.current = model.clock;
+  const apiRef = useRef(model.apiBase);
+  apiRef.current = model.apiBase;
+  const modeRef = useRef(model.mode);
+  modeRef.current = model.mode;
+  const serverClock = useRef<number | null>(null);
+
+  useEffect(() => {
+    serverClock.current = model.mode === "live" ? model.snapshot.t_s : null;
+  }, [model.mode, model.snapshot]);
+
+  useEffect(() => {
+    if (model.mode !== "live" || model.playing) return;
+    if (serverClock.current == null) return;
+    if (Math.abs(model.clock - serverClock.current) < 1) return;
+    const handle = window.setTimeout(() => {
+      void pushClock(apiRef.current, clockRef.current);
+    }, 400);
+    return () => window.clearTimeout(handle);
+  }, [model.mode, model.playing, model.clock]);
+
+  useEffect(() => {
+    if (model.mode !== "live" || !model.playing) return;
+    const handle = window.setInterval(() => {
+      if (serverClock.current == null) return;
+      void pushClock(apiRef.current, clockRef.current);
+    }, 1200);
+    return () => window.clearInterval(handle);
+  }, [model.mode, model.playing]);
+
+  async function pushClock(apiBase: string, t: number) {
+    if (modeRef.current !== "live") return;
+    try {
+      await postJson(`${apiBase.replace(/\/$/, "")}/clock`, { t_s: t }, 20000);
+    } catch (error) {
+      dispatch({
+        type: "notice",
+        notice: error instanceof Error ? `Clock failed: ${error.message}` : "Clock failed.",
+      });
+    }
+  }
+
   async function closeRoad(edgeId: number) {
     dispatch({ type: "close", edgeId, t: model.clock });
     if (model.mode !== "live") {
@@ -324,14 +403,12 @@ export function App() {
     }
     dispatch({ type: "busy", busy: "close" });
     try {
-      const body = await postJson(`${model.apiBase.replace(/\/$/, "")}/disruption`, {
-        edge_id: edgeId,
-        source: "judge",
-        closed_from_t_s: model.clock,
-      });
+      const root = model.apiBase.replace(/\/$/, "");
+      await postJson(`${root}/disruption`, { close_edges: [edgeId] }, 30000);
+      const body = await getJson(`${root}/state`);
       const snapshot = asState(body);
       if (snapshot) dispatch({ type: "state", state: snapshot });
-      dispatch({ type: "notice", notice: `POST /disruption sent for edge ${edgeId}.` });
+      dispatch({ type: "notice", notice: `POST /disruption closed edge ${edgeId} (both directions).` });
     } catch (error) {
       dispatch({
         type: "notice",
@@ -350,12 +427,17 @@ export function App() {
     }
     dispatch({ type: "busy", busy: "replan" });
     try {
-      const body = await postJson(`${model.apiBase.replace(/\/$/, "")}/replan`, {});
-      const snapshot = asState(body);
+      const root = model.apiBase.replace(/\/$/, "");
+      const body = await postJson(`${root}/replan`, {}, 30000);
       const plan = planFromBody(body);
+      if (plan) dispatch({ type: "plan", plan });
+      const snapshot = asState(await getJson(`${root}/state`));
       if (snapshot) dispatch({ type: "state", state: snapshot });
-      else if (plan) dispatch({ type: "plan", plan });
-      dispatch({ type: "notice", notice: "POST /replan returned." });
+      const version = isRecordVersion(body);
+      dispatch({
+        type: "notice",
+        notice: version == null ? "POST /replan returned." : `POST /replan returned plan v${version}.`,
+      });
     } catch (error) {
       dispatch({
         type: "notice",
@@ -378,19 +460,14 @@ export function App() {
     dispatch({ type: "busy", busy: "compare" });
     const root = model.apiBase.replace(/\/$/, "");
     try {
-      await postJson(`${root}/simulate`, { variants: ["baseline", "ember"] });
-    } catch (error) {
-      dispatch({
-        type: "notice",
-        notice: error instanceof Error ? `POST /simulate failed: ${error.message}` : "POST /simulate failed.",
-      });
-    }
-    try {
-      const body = await getJson(`${root}/comparison`);
+      const body = await getJson(`${root}/comparison?seeds=5`, 90000);
       const comparison = asComparison(body);
       if (!comparison) throw new Error("GET /comparison did not include nominal.baseline and nominal.ember.");
       dispatch({ type: "comparison", comparison });
-      dispatch({ type: "notice", notice: "Comparison loaded. B − A is EMBER minus baseline. Spread, not confidence bounds." });
+      dispatch({
+        type: "notice",
+        notice: `Comparison loaded for ${comparison.scenario_id}. B − A is EMBER minus baseline. Spread, not confidence bounds.`,
+      });
     } catch (error) {
       dispatch({
         type: "notice",
@@ -473,8 +550,9 @@ export function App() {
       </section>
       {awayFromSnapshot ? (
         <p className="banner">
-          Flood extent and hazard closures follow the clock. Household status, resource positions,
-          and the plan stay at the {formatSim(model.snapshot.t_s)} snapshot until a newer state arrives.
+          Flood extent and road closures follow the clock. Household status, facility state,
+          and resource positions stay at the {formatSim(model.snapshot.t_s)}{" "}
+          {model.snapshot.source === "scenario" ? "scenario picture" : "snapshot"} until a newer state arrives.
         </p>
       ) : null}
       <main className="workspace">

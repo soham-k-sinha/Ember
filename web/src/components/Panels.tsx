@@ -300,7 +300,7 @@ function Spark(props: { series: Wastewater["series"] }) {
       <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Cumulative overflow">
         <path d={path} />
       </svg>
-      <figcaption>Cumulative overflow, from the state fixture.</figcaption>
+      <figcaption>Cumulative overflow on this snapshot.</figcaption>
     </figure>
   );
 }
@@ -444,6 +444,9 @@ function Conversations(props: { state: StateSnapshot; t: number }) {
 
 function Needs(props: { state: StateSnapshot }) {
   const unresolved = props.state.plan?.unresolved ?? [];
+  if (!props.state.plan) {
+    return <p className="empty">No plan is loaded, so there is no unresolved-need list yet.</p>;
+  }
   if (unresolved.length === 0) {
     return <p className="empty">This plan has no unresolved needs.</p>;
   }
@@ -479,7 +482,16 @@ function Compare(props: {
   const comparison = props.comparison;
   return (
     <div className="stack">
-      <p className="meta">B − A is EMBER minus baseline. Spread, not confidence bounds.</p>
+      <p className="meta">
+        B − A is EMBER minus baseline
+        {comparison ? ` · ${comparison.scenario_id}` : ""}.
+        {" "}The seed range is spread, not a confidence bound.
+      </p>
+      {comparison && comparison.scenario_id !== scenario.scenario_id ? (
+        <p className="meta">
+          This table is the published {comparison.scenario_id} comparison. The map is {scenario.scenario_id} until Live returns GET /comparison.
+        </p>
+      ) : null}
       <button className="primary" disabled={props.busy != null} onClick={props.onCompare}>
         {props.busy === "compare" ? "Running comparison…" : "Run comparison"}
       </button>
@@ -503,14 +515,14 @@ function Compare(props: {
               {comparison.metrics.map((metric) => {
                 const baseline = metricNumber(comparison.nominal.baseline, metric.metric);
                 const ember = metricNumber(comparison.nominal.ember, metric.metric);
-                const delta = baseline != null && ember != null ? ember - baseline : null;
+                const delta = baseline != null && ember != null ? ember - baseline : metric.diff_mean;
                 const digits = digitsFor(delta ?? ember ?? baseline ?? 0);
                 return (
                   <tr key={metric.metric}>
                     <td>
                       {metric.label}
                       <span>
-                        spread {formatNumber(metric.diff_min, digitsFor(metric.diff_min))} to {formatNumber(metric.diff_max, digitsFor(metric.diff_max))} {metric.unit}
+                        spread {formatNumber(metric.diff_min, digitsFor(metric.diff_min))} to {formatNumber(metric.diff_max, digitsFor(metric.diff_max))} {metric.unit}, not a confidence bound
                       </span>
                     </td>
                     <td>{baseline == null ? "—" : `${formatNumber(baseline, digits)} ${metric.unit}`}</td>
@@ -557,7 +569,9 @@ function Scatter(props: { scatter: ScatterPoint[]; scatterTotal: number | null }
   const points = props.scatter;
   return (
     <div className="stack">
-      <p className="meta">scatter_point is provisional until Soham signs off.</p>
+      <p className="meta">
+        scatter_point follows contracts/ws-events.schema.json. The shape is still proposed (D38) until Soham signs off. Chosen candidate is ember.
+      </p>
       {points.length === 0 ? (
         <p className="empty">
           Robustness runs fill this chart from <code>scatter_point</code> events. A new batch clears the previous one. The chosen EMBER plan is the ring.
@@ -647,6 +661,11 @@ function Plans(props: {
 
   return (
     <div className="stack">
+      {props.comparison && props.comparison.scenario_id !== scenario.scenario_id ? (
+        <p className="meta">
+          Versions are from the {props.comparison.scenario_id} comparison record, not the map scenario.
+        </p>
+      ) : null}
       <button className="primary" disabled={props.busy != null} onClick={props.onReplan}>
         {props.busy === "replan" ? "Replanning…" : "Replan"}
       </button>
@@ -682,12 +701,15 @@ function Plans(props: {
 }
 
 export function snapshotNote(state: StateSnapshot): string {
-  const source = state.source === "engine-example"
-    ? "Engine example"
-    : state.source === "simulator"
-      ? "Simulator"
-      : state.source === "backend"
-        ? "Backend"
-        : "Snapshot";
-  return `${source} at ${formatSim(state.t_s)} · ${scenario.name}`;
+  const source = state.source === "scenario"
+    ? "Scenario picture"
+    : state.source === "engine-example"
+      ? "Engine example"
+      : state.source === "simulator"
+        ? "Simulator"
+        : state.source === "backend"
+          ? "Backend"
+          : "Snapshot";
+  const name = state.scenario_id === scenario.scenario_id ? scenario.name : state.scenario_id;
+  return `${source} at ${formatSim(state.t_s)} · ${name}`;
 }
