@@ -435,7 +435,8 @@ function drawPeople(ctx: Ctx, props: IsoProps, t: number, now: number) {
   // a seek (scrub, replay switch): no strides or springs carried across the jump
   if (t < ctx.lastT || t - ctx.lastT > 600) ctx.crowd.reset();
   const dtS = Math.min(0.1, Math.max(0, now - ctx.lastNow));
-  const agents = buildAgents({ w: ctx.aw, state: props.state, t, legend: props.legend, walkers: props.walkers, showWalkers: props.showWalkers, now });
+  const strollShare = Math.max(0.25, Math.min(1, (ctx.cam.s - 0.5) / 1.5));
+  const agents = buildAgents({ w: ctx.aw, state: props.state, t, legend: props.legend, walkers: props.walkers, showWalkers: props.showWalkers, now, strollShare });
   const { cam, app } = ctx;
   const view = { x0: -cam.x / cam.s, y0: -cam.y / cam.s, x1: (app.screen.width - cam.x) / cam.s, y1: (app.screen.height - cam.y) / cam.s };
   ctx.crowd.update(agents, dtS, cam.s, view, tint(lightAt(t).people));

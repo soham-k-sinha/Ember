@@ -115,7 +115,7 @@ function water(P: number) {
 }
 
 export const ROAD_W: Record<string, number> = {
-  motorway: 15, trunk: 13, primary: 12, secondary: 10, tertiary: 9, residential: 7.5, unclassified: 7, living_street: 6, service: 4.5, unknown: 5,
+  parking_aisle: 5.5, motorway: 15, trunk: 13, primary: 12, secondary: 10, tertiary: 9, residential: 7.5, unclassified: 7, living_street: 6, service: 4.5, unknown: 5,
 };
 export const FOOT = new Set(["footway", "cycleway", "pedestrian", "path", "steps", "track", "bridleway"]);
 const MARKED = new Set(["motorway", "trunk", "primary", "secondary", "tertiary"]);
@@ -133,7 +133,7 @@ export type GroundBake = {
 export type ShadowShape = Array<[number, number]>; // (a, b) metres
 export type TreeSpot = { a: number; b: number; r: number; h: number };
 
-type Textures = Record<"lot" | "yard" | "grass" | "field" | "plaza" | "brick" | "concrete" | "asphalt" | "path" | "play" | "water", HTMLCanvasElement>;
+type Textures = Record<"lot" | "yard" | "grass" | "field" | "plaza" | "brick" | "concrete" | "asphalt" | "path" | "play" | "water" | "earth" | "parking", HTMLCanvasElement>;
 const TEXTURES = new Map<number, Textures>();
 
 function texturesAt(P: number): Textures {
@@ -151,6 +151,8 @@ function texturesAt(P: number): Textures {
     path: speckle(P, GROUND.path, 0.22, 29),
     play: speckle(P, GROUND.play, 0.2, 31),
     water: water(P),
+    earth: speckle(P, GROUND.earth, 0.34, 41),
+    parking: speckle(P, GROUND.parking, 0.12, 43),
   };
   TEXTURES.set(P, tex);
   return tex;
@@ -193,10 +195,13 @@ function paintGround(ctx: CanvasRenderingContext2D, inputs: GroundInputs, P: num
     if (k === "pitch" || k === "stadium" || k === "track") return pattern(tex.field);
     if (k === "playground") return pattern(tex.play);
     if (k === "pedestrian" || k === "plaza") return pattern(tex.plaza);
-    if (k === "university" || k === "school" || k === "college") return pattern(tex.plaza);
+    // campuses are mostly lawn crossed by real paths (drawn on top), not paving
+    if (k === "university" || k === "school" || k === "college") return pattern(tex.yard);
+    if (k === "construction") return pattern(tex.earth);
+    if (k === "parking") return pattern(tex.parking);
     return null;
   };
-  const order = ["residential", "university", "school", "college", "park", "recreation_ground", "protected_landscape_seascape", "garden", "grass", "cemetery", "pitch", "stadium", "track", "playground", "pedestrian", "plaza", "flowerbed"];
+  const order = ["residential", "university", "school", "college", "park", "recreation_ground", "protected_landscape_seascape", "garden", "grass", "cemetery", "pitch", "stadium", "track", "playground", "construction", "parking", "pedestrian", "plaza", "flowerbed"];
   const land = [...data.land].sort((x, y) => order.indexOf(x.k) - order.indexOf(y.k));
   for (const item of land) {
     const f = fill(item.k);
@@ -257,10 +262,44 @@ function paintGround(ctx: CanvasRenderingContext2D, inputs: GroundInputs, P: num
   };
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  strokeRoads((k) => (ROAD_W[k] ?? 5) + 5.2, "rgba(10,14,8,0.35)");
-  strokeRoads((k) => (ROAD_W[k] ?? 5) + 4.6, pattern(tex.concrete));
-  strokeRoads((k) => (ROAD_W[k] ?? 5) + 0.7, rgba(GROUND.kerb, 0.95));
+  const aisle = (k: string) => k === "parking_aisle";
+  strokeRoads((k) => (aisle(k) ? 0 : (ROAD_W[k] ?? 5) + 5.2), "rgba(10,14,8,0.35)");
+  strokeRoads((k) => (aisle(k) ? 0 : (ROAD_W[k] ?? 5) + 4.6), pattern(tex.concrete));
+  strokeRoads((k) => (aisle(k) ? 0 : (ROAD_W[k] ?? 5) + 0.7), rgba(GROUND.kerb, 0.95));
   strokeRoads((k) => ROAD_W[k] ?? 5, pattern(tex.asphalt));
+  // car-park bays: white lines square to each aisle, both sides, every 2.6 m
+  ctx.strokeStyle = "rgba(232,230,220,0.78)";
+  ctx.lineWidth = 0.13 * P;
+  ctx.lineCap = "butt";
+  ctx.beginPath();
+  for (const road of roads) {
+    if (!aisle(road.k)) continue;
+    const pts = road.path.map(([lon, lat]) => p.toAB(lon, lat));
+    let carry = 1.3;
+    for (let i = 1; i < pts.length; i++) {
+      const [pa, pb] = pts[i - 1];
+      const [qa, qb] = pts[i];
+      const len = Math.hypot(qa - pa, qb - pb);
+      if (len < 0.01) continue;
+      const ua = (qa - pa) / len;
+      const ub = (qb - pb) / len;
+      for (; carry < len; carry += 2.6) {
+        const ca = pa + ua * carry;
+        const cb = pb + ub * carry;
+        for (const side of [1, -1]) {
+          const x0 = (ca - ub * 2.9 * side - a0) * P;
+          const y0 = (cb + ua * 2.9 * side - b0) * P;
+          const x1 = (ca - ub * 7.6 * side - a0) * P;
+          const y1 = (cb + ua * 7.6 * side - b0) * P;
+          ctx.moveTo(x0, y0);
+          ctx.lineTo(x1, y1);
+        }
+      }
+      carry -= len;
+    }
+  }
+  ctx.stroke();
+  ctx.lineCap = "round";
   ctx.lineCap = "butt";
   strokeRoads((k) => (MARKED.has(k) ? 0.18 : 0), rgba(GROUND.marking, 0.85), roads, [3 * P, 4 * P]);
   ctx.lineCap = "round";

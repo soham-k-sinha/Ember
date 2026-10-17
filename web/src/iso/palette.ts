@@ -73,6 +73,8 @@ export const GROUND = {
   coping: [150, 142, 128] as RGB,
   yard: [96, 112, 66] as RGB,
   lot: [96, 96, 98] as RGB,
+  earth: [136, 110, 80] as RGB, // construction site: graded earth
+  parking: [66, 68, 72] as RGB, // surface car park asphalt
 };
 
 /** Building materials (numbers for Pixi). */

@@ -55,7 +55,7 @@ export function strollRoutes(data: Diorama, p: Projector, insideBuilding: (a: nu
       if (road.k !== "steps") push(ab);
       continue;
     }
-    if (road.k === "motorway" || road.k === "trunk") continue;
+    if (road.k === "motorway" || road.k === "trunk" || road.k === "parking_aisle") continue;
     const off = (ROAD_W[road.k] ?? 5) / 2 + 1.8;
     for (const side of [1, -1]) {
       const line: Array<[number, number]> = ab.map(([a, b], i) => {
@@ -260,6 +260,8 @@ export function buildAgents(args: {
   walkers: WalkerPlan | null;
   showWalkers: boolean;
   now: number; // wall seconds (decorative idle motion only)
+  /** share of passers-by to show (fewer when zoomed out, where real-pace motion is invisible) */
+  strollShare?: number;
 }): Agent[] {
   const { w, state, t, legend, now } = args;
   const { p } = w;
@@ -379,7 +381,7 @@ export function buildAgents(args: {
   // passers-by (illustrative): real walking pace on wall time, fewer as the flood rises, never on water
   if (args.showWalkers && w.strolls.length) {
     const N = 700;
-    const share = 1 - 0.75 * clamp01((t - 2400) / 7200);
+    const share = (1 - 0.75 * clamp01((t - 2400) / 7200)) * (args.strollShare ?? 1);
     const CLOTH = [0x8a94a6, 0x6f7f96, 0xb39b7d, 0x9a6b5a, 0x5d7a6a, 0xc9c2b4, 0x7b6f8f, 0x4f5d75, 0xa88a5c, 0x6a8caf];
     for (let i = 0; i < N; i++) {
       const h1 = ((i * 2654435761) >>> 0) / 4294967296;

@@ -41,7 +41,7 @@ export function loadDiorama(name = "stage"): Promise<Diorama | null> {
 
 /** Recognisable buildings: real materials from the research catalogue (wall, roof, label). */
 export const LANDMARKS: Array<{ match: RegExp; wall: number; roof?: number; label?: string }> = [
-  { match: /treehouse/i, wall: 0xc99a62, roof: 0x7f9a5c, label: "RUBENSTEIN TREEHOUSE" },
+  { match: /treehouse/i, wall: 0xc99a62, roof: 0x7f9a5c }, // named by its shelter marker
   { match: /science and engineering/i, wall: 0xc9cdd1, roof: 0x7e9f5a, label: "SCIENCE & ENGINEERING COMPLEX" },
   { match: /atlas hotel/i, wall: 0xc6ae88, roof: 0x6f90a8, label: "ATLAS HOTEL" },
   { match: /verra/i, wall: 0x3f8f6e, label: "VERRA" },

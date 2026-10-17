@@ -51,6 +51,12 @@ type Guest = {
   k: number;
   household?: number;
   stamp: number;
+  // cached painter's depth: recomputed after ~0.8 m of movement or a zoom change
+  zA: number;
+  zB: number;
+  zK: number;
+  z: number;
+  behind: boolean;
 };
 
 const MIN_FIGURE_PX = 9.5;
@@ -126,7 +132,7 @@ export class Crowd {
       decal.anchor.set(df.ax, df.ay);
       this.objects.addChild(c);
       this.decals.addChild(decal);
-      g = { c, person, cloth, decal, look: 0, height: 1, phase: 0, face: 1, faceAcc: 0, lastA: NaN, lastB: NaN, off: { x: 0, y: 0, vx: 0, vy: 0 }, px: 0, py: 0, k: 1, stamp: 0 };
+      g = { c, person, cloth, decal, look: 0, height: 1, phase: 0, face: 1, faceAcc: 0, lastA: NaN, lastB: NaN, off: { x: 0, y: 0, vx: 0, vy: 0 }, px: 0, py: 0, k: 1, stamp: 0, zA: NaN, zB: NaN, zK: 0, z: 0, behind: false };
     }
     g.look = Math.floor(h * LOOKS * 97) % LOOKS;
     g.height = 0.9 + ((h * 997) % 1) * 0.17;
@@ -134,6 +140,7 @@ export class Crowd {
     g.face = h > 0.5 ? 1 : -1;
     g.faceAcc = 0;
     g.lastA = g.lastB = NaN;
+    g.zA = g.zB = NaN;
     g.off.x = g.off.y = g.off.vx = g.off.vy = 0;
     this.guests.set(id, g);
     return g;
@@ -200,9 +207,16 @@ export class Crowd {
       const s = base * k * g.height;
       g.c.position.set(px, py);
       g.c.scale.set(s * g.face, s);
-      let z = this.depthFor(a, b, px, py, 0.4 * k, hPlane, this.hidden);
+      if (Number.isNaN(g.zA) || Math.abs(a - g.zA) + Math.abs(b - g.zB) > 0.8 || g.zK !== k) {
+        g.z = this.depthFor(a, b, px, py, 0.4 * k, hPlane, this.hidden);
+        g.behind = this.hidden.behind;
+        g.zA = a;
+        g.zB = b;
+        g.zK = k;
+      }
+      let z = g.z + (a + b - g.zA - g.zB); // keep sliding with the motion between recomputes
       let alpha = agent.alpha ?? 1;
-      if (agent.xray && this.hidden.behind) {
+      if (agent.xray && g.behind) {
         z = 1e6 + a + b;
         alpha *= 0.55;
       }
