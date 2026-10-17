@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS reports (
 CREATE TABLE IF NOT EXISTS plans (
     version        INTEGER PRIMARY KEY,
     parent_version INTEGER,
-    data           TEXT NOT NULL             -- the plan object without `assignments`
+    data           TEXT NOT NULL,            -- the plan object without `assignments`
+    reports_used   TEXT NOT NULL DEFAULT '[]' -- live report ids the allocator saw (next replan's prev_reports)
 );
 CREATE TABLE IF NOT EXISTS assignments (
     plan_version INTEGER NOT NULL,
@@ -103,6 +104,8 @@ PHONE_FIELDS = ("handle", "role", "assignment_id", "assigned_number", "peer_user
 
 # Snapshot keys that live in `meta` (everything that isn't a row in its own table).
 META_KEYS = ("version", "scenario_id", "t_s", "plan_version", "source", "synthetic", "hazard", "metrics")
+# Derived from the engine on every refresh; replaced wholesale by apply_snapshot().
+DERIVED_TABLES = ("closures", "households", "facilities", "resources")
 
 
 def thread_key(thread: dict) -> str:
@@ -131,6 +134,13 @@ class Store:
                 self._db.execute("PRAGMA journal_mode=WAL")
             self._db.execute("PRAGMA foreign_keys=ON")
             self._db.executescript(SCHEMA)
+            self._migrate()
+
+    def _migrate(self) -> None:
+        """Add columns that later versions introduced (CREATE TABLE IF NOT EXISTS won't)."""
+        cols = {r["name"] for r in self._db.execute("PRAGMA table_info(plans)")}
+        if "reports_used" not in cols:
+            self._db.execute("ALTER TABLE plans ADD COLUMN reports_used TEXT NOT NULL DEFAULT '[]'")
 
     def close(self) -> None:
         with self._lock:
@@ -197,10 +207,10 @@ class Store:
         )
 
     @staticmethod
-    def _insert_plan(db: sqlite3.Connection, plan: dict) -> None:
+    def _insert_plan(db: sqlite3.Connection, plan: dict, reports_used: list[str] | None = None) -> None:
         body = {k: v for k, v in plan.items() if k != "assignments"}
-        db.execute("INSERT INTO plans (version, parent_version, data) VALUES (?, ?, ?)",
-                   (plan["version"], plan.get("parent_version"), _dump(body)))
+        db.execute("INSERT INTO plans (version, parent_version, data, reports_used) VALUES (?, ?, ?, ?)",
+                   (plan["version"], plan.get("parent_version"), _dump(body), _dump(reports_used or [])))
         for i, a in enumerate(plan["assignments"]):
             db.execute("INSERT INTO assignments VALUES (?, ?, ?, ?, ?, ?)",
                        (plan["version"], a["id"], i, a["resource_id"], a["status"], _dump(a)))
@@ -211,6 +221,74 @@ class Store:
             "INSERT INTO messages (id, thread_key, direction, plan_version, external_id, delivery, data) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (m["id"], thread_key(m["thread"]), m["direction"], m.get("plan_version"), external_id, delivery, _dump(m)),
         )
+
+    def clear_scenario(self) -> None:
+        """Drop all scenario state (engine mode reseed). Phones and kv stay."""
+        with self._tx() as db:
+            for t in ("meta", "closures", "households", "facilities", "resources", "reports", "plans", "assignments", "messages"):
+                db.execute(f"DELETE FROM {t}")
+            db.execute("DELETE FROM sqlite_sequence WHERE name IN ('reports', 'messages')")
+
+    def apply_snapshot(self, state: dict) -> None:
+        """Replace the engine-derived part of the state (hazard, closures, households, facilities,
+        resources, metrics, the plan as of t) with a simulator snapshot. Backend-owned rows (reports,
+        messages, plan history, phones) are untouched."""
+        with self._tx() as db:
+            for k in ("version", "scenario_id", "t_s", "plan_version", "synthetic", "hazard", "metrics"):
+                if k in state:
+                    db.execute("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                               (k, _dump(state[k])))
+            db.execute("INSERT INTO meta (key, value) VALUES ('plan_view', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                       (_dump(state.get("plan")),))
+            for t in DERIVED_TABLES:
+                db.execute(f"DELETE FROM {t}")
+            for i, c in enumerate(state["closures"]):
+                db.execute("INSERT INTO closures VALUES (?, ?, ?, ?)", (c["edge_id"], i, c["source"], _dump(c)))
+            for i, h in enumerate(state["households"]):
+                db.execute("INSERT INTO households VALUES (?, ?, ?, ?)", (h["household_id"], i, h["status"], _dump(h)))
+            for i, f in enumerate(state["facilities"]):
+                db.execute("INSERT INTO facilities VALUES (?, ?, ?, ?)", (f["id"], i, f["state"], _dump(f)))
+            for i, r in enumerate(state["resources"]):
+                db.execute("INSERT INTO resources VALUES (?, ?, ?, ?)", (r["id"], i, r["status"], _dump(r)))
+            # scripted scenario reports the simulator applied so far (live ones are stored by add_report)
+            db.execute("DELETE FROM meta WHERE key = 'scenario_reports'")
+            db.execute("INSERT INTO meta (key, value) VALUES ('scenario_reports', ?)",
+                       (_dump([r for r in state.get("reports", []) if r.get("source") == "scenario"]),))
+
+    def add_plan(self, plan: dict, reports_used: list[str]) -> None:
+        """Store an allocator plan version (raw: what the next replan gets as `prev`) and make it current."""
+        with self._tx() as db:
+            self._insert_plan(db, plan, reports_used)
+            db.execute("INSERT INTO meta (key, value) VALUES ('plan_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                       (_dump(plan["version"]),))
+
+    def plan_reports_used(self, version: int) -> list[str]:
+        rows = self._rows("SELECT reports_used FROM plans WHERE version = ?", (version,))
+        return json.loads(rows[0]["reports_used"]) if rows else []
+
+    def add_report(self, r: dict) -> None:
+        with self._tx() as db:
+            self._insert_report(db, r)
+
+    def mark_reports_resolved(self, ids: list[str]) -> None:
+        with self._tx() as db:
+            for rid in ids:
+                row = db.execute("SELECT data FROM reports WHERE id = ?", (rid,)).fetchone()
+                if row:
+                    d = json.loads(row["data"]); d["resolved"] = True
+                    db.execute("UPDATE reports SET resolved = 1, data = ? WHERE id = ?", (_dump(d), rid))
+
+    def reports_by_id(self, ids: list[str]) -> list[dict]:
+        by = {r["id"]: r for r in self.reports()}
+        return [by[i] for i in ids if i in by]
+
+    def reports(self) -> list[dict]:
+        return self._objects("SELECT data FROM reports ORDER BY seq")
+
+    def set_meta(self, key: str, value: Any) -> None:
+        with self._tx() as db:
+            db.execute("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                       (key, _dump(value)))
 
     def add_message(self, m: dict, external_id: str | None = None, delivery: str | None = None) -> bool:
         """Store one state.messages[] object. False (and nothing written) if `external_id` was already
@@ -289,8 +367,14 @@ class Store:
         return [r["version"] for r in self._rows("SELECT version FROM plans ORDER BY version")]
 
     def current_plan(self) -> dict | None:
+        """The current plan version as the allocator produced it (raw)."""
         v = self.meta().get("plan_version")
         return None if v is None else self.plan(v)
+
+    def plan_view(self) -> dict | None:
+        """The current plan as the state shows it (engine view with routes and as-of-t statuses)."""
+        meta = self.meta()
+        return meta["plan_view"] if "plan_view" in meta else self.current_plan()
 
     def _objects(self, sql: str) -> list[dict]:
         return [json.loads(r["data"]) for r in self._rows(sql)]
@@ -311,7 +395,9 @@ class Store:
             state["households"] = self._objects("SELECT data FROM households ORDER BY ord")
             state["facilities"] = self._objects("SELECT data FROM facilities ORDER BY ord")
             state["resources"] = self._objects("SELECT data FROM resources ORDER BY ord")
-            state["plan"] = self.current_plan()
-            state["reports"] = self._objects("SELECT data FROM reports ORDER BY seq")
+            state["plan"] = meta["plan_view"] if "plan_view" in meta else self.current_plan()
+            live = self._objects("SELECT data FROM reports ORDER BY seq")
+            scripted = meta.get("scenario_reports", [])
+            state["reports"] = sorted(scripted + live, key=lambda r: r["observed_at_t_s"]) if scripted else live
             state["messages"] = self._objects("SELECT data FROM messages ORDER BY seq")
         return state
