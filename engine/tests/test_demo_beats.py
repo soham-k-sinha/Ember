@@ -62,3 +62,26 @@ def test_judge_beat_one_reply_changes_a_rescue_and_the_generator(world, scn):
     assert changed, "the judge's report no longer affects the generator"
     assert any(e["assignment_id"].startswith("a-gen-") for e in out["assignment_events"])
     assert v2["search"]["wall_s"] < 2.0
+
+
+def test_operator_beat_at_minute_15_moves_the_generator_to_the_hospital(world, scn):
+    """After the judge beat, at minute 15 Mount Auburn reports 'on backup, 10 minutes left': Generator 1 is
+    re-targeted to the hospital (outage ≈ 16 min instead of hours) and the overflow cost shows in the metrics."""
+    from ember_engine.api import EngineSession
+    judge = next(h for h in scn["households"] if h.get("judge"))["household_id"]
+    s = EngineSession(SCN, world=world)
+    s.start()
+    river_st = s.edges_by_name("River Street", near_household=judge, radius_m=150)
+    s.add_reports([s.make_report("need", 300, source="judge", household_id=judge,
+                                 payload={"people": 2, "mobility": True, "accessible_vehicle": True}),
+                   s.make_report("closure_report", 300, source="judge", household_id=judge,
+                                 payload={"edge_ids": river_st})], t_now=300)
+    out = s.add_report(s.make_report("facility_status", 900, source="operator", facility_id="mt-auburn",
+                                     payload={"set": {"state": "backup", "backup_endurance_s": 600}}), 900)
+    plan = out["plan"]
+    gen = [a for a in plan["assignments"] if a["task"] == "protect" and a.get("status") != "cancelled"]
+    assert [a["target"].get("facility_id") for a in gen] == ["mt-auburn"]
+    assert "down at 25 min" in gen[0]["rationale"]
+    m = plan["metrics"]
+    assert m["hospital_outage_s"] < 1200 and m["overflow_m3"] > 1000
+    assert any(u["target"].get("facility_id") == "cottage-farm" for u in plan["unresolved"])
