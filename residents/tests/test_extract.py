@@ -133,7 +133,7 @@ class FakeLLM:
 def make_client(settings, bridge):  # noqa: F811
     def make(script):
         llm = FakeLLM(script)
-        s = replace(settings, scenario=SCENARIO, engine_moves=0, extract_enabled=True)
+        s = replace(settings, scenario=SCENARIO, extract_enabled=True)
         return TestClient(create_app(s, bridge=bridge, llm=llm)), llm
     return make
 

@@ -27,7 +27,7 @@ LIVE = {  # what claude-opus-5-5 returned for each text
 
 @pytest.fixture
 def judge_phone(settings, bridge):  # noqa: F811
-    s = replace(settings, scenario=SCENARIO, engine_moves=0, extract_enabled=True)
+    s = replace(settings, scenario=SCENARIO, extract_enabled=True)
     with TestClient(create_app(s, bridge=bridge, llm=FakeLLM(LIVE))) as c:
         c.post("/phones", json={"role": "resident", "handle": "4133620520"})
         c.post("/clock", json={"t_s": 3000})
@@ -96,7 +96,7 @@ def test_every_fact_gets_a_reply_even_when_nothing_changed(judge_phone):
 def test_question_goes_to_coordinators_with_status(settings, bridge):  # noqa: F811
     llm = FakeLLM({"2 of us, my mom uses a wheelchair": LIVE["2 of us, my mom uses a wheelchair"],
                    "is the western ave bridge open?": ex(fact("question"))})
-    s = replace(settings, scenario=SCENARIO, engine_moves=0, extract_enabled=True)
+    s = replace(settings, scenario=SCENARIO, extract_enabled=True)
     with TestClient(create_app(s, bridge=bridge, llm=llm)) as c:
         c.post("/phones", json={"role": "resident", "handle": "4133620520"})
         say(c, "2 of us, my mom uses a wheelchair")

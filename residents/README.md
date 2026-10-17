@@ -41,7 +41,7 @@ Inbound texts are deduped by Photon message id; the event cursor is saved after 
 **Engine mode (default):** `SCENARIO` (default `scenarios/allston_flood_v1/scenario.json`) → plan v1 by the
 allocator at startup (~2 s), state = `simulate(plan, reports).state_at(clock)`. The DB is kept across
 restarts (a crash mid-demo keeps plans, reports, messages); it re-plans from scratch when `SCENARIO`
-changes, on `RESET_ON_START=1`, or `POST /dev/reset`. All engine calls go through `residents/engine_bridge.py`.
+changes, on `RESET_ON_START=1`, or `POST /dev/reset`. All engine calls go through `residents/engine_bridge.py` → `ember_engine.api.EngineSession`, resumed from the DB before every call.
 **Static mode:** `SCENARIO=` (empty) serves `SEED_STATE` (the state fixture) as-is; engine endpoints return 503.
 
 Check the live output against the contract:

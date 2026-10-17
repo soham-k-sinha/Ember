@@ -66,3 +66,12 @@ Interfaces: none changed. D46.
 Status: done.
 Notes: Anshuman — at 50 min the judge's accessible need is unservable ("every eligible vehicle is committed to earlier deadlines"); EMBER now tells the judge that honestly, but for the demo beat the judge needs a reachable accessible vehicle (Aryaman's earlier note).
 Next: switch engine_bridge.py to EngineSession (Aryaman's request), then Task 8 robustness + Task 6/7 leftovers.
+
+## 2026-10-17 10:10 · engine_bridge → EngineSession · branch soham/engine-session · commit (this PR)
+What: every engine call (initial plan, replan, state_at, compare, optimize) now goes through `ember_engine.api.EngineSession`, as Aryaman asked (D42). The DB stays the source of truth: the session is resumed from the stored plan + reports before each call, so restarts need nothing special. ENGINE_MOVES removed (EngineSession has no moves option).
+Files: residents/residents/{engine_bridge,app,config}.py, residents/tests/*, residents/{README.md,.env.example}
+Run: cd residents && uv run pytest -q (112 pass, 56 s) ; equivalence check: old direct allocate/simulate path vs EngineSession → identical v1, v2 (judge need), changes and state.
+Interfaces: none changed.
+Status: done. (residents/ws-events.schema.json was already removed in #16.)
+Note for Aryaman: could EngineSession.__init__ take an optional `moves=` passed to allocate()? Our test suite went from 18 s to 56 s without the shortened search.
+Next: Task 8 robustness, Task 6 scripted operator prompt, Task 7 POST /simulate.

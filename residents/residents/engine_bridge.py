@@ -1,5 +1,5 @@
-"""The one place the backend calls ember_engine. Swap internals here when engine's wrapper lands;
-nothing else in residents/ imports ember_engine (except tests' contract checks).
+"""The one place the backend calls ember_engine, through engine's `ember_engine.api.EngineSession` (D42).
+Nothing else in residents/ imports ember_engine (except tests' contract checks).
 
 All calls are synchronous CPU work (allocate ≈ 0.5–2 s): callers run them in a worker thread, and the
 lock keeps two of them from touching the World's caches at once.
@@ -19,8 +19,7 @@ FACT_KINDS = ("need", "closure_report", "facility_status")  # what the allocator
 
 
 class EngineBridge:
-    def __init__(self, scenario_path: Path | str, town_path: Path | str | None = None,
-                 moves: int | None = None, seed: int = 0):
+    def __init__(self, scenario_path: Path | str, town_path: Path | str | None = None, seed: int = 0):
         from ember_engine.scenario import load_scenario
         from ember_engine.world import World
 
@@ -29,7 +28,9 @@ class EngineBridge:
         town_file = Path(town_path) if town_path else self._unpacked_town()
         self.town = json.loads(town_file.read_text())
         self.world = World.load(town_file)
-        self.moves, self.seed = moves, seed
+        self.seed = seed
+        from ember_engine.api import EngineSession
+        self.session = EngineSession(self.scenario_path, world=self.world, seed=seed)
         self._lock = threading.Lock()
         self._edges = {e["id"]: e for e in self.town["edges"]}
         self._reverse = {(e["u"], e["v"]): e["id"] for e in self.town["edges"]}
@@ -58,34 +59,41 @@ class EngineBridge:
         """Only facts go to the engine; confirm/reject/question/other are the backend's business."""
         return [r for r in reports if r["kind"] in FACT_KINDS]
 
-    # ---------- planning ----------
+    # ---------- planning (all through engine's EngineSession, D42) ----------
+    # The backend's DB is the source of truth: before every call the session is resumed from the stored
+    # plan + reports, so a backend restart needs nothing special and the session never drifts from the DB.
     def plan(self, reports: list[dict], t_now: float, prev: dict | None, prev_reports: list[dict] | None,
              trigger: str | None = None) -> dict:
-        from ember_engine.allocator import allocate
         with self._lock:
-            return allocate(self.world, self.scenario, reports=self.engine_reports(reports), t_now=t_now, prev=prev,
-                            prev_reports=self.engine_reports(prev_reports) if prev_reports is not None else None,
-                            seed=self.seed, moves=self.moves, trigger=trigger)
+            if prev is None:
+                self.session.start()
+                plan = self.session.plan
+            else:
+                before = self.engine_reports(prev_reports or [])
+                seen = {r["id"] for r in before}
+                self.session.resume(prev, before)
+                new = [r for r in self.engine_reports(reports) if r["id"] not in seen]
+                plan = self.session.add_reports(new, t_now)["plan"]
+            if trigger:
+                plan["trigger"] = trigger
+            return plan
 
     def state_at(self, plan: dict, reports: list[dict], t_s: float) -> dict:
         """Simulate the current plan with every report known so far → state contract at t_s."""
-        from ember_engine.sim import simulate
         with self._lock:
-            res = simulate(self.world, self.scenario, plan, reports=self.engine_reports(reports))
-            return res.state_at(min(max(t_s, 0.0), self.t_end_s))
+            self.session.resume(plan, self.engine_reports(reports))
+            return self.session.state_at(min(max(t_s, 0.0), self.t_end_s))
 
     def optimize(self, reports: list[dict], t_now: float, prev: dict | None, on_point, seeds: int = 20, k: int = 4) -> dict:
-        """Robust fan-out through engine's EngineSession (Daytona if engine/.env has a key, else local)."""
-        from ember_engine.api import EngineSession
+        """Robust fan-out (Daytona if engine/.env has a key, else local processes)."""
         with self._lock:
-            sess = EngineSession(self.scenario_path, world=self.world, seed=self.seed)
-            sess.resume(prev, self.engine_reports(reports))
-            return sess.optimize(on_point=on_point, t_now=t_now, seeds=seeds, k=k)["plan"]
+            self.session.resume(prev, self.engine_reports(reports))
+            return self.session.optimize(on_point=on_point, t_now=t_now, seeds=seeds, k=k)["plan"]
 
     def compare(self, reports: list[dict], seeds: int = 5) -> dict:
-        from ember_engine.compare import compare
         with self._lock:
-            return compare(self.world, self.scenario, seeds=seeds, reports=self.engine_reports(reports), seed=self.seed)
+            self.session.reports = self.engine_reports(reports)  # compare() reads reports only, not the plan
+            return self.session.compare(seeds=seeds)
 
     # ---------- lookups for validating disruptions ----------
     def both_directions(self, edge_ids: list[int]) -> list[int]:

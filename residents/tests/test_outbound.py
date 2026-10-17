@@ -17,7 +17,7 @@ from tests.test_extract import FakeLLM, ex, fact
 
 @pytest.fixture
 def oc(settings, bridge):  # noqa: F811
-    s = replace(settings, scenario=SCENARIO, engine_moves=0)
+    s = replace(settings, scenario=SCENARIO)
     with TestClient(create_app(s, bridge=bridge)) as c:
         c.post("/phones", json={"role": "resident", "handle": "4133620520"})   # Photon off → delivery "dev"
         c.post("/phones", json={"role": "operator", "handle": "4134094408"})
@@ -94,7 +94,7 @@ def test_generator_instruction_goes_to_the_operator(oc):
 
 def test_info_request_asked_once_after_hi(settings, bridge):  # noqa: F811
     llm = FakeLLM({"hi": ex(fact("other")), "hello?": ex(fact("other"))})
-    s = replace(settings, scenario=SCENARIO, engine_moves=0, extract_enabled=True)
+    s = replace(settings, scenario=SCENARIO, extract_enabled=True)
     with TestClient(create_app(s, bridge=bridge, llm=llm)) as c:
         c.post("/phones", json={"role": "resident", "handle": "4133620520"})
         q = next(q for q in c.get("/state").json()["plan"]["info_requests"] if q["to"] == {"household_id": JUDGE})
