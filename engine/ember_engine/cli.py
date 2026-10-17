@@ -258,6 +258,52 @@ def cmd_compare(a):
     print(f"[compare] {a.seeds} paired seeds in {c['wall_s']:.1f}s → {out}")
 
 
+def cmd_robust(a):
+    """Top allocator candidates × perturbed worlds on Daytona (or local processes) → the most robust plan."""
+    import os
+
+    from .daytona.pool import get_pool
+    from .daytona.robust import robust_plan
+    from .scenario import load_scenario
+    if a.pool == "local":
+        os.environ["EMBER_LOCAL_POOL"] = "1"
+    w = _load_world()
+    scn = load_scenario(a.scenario)
+    pool = get_pool("local" if a.pool == "local" else "auto", workers=a.workers, world=w)
+    pts_out = open(a.points_out, "w") if a.points_out else None
+    seen = [0]
+
+    def on_point(p):
+        seen[0] += 1
+        if pts_out:
+            pts_out.write(json.dumps(p) + "\n")
+        if seen[0] % max(1, p["n_total"] // 10) == 0 or seen[0] == p["n_total"]:
+            print(f"  {seen[0]:>4}/{p['n_total']} runs back (last: {p['candidate']} seed {p['seed']} on {p['worker']})")
+    print(f"[robust] pool={pool.kind} workers={getattr(pool, 'n', None) or getattr(pool, 'workers', None)}")
+    try:
+        plan, points = robust_plan(w, scn, _read_reports(a.report), k=a.candidates, seeds=a.seeds, pool=pool, on_point=on_point)
+    finally:
+        pool.close()
+        if pts_out:
+            pts_out.close()
+    r = plan["search"]["robust"]
+    print(f"[robust] {r['jobs']} runs in {r['fanout_wall_s']:.1f}s · rule: {r['rule']}")
+    for row in r["ranking"]:
+        mark = "→" if row["candidate"] == r["chosen"] else " "
+        print(f"  {mark} {row['candidate']:>8}  worst-20% unreached {row['worst20_people_unreached']:>6}  overflow {row['worst20_overflow_m3']:>8,.0f} m³"
+              f"   mean unreached {row['mean_people_unreached']:>6}")
+    if r["chosen"] != r["nominal_best"]:
+        print(f"[robust] chose {r['chosen']} over the nominal best {r['nominal_best']}: better in the worst 20% of worlds")
+    out = Path(a.out or DATA / "plan.json")
+    out.write_text(json.dumps(plan, indent=1))
+    print(f"[robust] wrote {out}" + (f" and {a.points_out}" if a.points_out else ""))
+
+
+def cmd_daytona_snapshot(a):
+    from .daytona.pool import build_snapshot
+    build_snapshot()
+
+
 def cmd_simulate(a):
     """Run a plan on a scenario with the plan simulator; print metrics, outcomes and key events."""
     import collections
@@ -361,6 +407,14 @@ def main(argv=None):
     cp = sp.add_parser("compare", help="baseline vs EMBER on paired perturbation seeds")
     cp.add_argument("--scenario", required=True); cp.add_argument("--seeds", type=int, default=5); cp.add_argument("--report", action="append")
     cp.add_argument("--seed", type=int, default=0); cp.add_argument("--out", default=None); cp.set_defaults(f=cmd_compare)
+    rb = sp.add_parser("robust", help="robust plan: top candidates × perturbed worlds on Daytona or local processes")
+    rb.add_argument("--scenario", required=True); rb.add_argument("--report", action="append")
+    rb.add_argument("--candidates", type=int, default=4); rb.add_argument("--seeds", type=int, default=20)
+    rb.add_argument("--pool", choices=["auto", "local", "daytona"], default="auto"); rb.add_argument("--workers", type=int, default=None)
+    rb.add_argument("--out", default=None); rb.add_argument("--points-out", default=None, help="write scatter points as JSON lines")
+    rb.set_defaults(f=cmd_robust)
+    ds = sp.add_parser("daytona-snapshot", help="build the Daytona snapshot for the current engine + town (needs DAYTONA_API_KEY)")
+    ds.set_defaults(f=cmd_daytona_snapshot)
     vs = sp.add_parser("validate-state", help="check a state snapshot against state.schema.json and town/scenario ids")
     vs.add_argument("path"); vs.add_argument("--scenario", default=None); vs.add_argument("--town", default=None)
     vs.set_defaults(f=cmd_validate_state)
