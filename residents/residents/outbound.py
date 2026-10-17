@@ -138,6 +138,61 @@ class Outbound:
             if a["resource_id"] in self.rejected(thread_key(t)):
                 self.store.set_assignment_status(view["version"], a["id"], "rejected", ("proposed",))
 
+    @staticmethod
+    def describe_need(needs) -> str:
+        if not isinstance(needs, dict):
+            return ""
+        n = needs.get("people")
+        parts = [f"{n} {'person' if n == 1 else 'people'}"] if n else []
+        if needs.get("accessible_vehicle"):
+            parts.append("wheelchair-accessible vehicle")
+        elif needs.get("mobility"):
+            parts.append("limited mobility")
+        if needs.get("medical"):
+            parts.append("medical needs")
+        return ", ".join(parts)
+
+    def status_text(self, view: dict, thread: dict) -> str | None:
+        """Where this person stands in the current plan, from computed fields only. None = nothing to say
+        (needs still unknown and nothing assigned)."""
+        key = thread_key(thread)
+        now = float(self.store.meta().get("t_s", 0.0))
+        v = view["version"]
+        res, _ = self._names()
+        a = self.instruction_for(view, thread, exclude=self.rejected(key))
+        blocked = next((u for u in view.get("unresolved", []) if u["target"] == thread), None)
+        if a is not None:
+            who = res.get(a["resource_id"], {}).get("name", a["resource_id"])
+            if a["status"] == "confirmed":
+                return f"Your pickup is confirmed: {who} is arriving {_mins(a['eta_s'], now)}. (plan v{v})" \
+                    if "household_id" in thread else f"Confirmed: {who} is arriving {_mins(a['eta_s'], now)}. (plan v{v})"
+            if "household_id" in thread:
+                return f"{who} is assigned to pick you up, arriving {_mins(a['eta_s'], now)}. Reply YES to confirm. (plan v{v})"
+            return f"{who} is assigned to you, arriving {_mins(a['eta_s'], now)}. Reply YES to confirm someone will meet it. (plan v{v})"
+        if "household_id" in thread:
+            h = next((x for x in self.store.households() if x["household_id"] == thread["household_id"]), None)
+            need = self.describe_need(h["needs"]) if h else ""
+            if not need:
+                return None
+            if blocked:
+                return (f"We have your details ({need}). No suitable vehicle is free yet: {blocked['blocked_by']}. "
+                        f"We'll text you as soon as one is assigned. (plan v{v})")
+            return f"We have your details ({need}) and are arranging a pickup; we'll text you. (plan v{v})"
+        if blocked:
+            return f"No generator is free for you right now: {blocked['blocked_by']}. We'll text you if that changes. (plan v{v})"
+        return f"Noted. No generator is assigned to your site right now. (plan v{v})"
+
+    def next_info_request(self, view: dict, thread: dict) -> dict | None:
+        return next((q for q in view.get("info_requests", []) if q["to"] == thread and not self.store.kv_get(f"asked:{q['id']}")), None)
+
+    async def send_status(self, thread: dict, prefix: str = "") -> dict | None:
+        view = self.store.plan_view()
+        text = self.status_text(view, thread) if view else None
+        if text is None:
+            return None
+        msg, _ = await self.messenger.send_message(thread, prefix + text, view["version"])
+        return msg
+
     async def ack(self, a: dict, decision: str, thread: dict) -> dict:
         """Reply to a YES / NO on an offered instruction."""
         res, _ = self._names()
@@ -165,10 +220,9 @@ class Outbound:
         return msg
 
     async def _info_request(self, view: dict, thread: dict, key: str) -> dict | None:
-        for q in view.get("info_requests", []):
-            if q["to"] != thread or self.store.kv_get(f"asked:{q['id']}"):
-                continue
-            msg, _ = await self.messenger.send_message(thread, q["question"], view["version"])
-            self.store.kv_set(f"asked:{q['id']}", str(view["version"]))
-            return msg  # one question at a time
-        return None
+        q = self.next_info_request(view, thread)  # one question at a time
+        if q is None:
+            return None
+        msg, _ = await self.messenger.send_message(thread, q["question"], view["version"])
+        self.store.kv_set(f"asked:{q['id']}", str(view["version"]))
+        return msg

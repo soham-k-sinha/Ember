@@ -110,6 +110,7 @@ class Outcome:
     """What the backend does with one message."""
     reports: list[dict] = field(default_factory=list)  # ready for planner.submit_report (no id/observed_at yet)
     question: str | None = None                        # send back, one per message at most
+    question_is_missing_info: bool = False             # True: a fact was incomplete; False: the model's own prompt
     pending: dict | None = None                        # partial need to remember for the next reply
     clear_pending: bool = False
 
@@ -117,8 +118,14 @@ class Outcome:
 RoadResolver = Callable[[str, str | None, int | None], list[int]]  # (road_hint, cross_street, household_id) → edge ids
 
 
+NEED_FIELDS = ("people", "mobility", "accessible_vehicle", "medical")
+
+
 def to_outcome(ex: Extraction, *, role: str, thread: dict, text: str, pending: dict | None,
-               resolve_road: RoadResolver, last_assignment_id: str | None) -> Outcome:
+               resolve_road: RoadResolver, last_assignment_id: str | None, known_needs: dict | None = None) -> Outcome:
+    """`known_needs` = the household's needs as the planner currently has them. A need report replaces
+    them wholesale in the engine, so fields this message doesn't state keep their known values
+    ("Yes, 2 people" after "my mom uses a wheelchair" must not drop the wheelchair)."""
     out = Outcome()
     hid = thread.get("household_id")
     fid = thread.get("facility_id")
@@ -129,10 +136,12 @@ def to_outcome(ex: Extraction, *, role: str, thread: dict, text: str, pending: d
     asked: list[str] = []
     for f in ex.facts:
         if f.kind == "need" and hid is not None:
-            fields = {k: getattr(f, k) for k in ("people", "mobility", "accessible_vehicle", "medical")}
+            fields = {k: getattr(f, k) for k in NEED_FIELDS}
             if pending and pending.get("kind") == "need":  # the reply completes what we were waiting on
                 fields = {k: (fields[k] if fields[k] is not None else pending.get(k)) for k in fields}
                 out.clear_pending = True
+            if isinstance(known_needs, dict):                # stated now > pending > already known
+                fields = {k: (fields[k] if fields[k] is not None else known_needs.get(k)) for k in fields}
             if not fields["people"] or fields["people"] < 1:
                 out.pending = {"kind": "need", **{k: v for k, v in fields.items() if v is not None}}
                 asked.append("How many people need to be picked up, including you?")
@@ -175,6 +184,7 @@ def to_outcome(ex: Extraction, *, role: str, thread: dict, text: str, pending: d
                                 **({"facility_id": fid} if fid is not None else {})})
     if asked:
         out.question = ex.clarifying_question if (ex.clarifying_question and len(asked) > 1) else asked[0]
+        out.question_is_missing_info = True
     elif ex.clarifying_question and not out.reports:
         out.question = ex.clarifying_question
     return out
@@ -184,5 +194,5 @@ async def extract(llm: LLM, text: str, *, role: str, thread: dict, record: dict,
                   pending: dict | None, resolve_road: RoadResolver, last_assignment_id: str | None) -> Outcome:
     ex = await llm(SYSTEM, build_prompt(text, role, record, last_outbound, pending))
     log.info("extracted %s (confidence %.2f) from %r", [f.kind for f in ex.facts], ex.confidence, text[:80])
-    return to_outcome(ex, role=role, thread=thread, text=text, pending=pending,
-                      resolve_road=resolve_road, last_assignment_id=last_assignment_id)
+    return to_outcome(ex, role=role, thread=thread, text=text, pending=pending, resolve_road=resolve_road,
+                      last_assignment_id=last_assignment_id, known_needs=record.get("needs"))
