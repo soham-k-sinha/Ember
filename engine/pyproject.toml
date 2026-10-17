@@ -14,11 +14,12 @@ dependencies = [
     "matplotlib>=3.8",
     "jsonschema>=4.21",   # validate-scenario
     "referencing>=0.35",
+    "daytona>=0.200",     # robustness fan-out; a core dependency so the backend (which imports the engine) can use it
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
-daytona = ["daytona>=0.200"]
+daytona = []   # kept so `ember-engine[daytona]` still resolves; daytona is a core dependency now
 
 [project.scripts]
 ember = "ember_engine.cli:main"
