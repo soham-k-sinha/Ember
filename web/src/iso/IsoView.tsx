@@ -10,15 +10,17 @@ import { loadDiorama, type Diorama } from "./data";
 import { agentWorld, buildAgents, setScene, waitLonLat, type AgentWorld } from "./agents";
 import { Crowd } from "./crowd";
 import { FloodWater } from "./water";
+import { TrafficCars } from "./traffic";
 import { clockLabel, lightAt, tint } from "./lighting";
 import { SKY_BG } from "./palette";
-import { scenario, town } from "../fixtures";
+import { fixturePlaybacks, scenario, town } from "../fixtures";
 import { householdColor, peopleCount, type LegendMode } from "../layers";
 import type { WalkerPlan } from "../people";
 import { pathAhead, type Playback } from "../playback";
 import type { Closure, Selection, StateFacility, StateResource, StateSnapshot } from "../types";
-import { edgePoint, projector, type Projector } from "./project";
+import { edgePoint, KZ, projector, type Projector } from "./project";
 import { buildStatic, type StaticScene } from "./scene";
+import { CrowdBudget, figureScale, populationAtZoom } from "./density";
 
 export type IsoProps = {
   state: StateSnapshot;
@@ -75,6 +77,8 @@ type Ctx = {
   marks: Container; // per-person ground marks (atlas sprites)
   top: Graphics; // markers over heads
   crowd: Crowd;
+  crowdBudget: CrowdBudget;
+  traffic: TrafficCars;
   aw: AgentWorld;
   awFor: Playback | null;
   lastT: number;
@@ -130,6 +134,7 @@ export function IsoView(props: IsoProps) {
       const top = new Graphics();
       world.addChild(scene.slab, scene.ground, scene.tiles.ground, scene.shadow, scene.tiles.shadow, scene.pools, scene.slabMask, dyn, scene.objects, top);
       const crowd = new Crowd(scene.objects, marks, scene.atlas, p, scene.depthFor);
+      const traffic = new TrafficCars(app.renderer, scene.objects, p, scene.depthFor);
       const aw = agentWorld(p, scene.insideBuilding, scene.onRoad, propsRef.current.playback);
       setScene(aw, data, scenario.hazard.keyframes, [town.venue.lon, town.venue.lat]);
       const overlay = new Graphics();
@@ -143,7 +148,7 @@ export function IsoView(props: IsoProps) {
       const s = Math.min(app.screen.width / (b.width * 1.08), app.screen.height / (b.height * 1.12));
       const cam = { s, x: app.screen.width / 2 - (b.x + b.width / 2) * s, y: app.screen.height / 2 - (b.y + b.height / 2) * s };
       const ctx: Ctx = {
-        app, data, p, scene, world, dyn, flood, floodTint: 0xffffff, closed, trails, decals, marks, top, crowd, aw, awFor: propsRef.current.playback, lastT: propsRef.current.t, lastNow: performance.now() / 1000, vehicles: new Map(), lightKey: "", fitS: s, focusKey: 0, target: null, overlay, haze, hits, pills: new Map(), pillLayer,
+        app, data, p, scene, world, dyn, flood, floodTint: 0xffffff, closed, trails, decals, marks, top, crowd, crowdBudget: new CrowdBudget(), traffic, aw, awFor: propsRef.current.playback, lastT: propsRef.current.t, lastNow: performance.now() / 1000, vehicles: new Map(), lightKey: "", fitS: s, focusKey: 0, target: null, overlay, haze, hits, pills: new Map(), pillLayer,
         closedKey: "", cam, drag: { on: false, moved: false, x: 0, y: 0 },
       };
       ctxRef.current = ctx;
@@ -288,6 +293,11 @@ function frame(ctx: Ctx, props: IsoProps) {
   drawClosures(ctx, props);
   drawTrails(ctx, props, t);
   drawPeople(ctx, props, t, now);
+  {
+    const view = { x0: -cam.x / cam.s, y0: -cam.y / cam.s, x1: (ctx.app.screen.width - cam.x) / cam.s, y1: (ctx.app.screen.height - cam.y) / cam.s };
+    // the background traffic is the same for every plan; the fixture ships it once, with EMBER's replay
+    ctx.traffic.update(props.playback?.traffic ?? fixturePlaybacks.ember.traffic, t, view, ctx.scene.light.tint);
+  }
   ctx.lastT = t;
   ctx.lastNow = now;
   drawVehicles(ctx, props, now);
@@ -428,17 +438,19 @@ function applyLight(ctx: Ctx, t: number) {
 function drawPeople(ctx: Ctx, props: IsoProps, t: number, now: number) {
   if (ctx.awFor !== props.playback) {
     ctx.awFor = props.playback;
-    const { strolls, strollCum, flood } = ctx.aw;
+    const { strolls, strollCum, strollers, flood } = ctx.aw;
     ctx.aw = agentWorld(ctx.p, ctx.scene.insideBuilding, ctx.scene.onRoad, props.playback);
-    Object.assign(ctx.aw, { strolls, strollCum, flood });
+    Object.assign(ctx.aw, { strolls, strollCum, strollers, flood });
   }
   // a seek (scrub, replay switch): no strides or springs carried across the jump
   if (t < ctx.lastT || t - ctx.lastT > 600) ctx.crowd.reset();
   const dtS = Math.min(0.1, Math.max(0, now - ctx.lastNow));
-  const strollShare = Math.max(0.25, Math.min(1, (ctx.cam.s - 0.5) / 1.5));
-  const agents = buildAgents({ w: ctx.aw, state: props.state, t, legend: props.legend, walkers: props.walkers, showWalkers: props.showWalkers, now, strollShare });
   const { cam, app } = ctx;
   const view = { x0: -cam.x / cam.s, y0: -cam.y / cam.s, x1: (app.screen.width - cam.x) / cam.s, y1: (app.screen.height - cam.y) / cam.s };
+  const requested = populationAtZoom(cam.s);
+  const strollCount = ctx.crowdBudget.sample((now - ctx.lastNow) * 1000, requested);
+  const figureK = figureScale(ctx.scene.atlas.figureM * KZ, cam.s);
+  const agents = buildAgents({ w: ctx.aw, state: props.state, t, legend: props.legend, walkers: props.walkers, showWalkers: props.showWalkers, now, strollCount, view, figureHeight: ctx.scene.atlas.figureM * KZ * figureK * 1.1, figureHalfWidth: 0.5 * figureK });
   ctx.crowd.update(agents, dtS, cam.s, view, tint(lightAt(t).people));
   ctx.decals.clear();
   ctx.top.clear();
