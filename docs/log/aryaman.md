@@ -144,3 +144,11 @@ Run: uv run --project engine pytest -q engine/tests/test_api.py
 Interfaces: new optional kwarg only. Soham: `EngineSession(path, world=..., seed=..., moves=int(os.getenv("EMBER_MOVES")) if ... else None)` in engine_bridge.py, e.g. moves=10 in your conftest. Neither file is in the Daytona snapshot hash (still ember-engine-489b50f1ea), so no snapshot rebuild.
 Status: done. 84 engine tests; smoke OK.
 Next: docs/DEMO.md.
+
+## 2026-10-17 02:25 · facility on reported backup now runs out · branch aryaman/facility-backup-countdown · commit (this PR)
+What: found while re-checking the infrastructure beat on allston. A `facility_status` with `state: "backup"` (the extraction sets it for "we're on backup") left the facility on backup forever while the grid was up; it only went down when its substation did. `FacilityModel._resolve` now counts endurance down for a reported backup too. Operator at 15 min "on backup, 10 min left": rationale now "grid power lost at 15 min, down at 25 min … connected 42 min" (was "down at 120 min").
+Files: engine/ember_engine/models/facilities.py, engine/tests/test_models_sim.py, docs/log/aryaman.md
+Run: uv run --project engine pytest -q engine/tests/test_models_sim.py
+Interfaces: none. Daytona snapshot rebuilt → `ember-engine-34d49a132c` (facilities.py is in the hash); live check: `ember robust --pool daytona` 100 runs on 8 sandboxes, 10.4 s fan-out, chose c03 over c00. Seed state unchanged.
+Status: done. 85 engine tests; smoke OK.
+Next: docs/DEMO.md (infra beat timing: operator must text before ~minute 30; see DEMO.md).
