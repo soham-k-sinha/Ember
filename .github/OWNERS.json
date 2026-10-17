@@ -1,5 +1,5 @@
 {
-  "_comment": "Lane ownership. GitHub login -> lane. Fill in the missing logins. Paths are prefixes. 'authors' (git emails) is optional; when present, every commit in a PR must come from one of them.",
+  "_comment": "Lane ownership. GitHub login -> lane. Fill in the missing logins. Paths are prefixes. 'authors' (git emails) is optional; when present, every commit in a PR must come from one of them. 2026-10-17 (D49): Aryaman also covers web/ and the scenario/demo/submission lane for now; Arnav's and Anshuman's own lanes stay active.",
   "logins": {
     "aryamangoenka": "aryaman",
     "soham-k-sinha": "soham",
@@ -19,11 +19,19 @@
         "CLAUDE.md",
         "README.md",
         ".gitignore",
-        ".python-version"
+        ".python-version",
+        "web/",
+        "scenarios/",
+        "docs/DEMO.md",
+        "docs/QA.md",
+        "docs/devpost/",
+        "docs/log/arnav.md",
+        "docs/log/anshuman.md"
       ],
       "authors": [
         "aryamansgoenka@gmail.com",
-        "aryamangoenka0404@gmail.com"
+        "aryamangoenka0404@gmail.com",
+        "cursoragent@cursor.com"
       ]
     },
     "soham": {
