@@ -13,7 +13,7 @@ from residents.intake import SORRY
 from tests.test_engine import JUDGE, SCENARIO, bridge  # noqa: F401  (session fixture)
 
 NONE = dict(people=None, mobility=None, accessible_vehicle=None, medical=None, road_hint=None, cross_street=None,
-            endurance_h=None, facility_state=None)
+            endurance_min=None, facility_state=None)
 
 
 def fact(kind, **kw):
@@ -98,11 +98,14 @@ def test_closure_without_street_or_unknown_street_asks():
 
 
 def test_operator_endurance_and_state():
-    o = outcome(ex(fact("facility_status", endurance_h=1.5, facility_state="backup")), role="operator",
+    o = outcome(ex(fact("facility_status", endurance_min=90, facility_state="backup")), role="operator",
                 thread={"facility_id": "mt-auburn"})
     [r] = o.reports
     assert r["payload"] == {"set": {"backup_endurance_s": 5400, "state": "backup"}} and r["source"] == "operator"
     assert validate_report(complete(r)) == []
+    [r] = outcome(ex(fact("facility_status", endurance_min=10, facility_state="backup")), role="operator",
+                  thread={"facility_id": "mt-auburn"}).reports
+    assert r["payload"]["set"]["backup_endurance_s"] == 600   # DEMO beat 4: exactly 10 min, not 612 s
     assert "hours of backup" in outcome(ex(fact("facility_status")), role="operator", thread={"facility_id": "mt-auburn"}).question
 
 
@@ -114,7 +117,7 @@ def test_confirm_only_when_something_was_offered():
 
 def test_facts_for_the_wrong_thread_are_ignored():
     # a resident can't set facility status; an operator can't file a household need
-    assert outcome(ex(fact("facility_status", endurance_h=2))).reports == []
+    assert outcome(ex(fact("facility_status", endurance_min=120))).reports == []
     assert outcome(ex(fact("need", people=2)), role="operator", thread={"facility_id": "mt-auburn"}).reports == []
 
 
@@ -195,7 +198,7 @@ def test_llm_failure_asks_politely_and_keeps_running(make_client):
 
 
 def test_operator_endurance_moves_the_plan(make_client):
-    c, _ = make_client({"about 90 minutes of diesel left": ex(fact("facility_status", endurance_h=1.5))})
+    c, _ = make_client({"about 90 minutes of diesel left": ex(fact("facility_status", endurance_min=90))})
     with c:
         c.post("/dev/inbound", json={"role": "operator", "text": "about 90 minutes of diesel left"})
         st = c.get("/state").json()

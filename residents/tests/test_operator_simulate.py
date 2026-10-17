@@ -16,7 +16,7 @@ OP = {"facility_id": "mt-auburn"}
 
 @pytest.fixture
 def oc(settings, bridge):  # noqa: F811
-    llm = FakeLLM({"about 90 minutes of diesel": ex(fact("facility_status", endurance_h=1.5)), "hi": ex(fact("other"))})
+    llm = FakeLLM({"about 90 minutes of diesel": ex(fact("facility_status", endurance_min=90)), "hi": ex(fact("other"))})
     s = replace(settings, scenario=SCENARIO, extract_enabled=True)
     with TestClient(create_app(s, bridge=bridge, llm=llm)) as c:
         c.post("/phones", json={"role": "operator", "handle": "4134094408"})

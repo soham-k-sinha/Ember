@@ -94,3 +94,11 @@ Interfaces: new endpoints POST /ask, POST /simulate. D52.
 Status: done. Tasks 1–8 complete; Task 9 (voice) only if green-lit.
 Notes for Aryaman (web): during playback the web POSTs /clock every 1.2 s — each broadcasts a full `state` event, so the WS client gets the state twice (event + its own GET /state refetch); either is enough. /ask is there for the operator console ("Ask the hospital").
 Found while building it: World's route caches can be cleared by one thread while another reads them (KeyError), so the optimize session loads its own World instead of sharing one across threads.
+
+## 2026-10-17 12:30 · DEMO.md dry run: question on reset + endurance in minutes · branch soham/demo-dry-run · commit (this PR)
+What: ran DEMO.md's Replay end to end against a live backend (real LLM, real allocator, Photon off). All beats land: judge text → v2 in 3.7 s, Van 3 → #10296, Gen 1 ETA 14 → 32, judge texted; operator text → v3 in 2.2 s, Gen 1 → mt-auburn, Cottage Farm unresolved, overflow 9,600 m³, operator texted; optimize 100 runs → c03, judge van + hospital generator unchanged. Fixed the two gaps it showed: the judge's question is now sent right after a reset/startup (no manual /replan), and endurance is extracted in minutes (10 min → 600 s, was 612 s).
+Files: residents/residents/{planner,app,extract}.py, residents/tests/{test_engine,test_extract,test_operator_simulate,test_conversation}.py, residents/tests/samples.json, residents/scripts/eval_extract.py, residents/README.md
+Run: cd residents && uv run pytest -q (125 pass) ; uv run python scripts/eval_extract.py → 21/21 (demo operator line added)
+Interfaces: none changed. D53.
+Status: done.
+Notes for Aryaman (DEMO.md owner): measured today — beat 2 judge pickup 121 min (DEMO says 132) vs deadline 165; beat 4 hospital outage 15 min (DEMO says 16); setup step 6 no longer needs the "POST /replan once" fallback (keep it as a fallback). Every `/dev/reset` re-texts the judge's question to the opted-in phone; that's intended for rehearsals but means the judge phone collects one question per reset.

@@ -53,7 +53,7 @@ uv run --project ../engine ember validate-state /tmp/state.json --scenario ../co
 ```
 
 ## The one LLM call (text → report)
-`residents/extract.py`: each inbound text (Photon or `/dev/inbound`) → Claude (`EXTRACT_MODEL`, default `claude-opus-5-5`, effort `low`, structured outputs) → `facts[]` + confidence + optional clarifying question. Everything after is code: confidence < 0.6 or a missing head count / unplaceable street → one clarifying question (a partial need waits in `pending` for the reply); street names → town edges near the household (`engine_bridge.resolve_road`, both directions); hours → `backup_endurance_s`. All facts from one text → one replan. The model never sees or emits routes, times or assignments.
+`residents/extract.py`: each inbound text (Photon or `/dev/inbound`) → Claude (`EXTRACT_MODEL`, default `claude-opus-5-5`, effort `low`, structured outputs) → `facts[]` + confidence + optional clarifying question. Everything after is code: confidence < 0.6 or a missing head count / unplaceable street → one clarifying question (a partial need waits in `pending` for the reply); street names → town edges near the household (`engine_bridge.resolve_road`, both directions); minutes → `backup_endurance_s`. All facts from one text → one replan. The model never sees or emits routes, times or assignments.
 Live accuracy: `uv run python scripts/eval_extract.py` on `tests/samples.json` (20 messages; last run 20/20, median 1.9 s). Unit tests use a fake model and never call the API.
 
 ## Outbound instructions
