@@ -1,0 +1,1006 @@
+{
+ "version": "0.1",
+ "scenario_id": "allston_flood_v1",
+ "name": "Charles River flood, Allston-Riverside reach (drill)",
+ "description": "A 3-hour Charles River flood in the reach between the Anderson and River St bridges, next to the David Rubenstein Treehouse. Real roads, facilities and household ids; flood extents, timing, fleet and needs are synthetic (assumptions.md); real facts in sources.md.",
+ "synthetic": [
+  "flood extents and timing (keyframes.geojson)",
+  "Cottage Farm wastewater numbers except storage_max_m3",
+  "substation trip time and all facility dependencies",
+  "backup endurance, power and connector values",
+  "fleet: vans, truck, crew, generators, fuel",
+  "which households are assisted, their needs and the judge",
+  "EMS Station 14 as response base; the Treehouse as shelter"
+ ],
+ "t_end_s": 14400,
+ "tick_s": 60,
+ "deadline_margin_s": 900,
+ "district": {
+  "name": "Allston-Riverside riverfront",
+  "geometry": {
+   "type": "Polygon",
+   "coordinates": [
+    [
+     [
+      -71.13,
+      42.3528
+     ],
+     [
+      -71.1065,
+      42.3528
+     ],
+     [
+      -71.1065,
+      42.3722
+     ],
+     [
+      -71.13,
+      42.3722
+     ],
+     [
+      -71.13,
+      42.3528
+     ]
+    ]
+   ]
+  }
+ },
+ "hazard": {
+  "type": "flood_keyframes",
+  "source": "Synthetic 3 h storm timeline. Extents drawn on the OSM road network inside areas mapped as flood-exposed by Climate Ready Boston (Charles River neighborhoods) and Cambridge's 2017 vulnerability assessment (Riverside); FEMA NFHL via MassGIS for context. Dry until t=3600. See sources.md and assumptions.md. The same keyframes are in keyframes.geojson for geojson.io.",
+  "keyframes": [
+   {
+    "t_s": 3600,
+    "label": "t+60 min: Charles overtops the low bank between the Anderson and Western Ave bridges; riverside paths under water, roads still dry",
+    "geometry": {
+     "type": "Polygon",
+     "coordinates": [
+      [
+       [
+        -71.121012,
+        42.369602
+       ],
+       [
+        -71.119547,
+        42.369505
+       ],
+       [
+        -71.118125,
+        42.36922
+       ],
+       [
+        -71.117216,
+        42.368675
+       ],
+       [
+        -71.116557,
+        42.367639
+       ],
+       [
+        -71.116268,
+        42.366482
+       ],
+       [
+        -71.116268,
+        42.365098
+       ],
+       [
+        -71.117667,
+        42.365098
+       ],
+       [
+        -71.117736,
+        42.366231
+       ],
+       [
+        -71.118051,
+        42.367073
+       ],
+       [
+        -71.118856,
+        42.367667
+       ],
+       [
+        -71.119953,
+        42.367895
+       ],
+       [
+        -71.121446,
+        42.367995
+       ],
+       [
+        -71.123163,
+        42.368407
+       ],
+       [
+        -71.122126,
+        42.369602
+       ],
+       [
+        -71.121012,
+        42.369602
+       ]
+      ]
+     ]
+    }
+   },
+   {
+    "t_s": 5400,
+    "label": "t+90 min: Soldiers Field Rd and Memorial Dr flooded between the Anderson and Western Ave bridges; first Riverside side streets",
+    "geometry": {
+     "type": "Polygon",
+     "coordinates": [
+      [
+       [
+        -71.121733,
+        42.37007
+       ],
+       [
+        -71.119436,
+        42.369966
+       ],
+       [
+        -71.117868,
+        42.369652
+       ],
+       [
+        -71.116703,
+        42.368957
+       ],
+       [
+        -71.115957,
+        42.367794
+       ],
+       [
+        -71.115641,
+        42.366549
+       ],
+       [
+        -71.115637,
+        42.364874
+       ],
+       [
+        -71.115797,
+        42.364676
+       ],
+       [
+        -71.116027,
+        42.36463
+       ],
+       [
+        -71.117924,
+        42.36463
+       ],
+       [
+        -71.118176,
+        42.364705
+       ],
+       [
+        -71.118285,
+        42.364863
+       ],
+       [
+        -71.118363,
+        42.366158
+       ],
+       [
+        -71.118625,
+        42.366857
+       ],
+       [
+        -71.119186,
+        42.367258
+       ],
+       [
+        -71.120065,
+        42.367433
+       ],
+       [
+        -71.121573,
+        42.367536
+       ],
+       [
+        -71.123511,
+        42.367999
+       ],
+       [
+        -71.121733,
+        42.37007
+       ]
+      ]
+     ]
+    }
+   },
+   {
+    "t_s": 9000,
+    "label": "t+150 min: Riverside low streets (Banks St, Putnam Ave); Western Ave bridge approach closed; Putnam Ave substation yard flooded",
+    "geometry": {
+     "type": "Polygon",
+     "coordinates": [
+      [
+       [
+        -71.119432,
+        42.37001
+       ],
+       [
+        -71.117841,
+        42.369692
+       ],
+       [
+        -71.116754,
+        42.369045
+       ],
+       [
+        -71.114965,
+        42.369037
+       ],
+       [
+        -71.11374,
+        42.367207
+       ],
+       [
+        -71.113539,
+        42.364597
+       ],
+       [
+        -71.113946,
+        42.362979
+       ],
+       [
+        -71.115495,
+        42.362621
+       ],
+       [
+        -71.115374,
+        42.362015
+       ],
+       [
+        -71.118061,
+        42.361163
+       ],
+       [
+        -71.118423,
+        42.36615
+       ],
+       [
+        -71.11868,
+        42.366833
+       ],
+       [
+        -71.119217,
+        42.367217
+       ],
+       [
+        -71.120075,
+        42.367389
+       ],
+       [
+        -71.121585,
+        42.367492
+       ],
+       [
+        -71.123546,
+        42.367962
+       ],
+       [
+        -71.121697,
+        42.370113
+       ],
+       [
+        -71.119432,
+        42.37001
+       ]
+      ]
+     ]
+    }
+   },
+   {
+    "t_s": 10800,
+    "label": "t+180 min: crest; River St bridge approach at Memorial Dr closed; Riverside south to River St, Soldiers Field Park",
+    "geometry": {
+     "type": "Polygon",
+     "coordinates": [
+      [
+       [
+        -71.113439,
+        42.361402
+       ],
+       [
+        -71.114997,
+        42.360355
+       ],
+       [
+        -71.116837,
+        42.360564
+       ],
+       [
+        -71.117015,
+        42.361446
+       ],
+       [
+        -71.118111,
+        42.361137
+       ],
+       [
+        -71.118258,
+        42.36303
+       ],
+       [
+        -71.119061,
+        42.363195
+       ],
+       [
+        -71.118662,
+        42.3648
+       ],
+       [
+        -71.119261,
+        42.366996
+       ],
+       [
+        -71.119087,
+        42.367062
+       ],
+       [
+        -71.119248,
+        42.367177
+       ],
+       [
+        -71.120086,
+        42.367345
+       ],
+       [
+        -71.121598,
+        42.367448
+       ],
+       [
+        -71.123582,
+        42.367926
+       ],
+       [
+        -71.121661,
+        42.370157
+       ],
+       [
+        -71.119422,
+        42.370055
+       ],
+       [
+        -71.117819,
+        42.369734
+       ],
+       [
+        -71.117559,
+        42.369582
+       ],
+       [
+        -71.1175,
+        42.369645
+       ],
+       [
+        -71.113949,
+        42.369625
+       ],
+       [
+        -71.112142,
+        42.367613
+       ],
+       [
+        -71.111739,
+        42.365
+       ],
+       [
+        -71.112347,
+        42.362978
+       ],
+       [
+        -71.113675,
+        42.362659
+       ],
+       [
+        -71.113439,
+        42.361402
+       ]
+      ]
+     ]
+    }
+   }
+  ]
+ },
+ "facilities": [
+  {
+   "id": "cottage-farm",
+   "type": "pumping_station",
+   "name": "Cottage Farm CSO Facility (MWRA)",
+   "asset_id": 0,
+   "power_kw_required": 350,
+   "connector": "camlock-400a",
+   "connect_s": 1200,
+   "backup_endurance_s": 1800,
+   "depends_on": [
+    "putnam-ave-sub",
+    "outfall-mwr201"
+   ],
+   "wastewater": {
+    "storage_m3": 1500,
+    "storage_max_m3": 4900,
+    "pump_m3ph": 10500,
+    "downstream_ok": true,
+    "inflow_m3ph": [
+     [
+      0,
+      3000
+     ],
+     [
+      3600,
+      6000
+     ],
+     [
+      5400,
+      9000
+     ],
+     [
+      9000,
+      10000
+     ],
+     [
+      10800,
+      9500
+     ]
+    ]
+   },
+   "consequence": "Without power its storage fills and the overflow goes to the Charles untreated (overflow_m3)."
+  },
+  {
+   "id": "putnam-ave-sub",
+   "type": "substation",
+   "name": "Putnam Avenue Substation",
+   "asset_id": 7,
+   "events": [
+    {
+     "t_s": 7200,
+     "state": "down",
+     "note": "pre-emptive de-energization 30 min before water reaches the yard (synthetic timing)"
+    }
+   ],
+   "consequence": "Feeds Cottage Farm and Mount Auburn Hospital in this drill (synthetic dependency)."
+  },
+  {
+   "id": "mt-auburn",
+   "type": "hospital",
+   "name": "Mount Auburn Hospital",
+   "asset_id": 8,
+   "critical": true,
+   "power_kw_required": 450,
+   "connector": "camlock-400a",
+   "connect_s": 900,
+   "backup_endurance_s": 32400,
+   "depends_on": [
+    "putnam-ave-sub"
+   ],
+   "consequence": "Critical-branch power lost when backup runs out."
+  },
+  {
+   "id": "outfall-mwr201",
+   "type": "outfall",
+   "name": "MWRA outfall MWR201 (Cottage Farm) to the Lower Charles",
+   "node": 4978289961,
+   "synthetic": true,
+   "consequence": "Where Cottage Farm's overflow reaches the river."
+  },
+  {
+   "id": "ems14",
+   "type": "response_base",
+   "name": "Boston EMS Station 14 (drill staging)",
+   "asset_id": 5,
+   "capacity_people": 40,
+   "consequence": "Vans, crew and fuel stage here; overflow drop-off if the shelter is cut off."
+  },
+  {
+   "id": "treehouse-shelter",
+   "type": "shelter",
+   "name": "David Rubenstein Treehouse (drill shelter)",
+   "node": 382400901,
+   "synthetic": true,
+   "capacity_people": 200,
+   "consequence": "Drop-off point for every rescue; truck and generators stage in its lot."
+  }
+ ],
+ "resources": [
+  {
+   "id": "van-1",
+   "kind": "van",
+   "name": "Van 1",
+   "at_facility": "ems14",
+   "capacity_people": 6,
+   "fuel_l": 60,
+   "fuel_l_per_km": 0.15,
+   "service_s": 300
+  },
+  {
+   "id": "van-2",
+   "kind": "van",
+   "name": "Van 2",
+   "at_facility": "ems14",
+   "capacity_people": 6,
+   "fuel_l": 60,
+   "fuel_l_per_km": 0.15,
+   "service_s": 300
+  },
+  {
+   "id": "van-3",
+   "kind": "accessible_van",
+   "name": "Accessible Van 3",
+   "at_facility": "ems14",
+   "capacity_people": 6,
+   "accessible": true,
+   "fuel_l": 60,
+   "fuel_l_per_km": 0.18,
+   "service_s": 600
+  },
+  {
+   "id": "truck-1",
+   "kind": "truck",
+   "name": "Generator truck",
+   "at_facility": "treehouse-shelter",
+   "capacity_people": 2,
+   "fuel_l": 150,
+   "fuel_l_per_km": 0.35,
+   "service_s": 300
+  },
+  {
+   "id": "crew-1",
+   "kind": "crew",
+   "name": "Road crew",
+   "at_facility": "ems14",
+   "capacity_people": 0,
+   "fuel_l": 60,
+   "fuel_l_per_km": 0.2,
+   "service_s": 1200
+  },
+  {
+   "id": "gen-1",
+   "kind": "generator",
+   "name": "Generator 1 (500 kW, camlock)",
+   "at_facility": "treehouse-shelter",
+   "kw": 500,
+   "connector": "camlock-400a",
+   "fuel_l": 400,
+   "speed_factor": 0.8
+  },
+  {
+   "id": "gen-2",
+   "kind": "generator",
+   "name": "Generator 2 (150 kW, twist-lock)",
+   "at_facility": "treehouse-shelter",
+   "kw": 150,
+   "connector": "l21-30-twistlock",
+   "fuel_l": 150,
+   "speed_factor": 0.8
+  }
+ ],
+ "households": [
+  {
+   "household_id": 516,
+   "label": "household #516 (no car)",
+   "needs": {
+    "people": 1,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 636,
+   "label": "household #636 (medical, no car)",
+   "needs": {
+    "people": 1,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": true
+   }
+  },
+  {
+   "household_id": 12048,
+   "label": "household #12048 (no car)",
+   "needs": {
+    "people": 1,
+    "mobility": true,
+    "accessible_vehicle": true,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 8172,
+   "label": "household #8172 (no car)",
+   "needs": {
+    "people": 1,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 11856,
+   "label": "household #11856 (medical, no car)",
+   "needs": {
+    "people": 1,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": true
+   }
+  },
+  {
+   "household_id": 8184,
+   "label": "household #8184 (no car)",
+   "needs": {
+    "people": 1,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 9000,
+   "label": "household #9000 (no car)",
+   "needs": {
+    "people": 1,
+    "mobility": true,
+    "accessible_vehicle": true,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 12720,
+   "label": "household #12720 (no car)",
+   "needs": {
+    "people": 1,
+    "mobility": true,
+    "accessible_vehicle": true,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 7104,
+   "label": "household #7104 (no car)",
+   "needs": {
+    "people": 1,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 8904,
+   "label": "household #8904 (medical, no car)",
+   "needs": {
+    "people": 1,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": true
+   }
+  },
+  {
+   "household_id": 492,
+   "label": "household #492 (no car)",
+   "needs": {
+    "people": 2,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 16788,
+   "label": "household #16788 (no car)",
+   "needs": {
+    "people": 1,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 7824,
+   "label": "household #7824 (no car)",
+   "needs": {
+    "people": 1,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 7464,
+   "label": "household #7464",
+   "needs": "unknown"
+  },
+  {
+   "household_id": 10968,
+   "label": "household #10968 (no car)",
+   "needs": {
+    "people": 4,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 12696,
+   "label": "household #12696 (elderly, no car)",
+   "needs": {
+    "people": 2,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 11172,
+   "label": "household #11172 (no car)",
+   "needs": {
+    "people": 4,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 8712,
+   "label": "household #8712 (elderly)",
+   "needs": {
+    "people": 2,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 13572,
+   "label": "household #13572 (elderly)",
+   "needs": {
+    "people": 3,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 13584,
+   "label": "household #13584 (elderly)",
+   "needs": {
+    "people": 1,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 15216,
+   "label": "household #15216 (no car)",
+   "needs": {
+    "people": 1,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 10296,
+   "label": "the judge's household (River St at Memorial Dr)",
+   "needs": "unknown",
+   "judge": true,
+   "phone_role": "resident"
+  },
+  {
+   "household_id": 10248,
+   "label": "household #10248 (no car)",
+   "needs": {
+    "people": 2,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 10548,
+   "label": "household #10548 (medical, no car)",
+   "needs": {
+    "people": 4,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": true
+   }
+  },
+  {
+   "household_id": 11352,
+   "label": "household #11352",
+   "needs": {
+    "people": 3,
+    "mobility": true,
+    "accessible_vehicle": true,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 11364,
+   "label": "household #11364 (elderly)",
+   "needs": {
+    "people": 4,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 10380,
+   "label": "household #10380 (elderly)",
+   "needs": {
+    "people": 2,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 804,
+   "label": "household #804 (no car)",
+   "needs": {
+    "people": 4,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 864,
+   "label": "household #864 (no car)",
+   "needs": {
+    "people": 4,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 3384,
+   "label": "household #3384",
+   "needs": {
+    "people": 3,
+    "mobility": true,
+    "accessible_vehicle": true,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 4500,
+   "label": "household #4500 (elderly)",
+   "needs": {
+    "people": 3,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 6348,
+   "label": "household #6348 (elderly, no car)",
+   "needs": {
+    "people": 3,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 4560,
+   "label": "household #4560",
+   "needs": "unknown"
+  },
+  {
+   "household_id": 6720,
+   "label": "household #6720 (no car)",
+   "needs": {
+    "people": 3,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 9504,
+   "label": "household #9504 (elderly, no car)",
+   "needs": {
+    "people": 1,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 17124,
+   "label": "household #17124",
+   "needs": "unknown"
+  },
+  {
+   "household_id": 7956,
+   "label": "household #7956",
+   "needs": {
+    "people": 2,
+    "mobility": true,
+    "accessible_vehicle": true,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 7968,
+   "label": "household #7968 (no car)",
+   "needs": {
+    "people": 3,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 8040,
+   "label": "household #8040 (elderly)",
+   "needs": {
+    "people": 4,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 10332,
+   "label": "household #10332 (no car)",
+   "needs": {
+    "people": 2,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  }
+ ],
+ "reserve": {
+  "vans": 1,
+  "generators": 1
+ },
+ "scripted_reports": [
+  {
+   "t_s": 1800,
+   "kind": "need",
+   "household_id": 7464,
+   "needs": {
+    "people": 4,
+    "mobility": false,
+    "accessible_vehicle": false
+   },
+   "note": "resident: four of us, no car, we can walk to the corner"
+  },
+  {
+   "t_s": 2700,
+   "kind": "need",
+   "household_id": 4560,
+   "needs": {
+    "people": 3,
+    "mobility": true,
+    "accessible_vehicle": true
+   },
+   "note": "resident: grandmother can't do stairs, uses a walker (second claim on the accessible van)"
+  },
+  {
+   "t_s": 4200,
+   "kind": "need",
+   "household_id": 17124,
+   "needs": {
+    "people": 2,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": true
+   },
+   "note": "neighbour: elderly couple, one on home oxygen"
+  }
+ ]
+}
