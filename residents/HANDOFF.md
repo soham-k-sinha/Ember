@@ -1,20 +1,18 @@
 # residents/ HANDOFF: full context for the next agent (Soham's lane)
 
-Last updated: Sat 2026-10-17, morning (after the two-phone drill). Hackathon: **HackHarvard 2026**. **Devpost
+Last updated: Sat 2026-10-17, ~12:30 (D60 + the voice plan). Hackathon: **HackHarvard 2026**. **Devpost
 submission due Sunday 8:00 AM.** Venue closes 8 PM nightly.
 
 **State right now**
-- `main` = `808f0ef` (129 residents tests). Soham's newer work is in **two open PRs, stacked**:
-  - **#38** `soham/multi-household-phones`: 1 commit, D55; CI green.
-  - **#39** `soham/drill`: built on #38, plus 3 commits for D56, the phone re-binding fix and D57; **181 tests pass**.
-- **Soham merges them by hand, #38 first.** In the last session the agent's `gh pr merge` was blocked by Claude Code's
-  auto-mode permission classifier, so don't retry the merge; ask Soham.
-- After #38 is squash-merged:
-  ```bash
-  git checkout soham/drill && git fetch origin && git rebase origin/main   # git skips #38's commit (same patch)
-  (cd residents && uv run pytest -q) && git push --force-with-lease
-  ```
-  Then merge #39.
+- `main` = `e26af22`: Aryaman's D58 (declines are constraints, nearest drop-off = the Treehouse) and D59 (a van collects
+  a nearby household on its list before the drop-off: shared trips).
+- Soham's work is in **one PR to merge: `soham/questions`** (see §8). It contains #38 (D55) and #39 (D56, D57)
+  **rebased onto main**, plus D60 and the D58/D59 compatibility fixes; **198 tests pass**.
+- **#38 and #39 are superseded:** their branches are *not* rebased and conflict with main (DECISIONS.md), and #39's
+  decline test fails against D58. Merge `soham/questions` and close #38/#39.
+- Soham merges by hand: the agent's `gh pr merge` is blocked by Claude Code's auto-mode classifier.
+- **Next big piece: the voice channel**, planned in `residents/VOICE_PLAN.md` (nothing built yet; §11 there lists
+  Soham's decisions).
 
 Read this file first, then:
 - `CLAUDE.md` (hard rules)
@@ -162,14 +160,14 @@ residents/  (Soham)  FastAPI + SQLite. The DB is the source of truth; the engine
 | `threads.py` | One phone per household/facility (D55): `resolve_thread`, `phone_thread`, `phone_for_thread`, `select_thread`. `unplaced()`: a resident registered with `locate` that has no household yet (thread_key NULL, scenario_id set). Legacy rows (both NULL) auto-bind to the judge/hospital. `normalize_handle`. |
 | `messaging.py` | `Messenger`: inbound (dedupe by id + `inbound_seen`, ignore texts from before this run, learn the opt-in ids) → stored message → WS → hooks. Unplaced phones go to **lobby hooks**, with a kv `lobby:<handle>` log that is moved into the household's thread once placed. `send_message` / `send_to_phone` (drill prefix, opt-in enforced; delivery = sent / failed / dev / no_phone / not_opted_in). `phone_inbound` (console/dev, by handle). `taps` (console printer). `retry_failed`. |
 | `extract.py` | **The one LLM call.** Claude Opus 5.5 (`EXTRACT_MODEL`), effort low, structured outputs (`beta.messages.parse` + Pydantic) with the server-side refusal fallback. Fact kinds: need, closure_report, facility_status, **location**, **done**, confirm, reject, question (+ **question_topic**: eta / pickup_place / destination / others / vehicles / bring / other), other. `to_outcome()` is deterministic: confidence < 0.6 → ask; a need without a head count → `pending` + ask; needs merge with known ones (D46); closure → `resolve_road` or ask; endurance in minutes (D53); confirm/reject only if something was offered; the model's own question next to a need goes into `follow_up`. |
-| `intake.py` | Inbound hook, serialized. A DONE (regex `guide.STEP_DONE`) while a step waits goes straight to the guide, no LLM. Otherwise: extract → reports (dupes skipped) → **one** replan per text → reply. Reply order: missing-info question; else instruction / "Got it." + status + follow-up; else answers by topic (briefing); else coordinators. YES/NO → `planner.respond`, with D57: a NO to the only fitting vehicle asks first (kv `keep:`), and a YES after a decline undoes it. A YES starts the guide. Planner failure → an honest text. |
+| `intake.py` | Inbound hook, serialized. A DONE (regex `guide.STEP_DONE`) while a step waits goes straight to the guide, no LLM. Otherwise: extract → reports (dupes skipped) → **one** replan per text → reply. Reply order: missing-info question; else instruction / "Got it." + status + follow-up; questions always answered (D60): topic answer from briefing, else `Outbound.situation` (status + current step + open question); `other` also goes to the coordinators' queue (kv `question:`, escalation hooks → drill console). YES/NO → `planner.respond`, with D57: a NO to the only fitting vehicle asks first (kv `keep:`), and a YES after a decline undoes it. A YES starts the guide. Planner failure → an honest text. |
 | `outbound.py` | Plan hook. Per phone thread, texts only when **its** instruction materially changed (D44). Offers name the pickup corner, the deadline, **why this vehicle and who's ahead on it** (D57), and say "precaution" outside the flood. Never re-offers a declined vehicle. No false "no longer coming" once a pickup is under way or done. Asks `info_requests` once. `status_text` is honest about confirmed, picked up, safe, powered, shelter-in-place, and declining the only vehicle. |
 | `places.py` | Location (D56): `parse_coords` (typed coordinates, Apple/Google maps links), `Gazetteer` (intersections, nearest free building, corner labels, distance/bearing, town bbox), `nominatim()` (OSM geocoder bounded to the town; `GEOCODE=0` turns it off). |
 | `locate.py` | `Locator` (D56): the lobby. Ask where they are → LLM reads the place and any needs → `Gazetteer.locate` → nearest free building becomes a household of the run → phone bound → pre-placement needs submitted (or held as pending) → one replan, after which the plan asks its question or offers. "Water reaches your street in N min" / "outside the forecast flood area" (+ a drill tip with a flood corner). Welcomes opted-in unplaced phones after a reset. |
 | `guide.py` | `Guide` (D56): after YES, one text per step, timed from the simulator's outcomes. Rescue: get ready + walk to the corner (distance, direction, minutes) or wait inside for a door pickup → board → ride → checked in. Protect: meet the crew → connecting → powered. DONE replies; `auto_clock` jumps the clock to the next event once nobody is pending. kv `guide:<thread>`. |
-| `briefing.py` | D57: what the plan knows, in words. `why()`, `fits()`, `alternatives()`, `queue()`, `neighbors()` (other households of the run within 300 m, same corner, shared vehicle), `answer(topic)`, `walk_phrase()`. Facts only. |
+| `briefing.py` | D57: what the plan knows, in words. `why()`, `fits()`, `alternatives()`, `queue()`, `neighbors()` (other households of the run within 300 m, same corner, shared vehicle), `answer(topic, thread, road)`, `walk_phrase()`. D60: `flood_text()` (scenario keyframes), `roads_text()` (closures for the whole named street, `EngineBridge.named_edges`), fixed `SAFETY` / `BRING` wording. Facts only. |
 | `drill.py` | `uv run ember-drill` (§6). Preflight: refuses to start if the port is busy or another Photon-enabled EMBER is running (both would answer every text). Fresh run: the command line decides who plays what (re-binds phones from the last run and keeps their opt-in; drops unlisted ones). Console prints every text. `SetupError` → one-line message. |
-| `tests/` | **181 tests**, about 95 s. No network, no paid API: Photon faked at the HTTP layer (`fake_photon.py`), LLM faked (`FakeLLM`, keyed on exact text), `EMBER_LOCAL_POOL=1`, `GEOCODE=0`, engine at `moves=10`. `test_drill.py` (32) covers the whole text-driven drill and replays the two-phone transcript. `samples.json` = 32 messages for the live eval. |
+| `tests/` | **198 tests**, about 85 s. `test_questions.py` (17, D60): every topic in every state, the live transcript, the coordinator queue. No network, no paid API: Photon faked at the HTTP layer (`fake_photon.py`), LLM faked (`FakeLLM`, keyed on exact text), `EMBER_LOCAL_POOL=1`, `GEOCODE=0`, engine at `moves=10`. `test_drill.py` (32) covers the whole text-driven drill and replays the two-phone transcript. `samples.json` = 32 messages for the live eval. |
 | `scripts/eval_extract.py` | Live accuracy of the LLM call on samples.json (real API, ~$0.25). Last run **32/32, median 2.3 s**. |
 
 ### API (full table in residents/README.md)
@@ -178,6 +176,7 @@ residents/  (Soham)  FastAPI + SQLite. The DB is the source of truth; the engine
   `POST /replan` · `POST /clock {t_s}`
 - **Analysis:** `GET /comparison?seeds=` · `POST /optimize?seeds=&k=` (202) + `GET /optimize` ·
   `POST /simulate {planner}`
+- **Questions (D60):** `GET /questions?open_only=` · `POST /questions/{report_id}/answer {text}`
 - **People:** `POST /ask {role, household_id?|facility_id?, question?}` ·
   `POST /assignments/{id}/confirm|reject {plan_version?}` (the console reject is immediate) ·
   `GET/POST /phones {role, handle, household_id?|facility_id?|locate?}` · `POST /messages`
@@ -247,10 +246,11 @@ EMS 14) are outside it: those get a precautionary pickup or shelter in place.
 | 6 | Operator thread (info_requests → facility_status) | ✅ #16 + #32 (`/ask`) |
 | 7 | Disruption, simulate, comparison, scatter forwarding | ✅ #14, #16, #32 |
 | 8 | Robustness (dupes, two replies, old versions, Photon outage) | ✅ #29, #35 |
-| 9 | Voice (stretch, only if green-lit at the SpaceXAI workshop) | ❌ not started; cut unless green-lit |
+| 9 | Voice: residents in the flood zone get a phone call that works like the text thread | 📝 planned: `residents/VOICE_PLAN.md` (needs Soham: Photon payment method + number, LiveKit project) |
 | + | Multi-household phones (Soham asked) | 🟡 #38 open (D55) |
 | + | Text-driven drill: location, steps, clock, `ember-drill` (Soham asked) | 🟡 #39 open (D56) |
 | + | Plan explained to residents, questions answered, safer declines (Soham asked, after the two-phone run) | 🟡 #39 open (D57) |
+| + | Every question answered from the plan, coordinator queue (Soham asked: "what's the plan?" got only "passed to the coordinators") | 🟡 `soham/questions` (D60) |
 
 ## 8. Everything Soham's lane changed (in order)
 **Merged:**
@@ -297,9 +297,18 @@ EMS 14) are outside it: those get a precautionary pickup or shelter in place.
      - the precaution note outside the flood; a drill tip
 
   Verification: 8–10 deliberate mutations per feature, all caught by a test; live eval 32/32.
+- **`soham/questions`** (supersedes #38/#39: their commits rebased onto main with D58, plus one commit):
+  - **D60:** every question gets a computed answer. New topics `plan` / `flood` / `roads` / `safety`; `plan` and
+    "nothing specific yet" get `Outbound.situation` (status + current step + the plan's open question); `other` gets
+    the situation **and** the coordinators' queue (`GET /questions`, `POST /questions/{id}/answer`, console
+    `questions` / `tell r1 …`). A question before a location says why we need it.
+  - D58 compatibility: the "you declined the only vehicle" status is checked before the engine's new unresolved entry.
+  - `test_listener` poll test made relative to now (it hard-coded 12:00 UTC; D54's 10-minute clamp failed it later).
+  - Verification: 198 tests; 25 mutations all caught; live eval 45/45; dry drills with the real LLM, including the
+    exact transcript that prompted it.
 
-**Decisions written by Soham:** D36, D37, D40, D41, D43, D44, D45, D46, D51, D52, D53, D54 (main), D55 (#38),
-D56, D57 (#39).
+**Decisions written by Soham:** D36, D37, D40, D41, D43, D44, D45, D46, D51, D52, D53, D54 (main), D55, D56,
+D57, D60 (`soham/questions`). D58 and D59 are Aryaman's (on main). The voice decision will be D61.
 
 ## 9. Demo (docs/DEMO.md, docs/QA.md: Aryaman owns them)
 Soham's last dry run (before Aryaman's #36):
@@ -316,7 +325,8 @@ Soham holds the operator phone on stage. **Re-measure after #36, and after #38/#
 
 ## 10. Open items / notes for others (also in docs/log/soham.md)
 **Aryaman (engine): what would make the plan itself smarter.** An LLM in the allocator would break hard rule 2 and
-can't beat the simulator-scored search.
+can't beat the simulator-scored search. **D58 (main) shipped items 1, 3, 4 (reason text), 5 and 6, and D59 (main)
+shipped item 2 (shared trips)**; `briefing.trip_mates` reads it from the rationale ("shares the trip with household #…").
 1. **Declines aren't constraints.** `carry_over` and the allocator re-propose a declined (vehicle, household) pair.
    The backend hides it, so the household can end up with nothing although another vehicle is free.
 2. **One household per trip.** Neighbours at one corner can't share a van even with seats free.
@@ -388,6 +398,10 @@ can't beat the simulator-scored search.
 8. Two-phone run felt "hardcoded" → diagnosis: the allocator does plan around everyone, but the texts hid it and the
    decline handling was wrong → D57 in #39, engine asks in §10.
 9. This handoff, refreshed twice.
+10. "what's the plan?" / "what to do?" got only "passed to the coordinators" → decided against an LLM coordinator
+    (or LLM judge): computed answers for every topic + the situation fallback + a real coordinator queue → D60.
+    Then: "plan the voice agent (Photon 2.0) so flood-zone residents get a call that works exactly like the texts"
+    → `residents/VOICE_PLAN.md`.
 
 ### How to verify (commands that worked)
 ```bash
@@ -481,15 +495,15 @@ printf '@r1 Putnam Ave and Western Ave\n@r1 2 of us\n@r1 yes\n@r1 done\n@r1 done
   the two explicit `Fact(...)` calls in `tests/test_conversation.py`; update `SYSTEM`; add live samples; run the eval.
 
 ### Next steps (in priority order)
-1. Soham merges #38, then the rebased #39. Then re-run the DEMO.md dry run (`RESET_ON_START=1`, Photon off,
-   `/dev/inbound`) and send Aryaman the new numbers.
-2. Soham re-tests the drill on both phones with the D57 code (restart `ember-drill`) from flood-zone corners. Watch
+1. Soham merges `soham/questions` (and closes #38/#39). Then re-run the DEMO.md dry run (`RESET_ON_START=1`, Photon
+   off, `/dev/inbound`) and send Aryaman the new numbers (D58 changed drop-offs to the Treehouse).
+2. **Voice:** Soham answers `VOICE_PLAN.md` §11 (payment method + number, LiveKit project, voice provider). Phases V1–V3
+   don't need those and can start immediately.
+3. Soham re-tests the drill on both phones with the D57 + D60 code (restart `ember-drill`) from flood-zone corners. Watch
    for: the "why" line in offers, answers to questions, the second-NO check, the steps, and the clock.
-3. Hand Aryaman the §10 engine list (declines as constraints, multi-household trips, shelter drop-off, unthreatened
-   policy). When he ships any of them, update `briefing.others_text` / `why()` (they currently say "one household per
-   trip") and the guide's drop-off wording.
-4. Possible residents-side work if asked:
+4. Aryaman's D58 + D59 shipped the §10 engine list (shared trips included; the texts now say when you share one).
+5. Possible residents-side work if asked:
    - read iMessage location pins, if Photon exposes them (`parse_inbound` drops non-text content today)
-   - questions about a specific road ("is River St open?" → `closures` in the state)
+   - a placed phone correcting its location ("no, I'm at …": `Outcome.location` is extracted but ignored today; part of
+     voice V2)
    - a web panel for drill participants (Aryaman's lane: ask)
-   - Task 9 voice only if green-lit
