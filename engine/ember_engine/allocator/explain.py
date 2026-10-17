@@ -35,6 +35,13 @@ def explain(ctx: Context, carry, assignments: list, res, reports, version: int, 
         elif a["task"] == "protect" and (not a.get("rationale") or a.get("plan_version") == version):
             a["deadline_s"] = ctx.power_risk.get(a["target"]["facility_id"], (None, None))[1]
             a["rationale"] = _protect_why(ctx, a, o, assignments, res, reports, res_name)
+        old = {b["id"]: b for b in (prev or {}).get("assignments", [])}.get(a["id"])
+        if old is not None and a.get("status") != "cancelled" and a.get("plan_version") != version \
+                and abs(float(a["eta_s"]) - float(old.get("eta_s") or 0)) > 120:
+            base_why = a.get("rationale", "").split(" · v")[0]
+            a["rationale"] = (f"{base_why} · v{version}: ETA {mins(float(old['eta_s']))} → {mins(a['eta_s'])}"
+                              + (" (route changed: road reported closed)" if any(r["kind"] == "closure_report" and
+                                 float(r["observed_at_t_s"]) <= ctx.t_now for r in ctx.known_reports) else ""))
         if a.get("status") == "cancelled" and a.get("cancelled_at_t_s") == ctx.t_now:
             moved_to = [b["target"].get("facility_id") or b["target"].get("household_id") for b in assignments
                         if b["resource_id"] == a["resource_id"] and b.get("plan_version") == version and b.get("status") != "cancelled"]

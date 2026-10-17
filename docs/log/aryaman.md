@@ -91,3 +91,11 @@ Run: uv run --project engine ember seed-state ; uv run --project engine ember ro
 Interfaces: D42. Soham: `SEED_STATE=../engine/data/allston_flood_v1.seed_state.json`; `from ember_engine.api import EngineSession` (add `ember-engine = { path = "../engine", editable = true }` to residents' deps); call methods in a threadpool; `out["assignment_events"]` are ready-to-send WS `assignment` payloads. Daytona key lives only in engine/.env (gitignored) on Aryaman's laptop; Tier 2 tomorrow → set EMBER_DAYTONA_WORKERS≈90.
 Status: done. 79 tests.
 Next: judge-beat tuning with Anshuman; help Soham wire the endpoints.
+
+## 2026-10-17 15:20 · demo beats: scenario tuning + regression tests · branch aryaman/scenario-tuning · commit (this PR)
+What: at Aryaman's request, tuned Anshuman's allston_flood_v1 (synthetic values only, each recorded in assumptions.md): generators + truck stage at EMS Station 14, towed speed 0.25×, Cottage Farm hookup 30 min. Both beats now land: nominal overflow baseline 2,317 m³ vs EMBER 0; judge reply at minute 5 → Accessible Van 3 (pickup 132 vs deadline 165 min) + gen-1 rerouted (ETA 14 → 25 min, rationale says why). Kept assignments whose ETA moves now say so in their rationale. Regenerated engine/data/allston_flood_v1.seed_state.json. New tests pin both beats on the real scenario.
+Files: scenarios/allston_flood_v1/{scenario.json,assumptions.md}, engine/ember_engine/allocator/explain.py, engine/tests/test_demo_beats.py, engine/data/allston_flood_v1.seed_state.json
+Run: uv run --project engine pytest -q engine/tests/test_demo_beats.py ; uv run --project engine ember compare --scenario scenarios/allston_flood_v1/scenario.json --seeds 5
+Interfaces: scenario values changed (no contract change, D46). Anshuman: your scenario was edited; please review the 6 changed values + assumptions rows, and put "judge replies within the first ~8 sim-minutes" in DEMO.md. Soham: reseed (`POST /dev/reset`) to pick up the new seed; 92 residents tests pass on it. "River St" near the judge → `EngineSession.edges_by_name("River Street", near_household=10296, radius_m=150)` = [523, 833, 952].
+Status: done. 81 engine tests. 5-seed compare: +50.6 people before deadline, −44 min critical-service outage, −2,165 m³ overflow, +75 vehicle-km.
+Next: perf/edge cases; help with the 5 PM integration.
