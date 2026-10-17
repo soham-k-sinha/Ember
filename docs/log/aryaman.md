@@ -23,3 +23,11 @@ Run: uv run --project engine ember validate-scenario contracts/fixtures/scenario
 Interfaces: produces scenario v0.1 (D28). Anshuman: copy the fixture's shape; keyframes can live in keyframes.geojson (features with properties.t_s). Engine reads it via `hazard_from_scenario` and `scenario.deadlines()`.
 Status: done. 30 tests pass.
 Next: task 2, state.schema.json + state.fixture.json.
+
+## 2026-10-17 00:50 · shared town file · branch aryaman/shared-town-state · commit (this PR)
+What: the world is committed as engine/data/town.json.gz; every ember command unpacks it to data/town.json when missing (and warns if a local rebuild differs). `ember pin-town` updates it.
+Files: engine/data/town.json.gz, engine/ember_engine/cli.py
+Run: rm data/town.json; uv run --project engine ember validate-scenario contracts/fixtures/scenario.fixture.json
+Interfaces: everyone's household/asset/edge ids now come from the same town (D29). Don't run `ember build` unless you mean to change the world.
+Status: done.
+Next: task 2, state.schema.json + fixture.
