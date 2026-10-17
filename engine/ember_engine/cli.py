@@ -287,6 +287,8 @@ def cmd_robust(a):
         if pts_out:
             pts_out.close()
     r = plan["search"]["robust"]
+    for line in getattr(pool, "log", [])[:5]:
+        print(f"[robust] note: {line}")
     print(f"[robust] {r['jobs']} runs in {r['fanout_wall_s']:.1f}s · rule: {r['rule']}")
     for row in r["ranking"]:
         mark = "→" if row["candidate"] == r["chosen"] else " "

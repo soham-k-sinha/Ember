@@ -150,3 +150,25 @@ def test_get_pool_falls_back_to_local(monkeypatch):
     monkeypatch.setenv("DAYTONA_API_KEY", "x")
     monkeypatch.setenv("EMBER_LOCAL_POOL", "1")
     assert get_pool().kind == "local"
+
+
+def test_missing_snapshot_falls_back_to_local_instead_of_building(world, scn):
+    """A changed engine means a new snapshot name; until `ember daytona-snapshot` runs, batches complete locally
+    (never an implicit multi-minute build in the middle of a demo)."""
+    class NoSnapshotPool(DaytonaPool):
+        async def astart(self):
+            from ember_engine.daytona.pool import SnapshotMissing
+            raise SnapshotMissing("snapshot ember-engine-test is not built")
+    plans = {"c00": {"assignments": []}}
+    jobs = J.make_jobs("v1", ["c00"], [1, 2], scn, world.n_edges)
+    pool = NoSnapshotPool(2, local_fallback_world=world)
+    pts = asyncio.run(pool.arun("v1", scn, plans, [], jobs))
+    assert len(pts) == 2 and {p["worker"] for p in pts} == {"local-fallback"}
+    assert pool.fell_back and "not built" in pool.log[0]
+
+
+def test_snapshot_hash_ignores_host_only_modules():
+    from ember_engine.daytona.pool import PKG_DIR, sandbox_modules
+    mods = {str(m.resolve().relative_to(PKG_DIR.resolve())) for m in sandbox_modules()}
+    assert {"world.py", "sim/plan_sim.py", "daytona/jobs.py", "allocator/search.py"} <= mods
+    assert not mods & {"cli.py", "api.py", "allocator/explain.py", "render_png.py", "build_town.py", "daytona/pool.py"}
