@@ -92,10 +92,22 @@ class LocalPool:
 
 
 # ---------- Daytona ----------
+HOST_ONLY = {"cli.py", "api.py", "render_png.py", "build_town.py", "daytona/pool.py", "daytona/robust.py"}
+
+
+def _config():
+    from daytona import DaytonaConfig
+    return DaytonaConfig(api_key=os.environ.get("DAYTONA_API_KEY"), api_url=os.environ.get("DAYTONA_API_URL") or None,
+                         connection_pool_maxsize=None)
+
+
 def snapshot_name() -> str:
-    """Content hash of the engine package + the shared town: code or world changes → a new snapshot."""
+    """Content hash of the code sandboxes run + the shared town: a change there → a new snapshot.
+    Host-only modules (CLI, backend API, renderer, OSM builder, the pool itself) don't count."""
     h = hashlib.sha1()
     for f in sorted(PKG_DIR.rglob("*.py")):
+        if f.relative_to(PKG_DIR).as_posix() in HOST_ONLY:
+            continue
         h.update(f.relative_to(PKG_DIR).as_posix().encode()); h.update(f.read_bytes())
     h.update(CANONICAL_TOWN.read_bytes())
     return f"{SNAPSHOT_PREFIX}-{h.hexdigest()[:10]}"
@@ -131,8 +143,10 @@ class DaytonaPool:
 
     # -- lifecycle --
     async def _open_client(self):
-        from daytona import AsyncDaytona, DaytonaConfig
-        self.client = AsyncDaytona(DaytonaConfig(api_key=self.api_key or os.environ.get("DAYTONA_API_KEY"), connection_pool_maxsize=None))
+        from daytona import AsyncDaytona
+        if self.api_key:
+            os.environ.setdefault("DAYTONA_API_KEY", self.api_key)
+        self.client = AsyncDaytona(_config())
         self.snapshot = await ensure_snapshot(self.client)
 
     async def _create_one(self, i: int):
@@ -243,8 +257,8 @@ def build_snapshot() -> str:
                          "app.daytona.io → API Keys. Tier 2 (card + $25) gives ~100 concurrent sandboxes.")
 
     async def go():
-        from daytona import AsyncDaytona, DaytonaConfig
-        client = AsyncDaytona(DaytonaConfig(api_key=os.environ.get("DAYTONA_API_KEY")))
+        from daytona import AsyncDaytona
+        client = AsyncDaytona(_config())
         try:
             return await ensure_snapshot(client)
         finally:
