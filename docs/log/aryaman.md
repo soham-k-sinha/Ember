@@ -214,3 +214,9 @@ What: re-measured every demo beat on main against the live backend (Daytona on):
 Files: docs/DEMO.md, docs/QA.md, docs/HANDOFF.md, docs/log/aryaman.md
 Status: done.
 Next: merge the 2.5D website when its session pushes it; real-phone run on the keyed machine.
+
+## 2026-10-17 08:30 · positioning + plan changes in the docs (D63–D69) · branch aryaman/positioning-docs · commit (this PR)
+What: docs only, from Aryaman's planning chat. D63 positioning ("Flood response is our first demonstration. Adaptive coordination is the product."; no claim beyond the flood), D64 two incident types / one engine, D65 sustainability anchored to the real 2024 Cottage Farm event (21.33 MG ≈ 80,700 m³ in 13 h; drill: baseline 2,317 vs EMBER 0 m³, re-checked on main), people first, D66 multiplayer (stretch; Photon phone limit first), D67 Chalk gateway + simulator-graded eval (stretch), D68 skip SpaceXAI, D69 sim-realism order and the "nothing in the inner loop" rule. HANDOFF: new one-breath line, the LANDFALL competition note, priorities, open questions (Photon phone limit, Chalk account). DEMO.md: framing section; beats 2 and 4 labelled as the two incident types (beat 3 is the comparison); optional multiplayer beat 2b with the one-judge fallback; sustainability line anchored to real data. docs/team/soham.md: tasks 10–12 with acceptance and the direct paths as fallback. New docs/devpost/README.md outline. Numbered D63–D69 because open PR #45 (Soham, voice) holds D61–D62.
+Files: docs/DECISIONS.md, docs/HANDOFF.md, docs/DEMO.md, docs/team/soham.md, docs/devpost/README.md, docs/log/aryaman.md
+Interfaces: none.
+Status: done.
