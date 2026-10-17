@@ -9,3 +9,60 @@ Run: cd residents && uv sync && uv run uvicorn residents.app:app --reload ; uv r
 Interfaces: consumes state v0.1 (+ assignment/report v0.1). Produces GET /health, /state, /plan/current, /plan/{v}, WS /ws (D36, D37). Draft `residents/ws-events.schema.json`: Aryaman, please move it to contracts/; Arnav, build the WS client against it (on a seq gap, re-fetch /state). CORS allows localhost:5173.
 Status: done. Seed is the example-scenario fixture (judge #492); switch SEED_STATE to the engine's allston_flood_v1 snapshot when it exists.
 Next: Photon plumbing (assignments for 2 phones, Socket.IO inbound, send_message with plan_version + Idempotency-Key, polling fallback, /dev/inbound).
+
+## 2026-10-17 04:40 · Photon plumbing · branch soham/photon-plumbing · commit (this PR)
+What: Photon 2.0 Beta threads, verified live: 2 shared-line assignments (resident/judge + operator), Socket.IO listener (subscribed, cursor persisted), inbound texts stored as thread messages + WS `message`, outbound `send_message` (drill prefix, plan_version, Idempotency-Key, retries, opt-in enforced), polling fallback, `/phones`, `/messages`, `/dev/inbound`. CORS adds :43123.
+Files: residents/residents/{photon,messaging,threads,db,app,config}.py, residents/tests/{fake_photon,test_photon_client,test_messaging,test_listener}.py, residents/{README.md,.env.example,pyproject.toml,uv.lock}
+Run: cd residents && uv run pytest -q (53 pass) ; PHOTON_ENABLED=1 uv run uvicorn residents.app:app → GET /health shows photon_listener.socket = subscribed
+Interfaces: produces WS `message` events (state.messages[] shape) for every inbound/outbound text; `POST /messages` for the web's operator console; `POST /dev/inbound {role, text}` as the no-phone fallback. Arnav: CORS allows localhost:43123 and :5173. D40.
+Status: done. Live: both phones' "hi" arrived via the socket (opted in), test replies accepted by Photon (202). Inbound hooks are in place for extraction (Task 3).
+Next: engine bridge (seed from allston_flood_v1, POST /reports → allocate → plan + assignment events, /disruption, /comparison, /optimize), then LLM extraction.
+
+## 2026-10-17 05:30 · engine bridge: reports → replan, disruption, clock, comparison · branch soham/engine-bridge · commit (this PR)
+What: backend plans on allston_flood_v1 by default (plan v1 at startup). `POST /reports` → allocate(prev, prev_reports) → new plan version → state → WS `report`, `plan`, one `assignment` per `plan.changes` entry, `metrics`. `POST /disruption` (close road both directions / set facility field), `POST /replan`, `POST /clock`, `GET /comparison` (cached per version).
+Files: residents/residents/{engine_bridge,planner,contracts,db,app,config}.py, residents/tests/test_engine.py (+ test_api), residents/{README.md,.env.example}
+Run: cd residents && uv run pytest -q (74 pass, real allocator on allston) ; uv run uvicorn residents.app:app ; curl -X POST localhost:8000/reports -d '{"source":"judge","kind":"need","household_id":10296,"payload":{"people":2,"mobility":true,"accessible_vehicle":true}}' -H 'content-type: application/json'
+Interfaces: consumes ember_engine.allocator.allocate, sim.simulate(...).state_at, compare.compare (through engine_bridge.py only). Produces the HTTP API above + WS events per ws-events (D37/D38). Arnav: the plan event carries routes; `assignment` events are in `plan.changes` order; scrub with POST /clock. Anshuman: live judge beat at 75 min gives Accessible Van 3 → #10296. D41.
+Status: done. `POST /optimize` (robust fan-out) waits on engine PR #12; outbound changed-instruction texts are Task 4 (plan hook in place).
+Next: LLM extraction (text → report), then changed-instruction messages.
+
+## 2026-10-17 06:30 · LLM extraction (text → report) · branch soham/llm-extraction · commit (this PR)
+What: the one LLM call. Inbound texts (Photon or /dev/inbound) → Claude Opus 5.5 structured output (facts + confidence + clarifying question) → deterministic reports (need / closure_report with resolved edge ids / facility_status / confirm / reject / question) → one replan → the inbound message gets its report_id; missing info → one clarifying question back on the thread.
+Files: residents/residents/{extract,intake,engine_bridge,db,app,config}.py, residents/tests/{test_extract.py,samples.json}, residents/scripts/eval_extract.py
+Run: cd residents && uv run pytest -q (92 pass, no API calls) ; uv run python scripts/eval_extract.py → 20/20, median 1.9 s ; live: POST /dev/inbound {"role":"resident","text":"..."} with ANTHROPIC_API_KEY set
+Interfaces: produces reports per report.schema (closure payload carries edge_ids + road_hint/cross_street), WS `message` re-sent with report_id after extraction (clients upsert by id). D43.
+Status: done. Live chain verified: judge demo line → one combined clarifying question; "2 of us. River St near Memorial Dr is flooded" → need + closure → plan v2; operator "90 minutes of fuel" → backup_endurance_s 5400 → v3.
+Notes for the team:
+  - Anshuman/Aryaman: the judge (#10296) is AT River St × Memorial Dr. A judge text that closes River St there leaves no open route to the household → van-3 "no open route", judge unreached. The demo line should name a street on the van's way, not the judge's own access street (or engine could allow an alternate pickup node).
+  - Operator "90 min of fuel" at 75 min: allocator keeps gen-1 at Cottage Farm and lists mt-auburn as unresolved ("the only compatible generator is protecting cottage-farm"), hospital outage 75 min. Good trade-off for the beat; a shorter endurance moves the generator (Aryaman's test: 10 min at 50 min).
+  - Questions from residents ("is the bridge open?") are stored as `question` reports; nothing answers them automatically yet.
+Next: Task 4 outbound: text only changed instructions (with plan_version) after each replan; then confirm/reject + stale replies.
+
+## 2026-10-17 07:40 · outbound instructions + POST /optimize · branch soham/optimize-outbound · commit (this PR)
+What: Task 4 outbound: after each plan version, every opted-in phone gets a text only when its own instruction materially changed (new/replaced vehicle, cancelled, ETA ±10 min); assignment → `offered` (and kept offered across replans); plan info_requests asked once (e.g. after the judge's first "hi"). `POST /optimize` (202) runs the robust fan-out via EngineSession.optimize, streaming `scatter_point` then `plan`; `GET /optimize` status. Dropped residents/ws-events.schema.json; tests use contracts/ws-events.schema.json and validate engine's example events.
+Files: residents/residents/{outbound,planner,engine_bridge,intake,db,app,bus}.py, residents/tests/{test_outbound,test_ws_schema,test_engine}.py, residents/README.md
+Run: cd residents && uv run pytest -q (101 pass) ; curl -X POST 'localhost:8000/optimize?seeds=20&k=4' and watch WS
+Interfaces: WS `assignment` with change `status_changed` when an instruction is texted; `scatter_point` per ws-events (D38) with n_total for progress. D44.
+Status: done. Local optimize on Allston (k=2, seeds=3): 9 points in 2.7 s, plan v2 with search.robust.
+Notes: Aryaman — at t=0 `EngineSession.optimize` tags points `batch_id`/`plan_version` = v1 but returns plan v2 (version bumped after the fan-out); the web clears the scatter per batch, so fine, but the tag says v1. Arnav — upsert messages by id (a message is re-broadcast when its report_id is set).
+Next: Task 5 confirm/reject (+ stale plan_version replies), then a live phone run-through.
+
+## 2026-10-17 08:40 · confirm / reject + stale replies · branch soham/confirm-reject · commit (this PR)
+What: Task 5. "yes"/"no" texts (and POST /assignments/{id}/confirm|reject) → stale check against the answered plan version → confirmed (sticky in the allocator, household shows confirmed, ack text) / rejected (ack, replan, never re-offered). Stale → latest instruction re-sent. Confirmed work that moves later gets an "Update:" text, not a second confirmation request.
+Files: residents/residents/{planner,outbound,intake,db,app}.py, residents/tests/{test_confirm,test_api}.py, residents/README.md
+Run: cd residents && uv run pytest -q (108 pass)
+Interfaces: WS `assignment` with change `status_changed` on offered/confirmed/rejected. D45.
+Status: done. Bug found + fixed: a request model defined inside create_app() was invisible to FastAPI (postponed annotations), so the confirm body (plan_version) was silently ignored; regression test checks every JSON endpoint declares its body.
+Notes for Aryaman (engine, please):
+  - `rejected` isn't understood by carry_over: a declined (resource, household) pair goes back into prev_queues and is usually re-proposed. The backend works around it (no re-offer, keeps it rejected), but the vehicle stays booked. Ask: treat `status == "rejected"` like cancelled history and exclude that pair in construct().
+  - Confirming moves the work to the front of the vehicle's queue: judge confirmed at t=0 → van-3 ETA 153 → 21 min on the next replan (carry_over sets free_at = rescue_cycle from now). Intended? It can push earlier-deadline households later.
+Next: robustness (Task 8: duplicate reports, two replies in a row, Photon outage) and a live phone run-through.
+
+## 2026-10-17 09:40 · fixes from the first real-phone run-through · branch soham/conversation-fixes · commit (this PR)
+What: the live judge conversation exposed (1) a later partial need ("Yes, 2 people") replacing the earlier one and dropping the wheelchair → the non-accessible Generator truck was assigned and confirmed; (2) no reply when the plan couldn't serve the judge yet; (3) generic chatter replies. Fixed: need payloads merge with the household's known needs; every fact gets a reply (instruction or computed status incl. the allocator's blocked_by); chatter → open info_request, else status, else the model's prompt; questions → "passed to the coordinators" + status.
+Files: residents/residents/{extract,outbound,intake}.py, residents/tests/test_conversation.py
+Run: cd residents && uv run pytest -q (112 pass; the replay test fails on the previous code)
+Interfaces: none changed. D46.
+Status: done.
+Notes: Anshuman — at 50 min the judge's accessible need is unservable ("every eligible vehicle is committed to earlier deadlines"); EMBER now tells the judge that honestly, but for the demo beat the judge needs a reachable accessible vehicle (Aryaman's earlier note).
+Next: switch engine_bridge.py to EngineSession (Aryaman's request), then Task 8 robustness + Task 6/7 leftovers.

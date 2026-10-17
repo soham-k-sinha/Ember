@@ -67,3 +67,27 @@ Notes for Anshuman (scenario tuning, not engine bugs):
   - Overflow: the baseline also ends at 0 m³ because storage doesn't fill before 180 min even with a reactive generator. Smaller storage_max_m3 or higher inflow makes the dependency-first story show up in the comparison.
   - Infrastructure beat that already works (test): an operator report "10 min of backup left" at 50 min moves the generator from the pumping station to the hospital; hospital outage 15 min → 0, overflow 0 → 2,000 m³, stated in the rationale.
 Next: task 9 Daytona fan-out.
+
+## 2026-10-17 12:10 · ws-events contract moved to contracts/ + scatter_point proposal · branch aryaman/ws-events · commit (this PR)
+What: Soham's `residents/ws-events.schema.json` copied to `contracts/ws-events.schema.json` (envelope + event shapes unchanged); `scatter_point` filled in from the engine side; one example envelope per type in `contracts/fixtures/ws-events.fixture.json`; `compare.scatter_points()` emits the shape; test validates every example.
+Files: contracts/ws-events.schema.json, contracts/fixtures/ws-events.fixture.json, contracts/README.md, engine/ember_engine/{compare,cli}.py, engine/tests/test_contracts.py
+Run: uv run --project engine pytest -q engine/tests/test_contracts.py
+Interfaces: ws-events v (D38, proposed). Soham: please review scatter_point; after this merges, drop residents/ws-events.schema.json in your PR and renumber your D33/D34 to D36/D37 (main already has D33–D35). Arnav: build the WS client against contracts/ws-events.schema.json + the example fixture.
+Status: PR open, waiting on Soham's OK on scatter_point.
+Next: task 9 Daytona fan-out (emits these scatter points).
+
+## 2026-10-17 13:00 · robustness fan-out (Daytona + local pool) · branch aryaman/daytona · commit (this PR, stacked on #11)
+What: `daytona/` — jobs (candidate × perturbed world → scatter_point; full §3.7 perturbation sampler), pools (`DaytonaPool`: long-lived sandboxes from a content-hashed snapshot, stateful code_interpreter, results via return value, timeouts, retry, local fallback; `LocalPool`: processes), robust selection (best worst-20%). `ember robust`, `ember daytona-snapshot`. Allocator split into `search()` + `finalize()` so robustness can publish a non-nominal winner.
+Files: engine/ember_engine/daytona/*, engine/ember_engine/allocator/search.py, engine/ember_engine/cli.py, engine/tests/test_daytona.py, engine/.env.example
+Run: uv run --project engine ember robust --scenario scenarios/allston_flood_v1/scenario.json --points-out data/points.jsonl
+Interfaces: emits ws-events `scatter_point` (PR #11 shape) via `robust_plan(..., on_point=...)`; Soham: call it from POST /optimize and broadcast each point; plan.search.robust carries the ranking table. Daytona needs DAYTONA_API_KEY in engine/.env (nobody has added one yet).
+Status: done locally (100 runs, 1.5 s, chooses c03 over nominal c00); Daytona path wire-tested with stand-in sandboxes, not yet run against real Daytona (no key on this machine).
+Next: get a Daytona key + Tier 2, run `ember daytona-snapshot` and a live 100-job batch; scenario tuning with Anshuman.
+
+## 2026-10-17 14:10 · Daytona live (Tier 1) + backend bridge + Allston seed · branch aryaman/daytona · commit (PR #12)
+What: Daytona verified live: snapshot `ember-engine-1b735d7199` built (77 s), `ember robust --pool daytona` ran 100 runs on 8 Tier-1 sandboxes in 29 s, identical to the local pool, 0 fallbacks, sandboxes deleted after. `ember_engine.api.EngineSession` = the backend's calls (start, add_report(s), close_road, state_at, compare, optimize, resume, edges_at_household / edges_by_name). `ember seed-state` → `engine/data/allston_flood_v1.seed_state.json` (plan v1 at t=0; 37 assignments; validates; round-trips through residents' Store).
+Files: engine/ember_engine/{api,cli}.py, engine/ember_engine/daytona/pool.py, engine/data/allston_flood_v1.seed_state.json, engine/tests/test_api.py
+Run: uv run --project engine ember seed-state ; uv run --project engine ember robust --scenario scenarios/allston_flood_v1/scenario.json --pool daytona
+Interfaces: D42. Soham: `SEED_STATE=../engine/data/allston_flood_v1.seed_state.json`; `from ember_engine.api import EngineSession` (add `ember-engine = { path = "../engine", editable = true }` to residents' deps); call methods in a threadpool; `out["assignment_events"]` are ready-to-send WS `assignment` payloads. Daytona key lives only in engine/.env (gitignored) on Aryaman's laptop; Tier 2 tomorrow → set EMBER_DAYTONA_WORKERS≈90.
+Status: done. 79 tests.
+Next: judge-beat tuning with Anshuman; help Soham wire the endpoints.

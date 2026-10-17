@@ -30,6 +30,20 @@ METRICS = [   # (key, label, better, unit)
 RANGES = {"travel_time_mult": (0.8, 1.6), "endurance_scale": (0.7, 1.3), "storage_scale": (0.7, 1.3), "inflow_scale": (0.85, 1.15)}
 
 
+def scatter_points(comparison: dict, batch_id: str = "compare", worker: str = "local") -> list[dict]:
+    """comparison.json per-seed results → ws-events `scatter_point` payloads (one per plan × seed)."""
+    from .allocator.search import objective
+    n = 2 * len(comparison["per_seed"])
+    out = []
+    for r in comparison["per_seed"]:
+        for cand in ("baseline", "ember"):
+            m = r[cand]
+            out.append({"run_id": f"{batch_id}/{cand}/s{r['seed']}", "batch_id": batch_id, "n_total": n, "plan_version": None,
+                        "candidate": cand, "seed": r["seed"], "perturbation": r["perturbation"], "metrics": m,
+                        "objective": [float(x) for x in objective(m)], "worker": worker})
+    return out
+
+
 def perturbation(seed: int) -> dict:
     """Seed 0 = nominal; others draw each factor uniformly from RANGES (synthetic, labeled)."""
     if seed == 0:

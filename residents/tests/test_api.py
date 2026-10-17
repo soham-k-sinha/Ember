@@ -33,12 +33,14 @@ def test_plan_endpoints(client, fixture_state):
 def test_health(client, fixture_state):
     h = client.get("/health").json()
     assert h == {"ok": True, "scenario_id": fixture_state["scenario_id"], "plan_version": fixture_state["plan_version"],
-                 "t_s": fixture_state["t_s"], "photon": "disabled"}
+                 "t_s": fixture_state["t_s"], "mode": "static", "extraction": "off", "photon": "disabled", "photon_listener": None}
 
 
 def test_cors_allows_vite_dev_server(client):
     r = client.get("/state", headers={"Origin": "http://localhost:5173"})
     assert r.headers["access-control-allow-origin"] == "http://localhost:5173"
+    r = client.get("/state", headers={"Origin": "http://localhost:43123"})  # Arnav's web dev port
+    assert r.headers["access-control-allow-origin"] == "http://localhost:43123"
     r = client.get("/state", headers={"Origin": "http://evil.example"})
     assert "access-control-allow-origin" not in r.headers
 
@@ -103,3 +105,21 @@ def test_seed_version_follows_the_contract(tmp_path, state):
     stale.write_text(json.dumps(dict(state, version="0.0")))
     with pytest.raises(RuntimeError, match="state version"):
         load_seed(stale)
+
+
+def test_engine_endpoints_need_engine_mode(client):
+    for method, path, body in [("post", "/reports", {}), ("post", "/replan", None), ("post", "/clock", {"t_s": 0}),
+                               ("get", "/comparison", None), ("post", "/disruption", {"close_edges": [0]})]:
+        r = getattr(client, method)(path, **({"json": body} if body is not None else {}))
+        assert r.status_code == 503, (path, r.status_code)
+
+
+def test_every_json_endpoint_declares_its_body():
+    """Regression: a request model defined inside create_app() is invisible to FastAPI under postponed
+    annotations, and the body is silently ignored. Every POST taking JSON must show a requestBody."""
+    from residents.config import Settings
+    spec = create_app(Settings(scenario=None)).openapi()["paths"]
+    want_body = ["/reports", "/disruption", "/clock", "/phones", "/messages", "/dev/inbound",
+                 "/assignments/{assignment_id}/confirm", "/assignments/{assignment_id}/reject"]
+    for path in want_body:
+        assert "requestBody" in spec[path]["post"], path

@@ -236,8 +236,32 @@ def assemble(ctx: Context, carry: Carry, queues: dict, protects: list, cancels: 
 INITIAL_MOVES, REPLAN_MOVES = 120, 60   # local-search budget: the initial plan can take longer; replans target < 2 s
 
 
-def allocate(world, scn: dict, reports=(), t_now: float = 0.0, prev: dict | None = None, prev_reports=None,
-             seed: int = 0, moves: int | None = None, policies=None, trigger: str | None = None) -> dict:
+@dataclass
+class Candidate:
+    cid: str
+    key: tuple
+    pol: Policy
+    assignments: list
+    result: object          # SimResult on the nominal scenario (record=False)
+    note: str = ""
+
+
+@dataclass
+class Search:
+    ctx: Context
+    carry: Carry
+    version: int
+    reports: list
+    ranked: list            # [Candidate], best first; ranked[0] is the local-search winner
+    constructed: int
+    moves_scored: int
+    seed: int
+    t0: float
+
+
+def search(world, scn: dict, reports=(), t_now: float = 0.0, prev: dict | None = None, prev_reports=None,
+           seed: int = 0, moves: int | None = None, policies=None) -> Search:
+    """Candidates from priority rules + local search on the best; every plan scored by the simulator."""
     t0 = time.time()
     reports = list(reports)
     ctx = Context(world, scn, reports, t_now)
@@ -286,14 +310,26 @@ def allocate(world, scn: dict, reports=(), t_now: float = 0.0, prev: dict | None
         tried += 1
         if k < best_k:
             best_k, q, best_a, best_r = k, nq, a, r
+    ranked = [Candidate("c00", best_k, best_pol, best_a, best_r, "best rule + local search")]
+    ranked += [Candidate(f"c{i:02d}", c[0], c[1], c[5], c[6]) for i, c in enumerate(cands[1:], start=1)]
+    return Search(ctx, carry, version, reports, ranked, len(cands), tried, seed, t0)
 
+
+def finalize(s: Search, chosen: Candidate, prev: dict | None = None, trigger: str | None = None) -> dict:
+    """The published plan for one candidate: simulated ETAs, rationale, unmet needs, questions, diff."""
     from .explain import explain
-    plan = explain(ctx, carry, best_a, best_r, reports, version=version, prev=prev, pol=best_pol)
-    plan["trigger"] = trigger or ("initial plan" if prev is None else f"replan at {t_now/60:.0f} min")
-    plan["search"] = {"candidates": len(cands), "moves_scored": tried, "policy": best_pol.label(), "seed": seed,
-                      "objective": list(best_k), "wall_s": round(time.time() - t0, 3)}
-    plan["metrics"]["replan_latency_s"] = round(time.time() - t0, 3)
+    plan = explain(s.ctx, s.carry, chosen.assignments, chosen.result, s.reports, version=s.version, prev=prev, pol=chosen.pol)
+    plan["trigger"] = trigger or ("initial plan" if prev is None else f"replan at {s.ctx.t_now/60:.0f} min")
+    plan["search"] = {"candidates": s.constructed, "moves_scored": s.moves_scored, "policy": chosen.pol.label(), "seed": s.seed,
+                      "candidate": chosen.cid, "objective": list(chosen.key), "wall_s": round(time.time() - s.t0, 3)}
+    plan["metrics"]["replan_latency_s"] = round(time.time() - s.t0, 3)
     return plan
+
+
+def allocate(world, scn: dict, reports=(), t_now: float = 0.0, prev: dict | None = None, prev_reports=None,
+             seed: int = 0, moves: int | None = None, policies=None, trigger: str | None = None) -> dict:
+    s = search(world, scn, reports, t_now, prev, prev_reports, seed, moves, policies)
+    return finalize(s, s.ranked[0], prev, trigger)
 
 
 def _move(ctx: Context, carry: Carry, q: dict, rng: random.Random) -> bool:

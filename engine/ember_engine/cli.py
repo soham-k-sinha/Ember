@@ -110,6 +110,23 @@ def cmd_gate_a(a):
         sys.exit(1)
 
 
+def _ws_examples(state: dict, points: list) -> list:
+    """One example envelope per WS event type (contracts/ws-events.schema.json), built from the other fixtures."""
+    t = state["t_s"]
+    plan = state["plan"]
+    a = plan["assignments"][0]
+    ev = [("state", state), ("plan", plan),
+          ("assignment", {"plan_version": plan["version"], "change": "added", "assignment_id": a["id"], "assignment": a}),
+          ("assignment", {"plan_version": plan["version"], "change": "removed", "assignment_id": "a-example-removed", "assignment": None}),
+          ("metrics", state["metrics"])]
+    if state["messages"]:
+        ev.append(("message", state["messages"][0]))
+    if state["reports"]:
+        ev.append(("report", state["reports"][0]))
+    ev += [("scatter_point", p) for p in points]
+    return [{"type": k, "seq": i, "t_s": t, "data": d} for i, (k, d) in enumerate(ev)]
+
+
 def cmd_fixtures(a):
     """Write small fixtures into contracts/fixtures from the current data/."""
     import copy
@@ -138,8 +155,11 @@ def cmd_fixtures(a):
     scn = example_scenario(town)
     (fx / "scenario.fixture.json").write_text(json.dumps(scn, indent=1))
     (fx / "state.fixture.json").write_text(json.dumps(example_state(town, scn), indent=1))
-    from .compare import compare
-    (fx / "comparison.fixture.json").write_text(json.dumps(compare(World.from_dict(town), scn, seeds=3), indent=1))
+    from .compare import compare, scatter_points
+    cmp_ = compare(World.from_dict(town), scn, seeds=3)
+    (fx / "comparison.fixture.json").write_text(json.dumps(cmp_, indent=1))
+    (fx / "ws-events.fixture.json").write_text(json.dumps(_ws_examples(json.loads((fx / "state.fixture.json").read_text()),
+                                                                       scatter_points(cmp_)[:2]), separators=(",", ":")))
     print(f"[fixtures] wrote to {fx}")
 
 
@@ -236,6 +256,67 @@ def cmd_compare(a):
     out = Path(a.out or DATA / "comparison.json")
     out.write_text(json.dumps(c, indent=1))
     print(f"[compare] {a.seeds} paired seeds in {c['wall_s']:.1f}s → {out}")
+
+
+def cmd_robust(a):
+    """Top allocator candidates × perturbed worlds on Daytona (or local processes) → the most robust plan."""
+    import os
+
+    from .daytona.pool import get_pool
+    from .daytona.robust import robust_plan
+    from .scenario import load_scenario
+    if a.pool == "local":
+        os.environ["EMBER_LOCAL_POOL"] = "1"
+    w = _load_world()
+    scn = load_scenario(a.scenario)
+    pool = get_pool("local" if a.pool == "local" else "auto", workers=a.workers, world=w)
+    pts_out = open(a.points_out, "w") if a.points_out else None
+    seen = [0]
+
+    def on_point(p):
+        seen[0] += 1
+        if pts_out:
+            pts_out.write(json.dumps(p) + "\n")
+        if seen[0] % max(1, p["n_total"] // 10) == 0 or seen[0] == p["n_total"]:
+            print(f"  {seen[0]:>4}/{p['n_total']} runs back (last: {p['candidate']} seed {p['seed']} on {p['worker']})")
+    print(f"[robust] pool={pool.kind} workers={getattr(pool, 'n', None) or getattr(pool, 'workers', None)}")
+    try:
+        plan, points = robust_plan(w, scn, _read_reports(a.report), k=a.candidates, seeds=a.seeds, pool=pool, on_point=on_point)
+    finally:
+        pool.close()
+        if pts_out:
+            pts_out.close()
+    r = plan["search"]["robust"]
+    print(f"[robust] {r['jobs']} runs in {r['fanout_wall_s']:.1f}s · rule: {r['rule']}")
+    for row in r["ranking"]:
+        mark = "→" if row["candidate"] == r["chosen"] else " "
+        print(f"  {mark} {row['candidate']:>8}  worst-20% unreached {row['worst20_people_unreached']:>6}  overflow {row['worst20_overflow_m3']:>8,.0f} m³"
+              f"   mean unreached {row['mean_people_unreached']:>6}")
+    if r["chosen"] != r["nominal_best"]:
+        print(f"[robust] chose {r['chosen']} over the nominal best {r['nominal_best']}: better in the worst 20% of worlds")
+    out = Path(a.out or DATA / "plan.json")
+    out.write_text(json.dumps(plan, indent=1))
+    print(f"[robust] wrote {out}" + (f" and {a.points_out}" if a.points_out else ""))
+
+
+def cmd_seed_state(a):
+    """The backend's starting state for a scenario (plan v1 at t=0): point residents' SEED_STATE at it."""
+    from .api import write_seed
+    from .state import validate_state
+    from .scenario import load_scenario
+    t0 = time.time()
+    st = write_seed(a.scenario, a.out)
+    errs = validate_state(st, load_scenario(a.scenario), json.loads(_ensure_town().read_text()))
+    print(f"[seed-state] {st['scenario_id']} plan v{st['plan_version']} at t=0 → {a.out} ({time.time()-t0:.1f}s); "
+          f"{len(st['plan']['assignments'])} assignments, projected {st['plan']['metrics']['people_reached_before_deadline']} "
+          f"people reached; {'valid' if not errs else 'INVALID: ' + errs[0]}")
+    if errs:
+        sys.exit(1)
+
+
+def cmd_daytona_snapshot(a):
+    from .daytona.pool import build_snapshot
+    build_snapshot()
 
 
 def cmd_simulate(a):
@@ -341,6 +422,18 @@ def main(argv=None):
     cp = sp.add_parser("compare", help="baseline vs EMBER on paired perturbation seeds")
     cp.add_argument("--scenario", required=True); cp.add_argument("--seeds", type=int, default=5); cp.add_argument("--report", action="append")
     cp.add_argument("--seed", type=int, default=0); cp.add_argument("--out", default=None); cp.set_defaults(f=cmd_compare)
+    rb = sp.add_parser("robust", help="robust plan: top candidates × perturbed worlds on Daytona or local processes")
+    rb.add_argument("--scenario", required=True); rb.add_argument("--report", action="append")
+    rb.add_argument("--candidates", type=int, default=4); rb.add_argument("--seeds", type=int, default=20)
+    rb.add_argument("--pool", choices=["auto", "local", "daytona"], default="auto"); rb.add_argument("--workers", type=int, default=None)
+    rb.add_argument("--out", default=None); rb.add_argument("--points-out", default=None, help="write scatter points as JSON lines")
+    rb.set_defaults(f=cmd_robust)
+    ss = sp.add_parser("seed-state", help="backend seed: plan v1 + state at t=0 for a scenario")
+    ss.add_argument("--scenario", default=str(ROOT / "scenarios" / "allston_flood_v1" / "scenario.json"))
+    ss.add_argument("--out", default=str(ROOT / "engine" / "data" / "allston_flood_v1.seed_state.json"))
+    ss.set_defaults(f=cmd_seed_state)
+    ds = sp.add_parser("daytona-snapshot", help="build the Daytona snapshot for the current engine + town (needs DAYTONA_API_KEY)")
+    ds.set_defaults(f=cmd_daytona_snapshot)
     vs = sp.add_parser("validate-state", help="check a state snapshot against state.schema.json and town/scenario ids")
     vs.add_argument("path"); vs.add_argument("--scenario", default=None); vs.add_argument("--town", default=None)
     vs.set_defaults(f=cmd_validate_state)

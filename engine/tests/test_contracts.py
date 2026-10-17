@@ -32,3 +32,18 @@ def test_fixture_matches_schema(name):
     v = jsonschema.Draft202012Validator(schema, registry=_registry())
     errors = sorted(v.iter_errors(json.loads(fx.read_text())), key=lambda e: list(e.path))
     assert not errors, "\n".join(f"{list(e.path)[:6]}: {e.message[:200]}" for e in errors[:10])
+
+
+def test_ws_event_examples_validate():
+    """Every example envelope validates; every event type is covered."""
+    fx = CONTRACTS / "fixtures" / "ws-events.fixture.json"
+    if not fx.exists():
+        pytest.skip("ws-events.fixture.json not generated yet (run `uv run ember fixtures`)")
+    schema = json.loads((CONTRACTS / "ws-events.schema.json").read_text())
+    v = jsonschema.Draft202012Validator(schema, registry=_registry())
+    events = json.loads(fx.read_text())
+    for e in events:
+        errs = list(v.iter_errors(e))
+        assert not errs, f"{e['type']}: {errs[0].message[:300]}"
+    assert {e["type"] for e in events} == set(schema["properties"]["type"]["enum"])
+    assert [e["seq"] for e in events] == list(range(len(events)))

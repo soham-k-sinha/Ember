@@ -1,4 +1,4 @@
-"""The draft WS event contract resolves against contracts/ and accepts/rejects the right events."""
+"""contracts/ws-events.schema.json (moved from residents/ by engine, D38) accepts what the backend sends and rejects malformed events."""
 import copy
 import json
 
@@ -6,7 +6,7 @@ import jsonschema
 import pytest
 from referencing import Registry, Resource
 
-from residents.config import CONTRACTS, PKG_ROOT
+from residents.config import CONTRACTS
 
 
 @pytest.fixture(scope="module")
@@ -15,7 +15,7 @@ def validator():
     for p in CONTRACTS.glob("*.schema.json"):
         s = json.loads(p.read_text())
         reg = reg.with_resource(s["$id"], Resource.from_contents(s))
-    schema = json.loads((PKG_ROOT / "ws-events.schema.json").read_text())
+    schema = json.loads((CONTRACTS / "ws-events.schema.json").read_text())
     jsonschema.Draft202012Validator.check_schema(schema)
     return jsonschema.Draft202012Validator(schema, registry=reg)
 
@@ -42,7 +42,18 @@ def test_each_event_type(validator, fixture_state):
     ok(validator, {"type": "assignment", "seq": 6, "t_s": 1,
                    "data": {"plan_version": 3, "change": "removed", "assignment_id": a["id"], "assignment": None}})
     ok(validator, {"type": "scatter_point", "seq": 7, "t_s": 1,
-                   "data": {"run_id": "r1", "candidate": "baseline", "perturbation": {"travel_x": 1.2}, "metrics": st["metrics"]}})
+                   "data": {"run_id": "v1/baseline/s1", "batch_id": "v1", "candidate": "baseline", "seed": 1,
+                            "perturbation": {"travel_time_mult": 1.2}, "metrics": st["metrics"]}})
+
+
+def test_engine_example_events_validate(validator):
+    """Aryaman's one-example-per-type fixture passes our validator too (one schema, both sides)."""
+    examples = json.loads((CONTRACTS / "fixtures" / "ws-events.fixture.json").read_text())
+    events = examples if isinstance(examples, list) else examples.get("events", examples)
+    events = list(events.values()) if isinstance(events, dict) else events
+    assert {e["type"] for e in events} >= {"state", "plan", "assignment", "message", "report", "scatter_point", "metrics"}
+    for e in events:
+        ok(validator, e)
 
 
 def test_rejects_malformed(validator, fixture_state):
