@@ -30,8 +30,9 @@ def town() -> dict:
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
+    """Static mode (no engine): the state fixture as-is. Engine tests use `engine_client`."""
     return Settings(db_path=tmp_path / "ember.db", seed_state=FIXTURE, reset_on_start=False,
-                    dev_endpoints=True, photon_enabled=False)
+                    dev_endpoints=True, photon_enabled=False, scenario=None)
 
 
 @pytest.fixture

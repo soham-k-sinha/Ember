@@ -17,3 +17,11 @@ Run: cd residents && uv run pytest -q (53 pass) ; PHOTON_ENABLED=1 uv run uvicor
 Interfaces: produces WS `message` events (state.messages[] shape) for every inbound/outbound text; `POST /messages` for the web's operator console; `POST /dev/inbound {role, text}` as the no-phone fallback. Arnav: CORS allows localhost:43123 and :5173. D40.
 Status: done. Live: both phones' "hi" arrived via the socket (opted in), test replies accepted by Photon (202). Inbound hooks are in place for extraction (Task 3).
 Next: engine bridge (seed from allston_flood_v1, POST /reports → allocate → plan + assignment events, /disruption, /comparison, /optimize), then LLM extraction.
+
+## 2026-10-17 05:30 · engine bridge: reports → replan, disruption, clock, comparison · branch soham/engine-bridge · commit (this PR)
+What: backend plans on allston_flood_v1 by default (plan v1 at startup). `POST /reports` → allocate(prev, prev_reports) → new plan version → state → WS `report`, `plan`, one `assignment` per `plan.changes` entry, `metrics`. `POST /disruption` (close road both directions / set facility field), `POST /replan`, `POST /clock`, `GET /comparison` (cached per version).
+Files: residents/residents/{engine_bridge,planner,contracts,db,app,config}.py, residents/tests/test_engine.py (+ test_api), residents/{README.md,.env.example}
+Run: cd residents && uv run pytest -q (74 pass, real allocator on allston) ; uv run uvicorn residents.app:app ; curl -X POST localhost:8000/reports -d '{"source":"judge","kind":"need","household_id":10296,"payload":{"people":2,"mobility":true,"accessible_vehicle":true}}' -H 'content-type: application/json'
+Interfaces: consumes ember_engine.allocator.allocate, sim.simulate(...).state_at, compare.compare (through engine_bridge.py only). Produces the HTTP API above + WS events per ws-events (D37/D38). Arnav: the plan event carries routes; `assignment` events are in `plan.changes` order; scrub with POST /clock. Anshuman: live judge beat at 75 min gives Accessible Van 3 → #10296. D41.
+Status: done. `POST /optimize` (robust fan-out) waits on engine PR #12; outbound changed-instruction texts are Task 4 (plan hook in place).
+Next: LLM extraction (text → report), then changed-instruction messages.

@@ -23,7 +23,13 @@ def _flag(name: str, default: bool) -> bool:
 @dataclass(frozen=True)
 class Settings:
     db_path: Path = field(default_factory=lambda: Path(os.environ.get("DB_PATH", PKG_ROOT / "ember.db")))
-    # The snapshot the DB is seeded from. Swap for the engine's allston_flood_v1 snapshot when it lands.
+    # Engine mode (default): the scenario the backend plans on; plan v1 is computed at startup.
+    # SCENARIO= (empty) → static mode: serve SEED_STATE as-is, no planning (web dev without the engine).
+    scenario: Path | None = field(default_factory=lambda: (
+        Path(v) if (v := os.environ.get("SCENARIO", str(REPO_ROOT / "scenarios" / "allston_flood_v1" / "scenario.json"))) else None))
+    start_t_s: float = field(default_factory=lambda: float(os.environ.get("START_T_S", "0")))
+    engine_moves: int | None = field(default_factory=lambda: int(v) if (v := os.environ.get("ENGINE_MOVES")) else None)
+    # Static mode only: the snapshot the DB is seeded from.
     seed_state: Path = field(default_factory=lambda: Path(os.environ.get("SEED_STATE", CONTRACTS / "fixtures" / "state.fixture.json")))
     reset_on_start: bool = field(default_factory=lambda: _flag("RESET_ON_START", False))
     dev_endpoints: bool = field(default_factory=lambda: _flag("DEV_ENDPOINTS", True))

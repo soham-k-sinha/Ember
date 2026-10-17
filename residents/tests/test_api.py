@@ -33,7 +33,7 @@ def test_plan_endpoints(client, fixture_state):
 def test_health(client, fixture_state):
     h = client.get("/health").json()
     assert h == {"ok": True, "scenario_id": fixture_state["scenario_id"], "plan_version": fixture_state["plan_version"],
-                 "t_s": fixture_state["t_s"], "photon": "disabled", "photon_listener": None}
+                 "t_s": fixture_state["t_s"], "mode": "static", "photon": "disabled", "photon_listener": None}
 
 
 def test_cors_allows_vite_dev_server(client):
@@ -105,3 +105,10 @@ def test_seed_version_follows_the_contract(tmp_path, state):
     stale.write_text(json.dumps(dict(state, version="0.0")))
     with pytest.raises(RuntimeError, match="state version"):
         load_seed(stale)
+
+
+def test_engine_endpoints_need_engine_mode(client):
+    for method, path, body in [("post", "/reports", {}), ("post", "/replan", None), ("post", "/clock", {"t_s": 0}),
+                               ("get", "/comparison", None), ("post", "/disruption", {"close_edges": [0]})]:
+        r = getattr(client, method)(path, **({"json": body} if body is not None else {}))
+        assert r.status_code == 503, (path, r.status_code)
