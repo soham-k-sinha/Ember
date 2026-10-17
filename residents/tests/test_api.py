@@ -33,12 +33,14 @@ def test_plan_endpoints(client, fixture_state):
 def test_health(client, fixture_state):
     h = client.get("/health").json()
     assert h == {"ok": True, "scenario_id": fixture_state["scenario_id"], "plan_version": fixture_state["plan_version"],
-                 "t_s": fixture_state["t_s"], "photon": "disabled"}
+                 "t_s": fixture_state["t_s"], "photon": "disabled", "photon_listener": None}
 
 
 def test_cors_allows_vite_dev_server(client):
     r = client.get("/state", headers={"Origin": "http://localhost:5173"})
     assert r.headers["access-control-allow-origin"] == "http://localhost:5173"
+    r = client.get("/state", headers={"Origin": "http://localhost:43123"})  # Arnav's web dev port
+    assert r.headers["access-control-allow-origin"] == "http://localhost:43123"
     r = client.get("/state", headers={"Origin": "http://evil.example"})
     assert "access-control-allow-origin" not in r.headers
 
