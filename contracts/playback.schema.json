@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ember.local/contracts/playback.schema.json",
   "title": "Playback v0.1",
-  "description": "One plan simulated over the whole horizon, as a replay the map can scrub (D51). Produced by engine `ember_engine.playback.playback(SimResult)` (`ember playback`, EngineSession.playback). Times are seconds since sim start; a sample labelled t is the state at the end of the tick that starts at t (the label events carry). `[t, value]` lists are run-length encoded: the value holds from t until the next entry.",
+  "description": "One plan simulated over the whole horizon, as a replay the map can scrub (D70). Produced by engine `ember_engine.playback.playback(SimResult)` (`ember playback`, EngineSession.playback). Times are seconds since sim start; a sample labelled t is the state at the end of the tick that starts at t (the label events carry). `[t, value]` lists are run-length encoded: the value holds from t until the next entry.",
   "type": "object",
   "required": ["version", "scenario_id", "planner", "t0", "dt", "t_end_s", "t_s", "tracks", "households", "facilities", "wastewater", "closures", "events", "outcomes", "plan", "metrics"],
   "$defs": {
@@ -103,7 +103,7 @@
     "metrics": {"type": "object"},
     "traffic": {
       "type": "object",
-      "description": "v0.2 (D63): synthetic background cars from the scenario's staged evacuation, simulated once by queue_traffic. A sample of cars (path along roads with timestamps, holding still while queued). The same run gives the planner its per-road slowdown table.",
+      "description": "v0.2 (D73): synthetic background cars from the scenario's staged evacuation, simulated once by queue_traffic. A sample of cars (path along roads with timestamps, holding still while queued). The same run gives the planner its per-road slowdown table.",
       "required": ["synthetic", "rule", "cars"],
       "properties": {
         "synthetic": {"const": true},

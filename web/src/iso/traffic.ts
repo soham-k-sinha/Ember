@@ -1,5 +1,5 @@
 /**
- * Background cars on the stage (D63): the scenario's synthetic staged evacuation, simulated once by the
+ * Background cars on the stage (D73): the scenario's synthetic staged evacuation, simulated once by the
  * engine (queue_traffic) and shipped in the playback as sampled car paths. Each car is a pooled sprite
  * using one of 16 heading × 8 colour textures pre-rendered from the same car model the car parks use;
  * it moves along its path by the replay clock and sits still while queued, so jams form where the engine

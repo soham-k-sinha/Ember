@@ -1,5 +1,5 @@
 /**
- * The people on the stage, drawn the Physical Realities way (D52): every person is a pooled sprite
+ * The people on the stage, drawn the Physical Realities way (D71): every person is a pooled sprite
  * pair (figure + white clothing tinted by state) that keeps its identity for as long as it is on
  * stage, so its look, height, stride and facing carry from frame to frame.
  *

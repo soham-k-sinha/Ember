@@ -1,5 +1,5 @@
 /**
- * Who stands where on the stage, frame by frame, from data the engine already produced (D52):
+ * Who stands where on the stage, frame by frame, from data the engine already produced (D71):
  *  - households waiting outside their building (on the pavement toward their street), facing the
  *    street, then the van once it has arrived for them;
  *  - boarding: in the minute before the engine's pickup, members walk one by one from where they

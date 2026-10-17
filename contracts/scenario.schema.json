@@ -7,7 +7,7 @@
   "required": ["version", "scenario_id", "name", "t_end_s", "district", "hazard", "facilities", "resources", "households", "reserve"],
   "additionalProperties": false,
   "properties": {
-    "version": {"enum": ["0.1", "0.2"], "description": "0.2 adds optional background_traffic (D63)."},
+    "version": {"enum": ["0.1", "0.2"], "description": "0.2 adds optional background_traffic (D73)."},
     "scenario_id": {"type": "string", "pattern": "^[a-z0-9_]+$"},
     "name": {"type": "string"},
     "description": {"type": "string"},
@@ -16,7 +16,7 @@
     "tick_s": {"type": "number", "exclusiveMinimum": 0, "default": 60},
     "background_traffic": {
       "type": "object",
-      "description": "Synthetic background traffic, simulated once per scenario (D63): a staged evacuation order keyed to the flood keyframes. Households within zone_buffer_m of a flood stage are ordered lead_s before it; a compliance share leaves after a lognormal mobilisation delay; a shadow_share of households outside every stage leaves anyway. Vans feel it through a travel-time multiplier per 5-minute bin and road; it is not re-run for live reports.",
+      "description": "Synthetic background traffic, simulated once per scenario (D73): a staged evacuation order keyed to the flood keyframes. Households within zone_buffer_m of a flood stage are ordered lead_s before it; a compliance share leaves after a lognormal mobilisation delay; a shadow_share of households outside every stage leaves anyway. Vans feel it through a travel-time multiplier per 5-minute bin and road; it is not re-run for live reports.",
       "additionalProperties": false,
       "required": ["rule"],
       "properties": {

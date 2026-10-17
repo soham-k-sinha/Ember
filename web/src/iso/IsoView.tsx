@@ -1,5 +1,5 @@
 /**
- * PixiJS isometric stage (D52 prototype): the flood district as a clay model, with the resources as
+ * PixiJS isometric stage (D71 prototype): the flood district as a clay model, with the resources as
  * the subject. World layers (ground, flood, trails, buildings, vehicles, people) live in a camera
  * container; markers and labels are drawn in screen space so they stay crisp and readable at any zoom.
  */

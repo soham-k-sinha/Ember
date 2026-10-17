@@ -1,5 +1,5 @@
 /**
- * The static stage, built once from the real district (D52): a model slab with earth sides, the baked
+ * The static stage, built once from the real district (D71): a model slab with earth sides, the baked
  * ground (textures, kerbs, shore, AO), the cast-shadow and lamp-light layers, and every building,
  * tree and street lamp in one back-to-front container. Returns handles the view tints each frame
  * for the evening light. The resources and the flood are drawn on top by IsoView.

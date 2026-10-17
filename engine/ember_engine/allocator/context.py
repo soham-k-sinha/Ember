@@ -100,7 +100,7 @@ class Context:
 
     # ---------- travel ----------
     def _weight(self):
-        """Road times the planner estimates with: free flow, or the background traffic at t_now (D63)."""
+        """Road times the planner estimates with: free flow, or the background traffic at t_now (D73)."""
         if not hasattr(self, "_w"):
             from ..traffic_bg import bin_of, table
             mult = table(self.world, self.scn)

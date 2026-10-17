@@ -11,7 +11,7 @@ import type {
   Target,
 } from "./types";
 
-/** contracts/playback.schema.json v0.1: one plan simulated over the whole horizon (D51). */
+/** contracts/playback.schema.json v0.1: one plan simulated over the whole horizon (D70). */
 export type Change<T> = [number, T];
 
 export type Track = {
@@ -90,7 +90,7 @@ export type Playback = {
     metrics?: PlanMetrics;
   };
   metrics: PlanMetrics;
-  /** v0.2 (D63): synthetic background cars from the scenario's staged evacuation */
+  /** v0.2 (D73): synthetic background cars from the scenario's staged evacuation */
   traffic?: {
     synthetic: true;
     rule: string;

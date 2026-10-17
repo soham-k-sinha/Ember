@@ -14,7 +14,7 @@ A city-scale disaster simulation around the David Rubenstein Treehouse (Harvard,
 4. **Time** is seconds since simulation start (`t_s`, float32-safe). **Coordinates** are `[lon, lat]` in GeoJSON order everywhere. Distances in meters, speeds in m/s inside the engine.
 5. **Hazards implement one interface:** `polygon_at(t_s)` and `closed_edges_at(t_s)`. Fire, flood, crowd-capacity all plug in here. The engine never knows what a fire is.
 6. **Engines are plug-ins** behind `Engine.step(world, t_s, dt_s, closed_mask)`. `queue_traffic` is v0. An allocation engine is a separate module, not a rewrite.
-7. **2D simulation, isometric view (D50 → D61).** The map is a PixiJS isometric stage of the flood district (deck.gl on MapLibre stays as the flat fallback). No Three.js, no 3D models, no z in the engine or contracts.
+7. **2D simulation, isometric view (D50 → D71).** The map is a PixiJS isometric stage of the flood district (deck.gl on MapLibre stays as the flat fallback). No Three.js, no 3D models, no z in the engine or contracts.
 8. **Daytona sandboxes cannot reach the internet on Tier 1/2.** Results come back as the `run_code` return value. Bake data into the snapshot. Always pass `timeout=`.
 9. **Photon:** use Beta (Photon 2.0, `api.photon.codes/v1`). Shared iMessage lines: tester must text first; no group chats; no calls on shared lines.
 10. **Label what's synthetic.** Household counts, behavior parameters, hazard timing: say it in the UI and the write-up.

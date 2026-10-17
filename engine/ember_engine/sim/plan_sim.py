@@ -144,7 +144,7 @@ def simulate(world, scn: dict, plan: dict, reports=(), perturbation: dict | None
     t_end = float(t_end if t_end is not None else scn["t_end_s"])
     tt_mult = float(pert.get("travel_time_mult", 1.0))
     from ..traffic_bg import table as traffic_table
-    traffic = traffic_table(world, scn)   # None unless the scenario has background traffic (D63)
+    traffic = traffic_table(world, scn)   # None unless the scenario has background traffic (D73)
 
     # ---------- hazard: closed mask per keyframe (latest keyframe ≤ t applies) ----------
     frames, kf_t, kf_mask = _flood_masks(world, scn)

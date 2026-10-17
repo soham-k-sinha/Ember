@@ -155,7 +155,7 @@ def _target(a: dict) -> dict:
 
 
 def playback(res, planner: str | None = None, traffic: bool = True) -> dict:
-    """The run as contracts/playback.schema.json v0.2 (v0.2: optional background `traffic`, D63)."""
+    """The run as contracts/playback.schema.json v0.2 (v0.2: optional background `traffic`, D73)."""
     w, scn, plan, T = res.world, res.scenario, res.plan, res.timeline
     ts = [float(t) for t in T["t_s"]]
     names = {r["id"]: r for r in scn["resources"]}
@@ -211,7 +211,7 @@ def playback(res, planner: str | None = None, traffic: bool = True) -> dict:
 
 
 def _traffic(w, scn: dict) -> dict | None:
-    """Sampled background cars for the map (synthetic, D63), cached on the world per scenario."""
+    """Sampled background cars for the map (synthetic, D73), cached on the world per scenario."""
     from . import traffic_bg
     cfg = traffic_bg.config(scn)
     if cfg is None:

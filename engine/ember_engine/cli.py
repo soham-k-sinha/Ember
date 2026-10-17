@@ -464,7 +464,7 @@ def main(argv=None):
     pb.add_argument("--report", action="append"); pb.add_argument("--out", default=None)
     pb.add_argument("--fixtures", action="store_true", help="write contracts/fixtures/playback{,.baseline}.fixture.json for allston_flood_v1")
     pb.set_defaults(f=cmd_playback)
-    dg = sp.add_parser("diorama", help="real buildings/trees/ground around the venue for the web's 3D model (D52)")
+    dg = sp.add_parser("diorama", help="real buildings/trees/ground around the venue for the web's 3D model (D71)")
     dg.add_argument("--name", default="test"); dg.add_argument("--half-w", type=float, default=700.0)
     dg.add_argument("--half-h", type=float, default=500.0); dg.add_argument("--dx", type=float, default=200.0)
     dg.add_argument("--dy", type=float, default=150.0)
