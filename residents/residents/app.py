@@ -143,7 +143,7 @@ class DevInboundIn(TargetIn):
 
 
 def turn_writer(app: FastAPI, write):
-    """Messenger's per-turn writer (D63): the conversation, the computed messages and a fact sheet → one reply."""
+    """Messenger's per-turn writer (D76): the conversation, the computed messages and a fact sheet → one reply."""
     from .db import thread_key
     from .reply import compose
 
@@ -467,7 +467,7 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
 
     @app.post("/calls")
     async def post_call(body: CallIn) -> dict:
-        """Call a registered phone now (D61). The call opens with what the thread would say right now."""
+        """Call a registered phone now (D74). The call opens with what the thread would say right now."""
         try:
             return await app.state.voice.call(body.handle, reason="api")
         except ValueError as e:

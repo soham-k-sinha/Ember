@@ -1,4 +1,4 @@
-"""The AI talks, the planner decides (D63). Each inbound turn's computed messages are still the record (offers,
+"""The AI talks, the planner decides (D76). Each inbound turn's computed messages are still the record (offers,
 YES/NO bookkeeping, steps); the person gets one natural reply written from them, which a deterministic guard checks
 (no invented numbers, vehicles, streets, safety claims; every ask kept). Anything the guard rejects → the computed
 messages go out as before. Replays Soham's 2026-10-17 call, where "No, I'm stuck in my house and can't get out"

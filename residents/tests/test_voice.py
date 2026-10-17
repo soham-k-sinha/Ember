@@ -1,4 +1,4 @@
-"""Phone calls (D61): ElevenLabs runs the call, our backend is its Custom LLM. What a caller says goes through the
+"""Phone calls (D74): ElevenLabs runs the call, our backend is its Custom LLM. What a caller says goes through the
 same path as a text; what the thread would text is said on the call instead. No network: ElevenLabs is faked at
 the HTTP layer, the voice app is driven in the backend's own event loop (as in the drill, one process)."""
 import argparse

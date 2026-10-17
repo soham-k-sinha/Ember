@@ -194,7 +194,7 @@ def test_llm_failure_asks_politely_and_keeps_running(make_client):
         r = c.post("/dev/inbound", json={"role": "resident", "text": "asdf"})
         assert r.status_code == 200
         st = c.get("/state").json()
-        # unreadable even for the keyword parser: the plan's open question again, not a generic apology (D61)
+        # unreadable even for the keyword parser: the plan's open question again, not a generic apology (D74)
         assert st["plan_version"] == 1 and st["messages"][-1]["text"].startswith("[EMBER drill] Sorry, I didn't catch that.")
         assert SORRY not in st["messages"][-1]["text"]
 

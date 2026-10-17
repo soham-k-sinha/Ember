@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 log = logging.getLogger("residents.extract")
 
 # Sonnet 5.5: 44/45 on samples.json at 1.4 s median (Opus 5.5 45/45 at 2.2 s is too slow for a phone call; Haiku 5.5
-# 41/45 missed "we're at the corner now" and "we're fine to walk": a misread here can decline someone's van). D63.
+# 41/45 missed "we're at the corner now" and "we're fine to walk": a misread here can decline someone's van). D76.
 MODEL = os.environ.get("EXTRACT_MODEL", "claude-sonnet-5-5")
 EFFORT = os.environ.get("EXTRACT_EFFORT", "low")
 CONFIDENCE_MIN = 0.6

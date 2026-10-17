@@ -53,7 +53,7 @@ def _fmt_t(t_s: float) -> str:
 
 class Drill:
     def __init__(self, args: argparse.Namespace):
-        for name, default in (("caller", []), ("voice", False)):  # options added later (D61)
+        for name, default in (("caller", []), ("voice", False)):  # options added later (D74)
             if not hasattr(args, name):
                 setattr(args, name, default)
         self.args = args
@@ -118,7 +118,7 @@ class Drill:
         if self.callers:
             await self.dial_callers()
 
-    # ---------- calls (D61) ----------
+    # ---------- calls (D74) ----------
     async def start_voice(self) -> None:
         """The voice app (ElevenLabs' Custom LLM) on its own port, a cloudflared tunnel to it, and the agent
         pointed at the tunnel. With --dry: only the local app (pretend calls need none of it)."""

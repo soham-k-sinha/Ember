@@ -1,4 +1,4 @@
-"""One natural reply per turn (D63): the AI talks, the planner decides.
+"""One natural reply per turn (D76): the AI talks, the planner decides.
 
 When someone texts or speaks, the backend still computes every message exactly as before (offers, steps, status,
 answers from briefing.py; stored as the record, with all their bookkeeping). This module only changes what the

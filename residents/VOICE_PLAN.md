@@ -1,6 +1,6 @@
 # Voice channel plan: EMBER calls residents in the flood zone
 
-Status: **superseded in part (D61):** built with **ElevenLabs** as the call runtime (Soham's choice) and EMBER as its Custom LLM, not LiveKit; see residents README "Calls" and `residents/voice.py`. The rest (parity rule, who gets called, failure modes) still holds. Originally: plan only. Written 2026-10-17 after D60. The voice decision will be D61 (open
+Status: **superseded in part (D74):** built with **ElevenLabs** as the call runtime (Soham's choice) and EMBER as its Custom LLM, not LiveKit; see residents README "Calls" and `residents/voice.py`. The rest (parity rule, who gets called, failure modes) still holds. Originally: plan only. Written 2026-10-17 after D60. The voice decision will be D74 (open
 question on the D-list: "voice line"). Owner: Soham's lane (`residents/`). No engine, contract or web change is
 required. One optional contract ask is in §9.
 
@@ -284,7 +284,7 @@ LIVEKIT_SIP_TRUNK_ID = ST_…
   - #2 (no LLM in the loop; extraction only labels) and D46 (no generated answers) are kept by §0.
   - #9: calls only on the bought number; shared iMessage stays text-only.
   - #10: the opener and the console say it's a drill.
-- **DECISIONS:** D61 = voice architecture + who-gets-called policy. Log entries per feature.
+- **DECISIONS:** D74 = voice architecture + who-gets-called policy. Log entries per feature.
 
 ## 10. Phases and time (Devpost due Sun 8:00 AM)
 
@@ -295,7 +295,7 @@ LIVEKIT_SIP_TRUNK_ID = ST_…
 | V2 | CallManager (§4), `/calls` API, drill `--caller` / `call r1`, dry voice simulation, location correction | no | 2 h |
 | V3 | LiveKit worker + CallBridge, console-mode test on the laptop mic | LiveKit keys | 1.5 h |
 | V4 | Telephony: first inbound, then outbound call to Soham's phone | yes (his phone, go-ahead) | 1 h |
-| V5 | Two-phone + mixed drill, tune endpointing and latency, D61, HANDOFF/README, PR | yes (phones) | 1.5 h |
+| V5 | Two-phone + mixed drill, tune endpointing and latency, D74, HANDOFF/README, PR | yes (phones) | 1.5 h |
 
 - **V1–V3 don't depend on V0**, so they start right away while the accounts are set up.
 - **Plan B** if Photon outbound can't be enabled in time: inbound-only on the Photon number (the judge *calls*

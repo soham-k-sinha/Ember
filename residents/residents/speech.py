@@ -1,4 +1,4 @@
-"""A text message → the same words, said on a phone call (D61). Deterministic rewrites only: the call says
+"""A text message → the same words, said on a phone call (D74). Deterministic rewrites only: the call says
 exactly what the thread would text, minus what only makes sense on a screen.
 
 - the "[EMBER drill]" prefix and "(plan vN)" tags (the call opens by saying it's a drill, once);

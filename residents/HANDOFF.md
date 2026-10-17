@@ -308,7 +308,7 @@ EMS 14) are outside it: those get a precautionary pickup or shelter in place.
     exact transcript that prompted it.
 
 **Decisions written by Soham:** D36, D37, D40, D41, D43, D44, D45, D46, D51, D52, D53, D54 (main), D55, D56,
-D57, D60 (`soham/questions`). D58 and D59 are Aryaman's (on main). The voice decision will be D61.
+D57, D60 (`soham/questions`). D58 and D59 are Aryaman's (on main). The voice decision will be D74.
 
 ## 9. Demo (docs/DEMO.md, docs/QA.md: Aryaman owns them)
 Soham's last dry run (before Aryaman's #36):

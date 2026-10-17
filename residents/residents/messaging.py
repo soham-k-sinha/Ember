@@ -52,8 +52,8 @@ class Messenger:
         self.inbound_hooks: list[InboundHook] = []
         self.lobby_hooks: list[LobbyHook] = []
         self.taps: list[Tap] = []
-        self.voice = None  # voice.Voice: while a call is live, texts to that phone are said on the call (D61)
-        # D63: one natural reply per inbound turn. `writer(handle, said, drafts, thread)` → the reply, or None to
+        self.voice = None  # voice.Voice: while a call is live, texts to that phone are said on the call (D74)
+        # D76: one natural reply per inbound turn. `writer(handle, said, drafts, thread)` → the reply, or None to
         # send the computed messages as they are. None (tests, no API key): every message goes out as computed.
         self.writer = None
         self._turns: dict[str, dict] = {}  # handle → {"said": text, "drafts": [...]} while its text is handled
@@ -229,7 +229,7 @@ class Messenger:
             return None
         return await self._in_turn(phone["handle"], text, self._store_inbound(phone["role"], text, external_id=None, thread=thread))
 
-    # ---------- one reply per turn (D63) ----------
+    # ---------- one reply per turn (D76) ----------
     async def _in_turn(self, handle: str, said: str, work):
         """Run the handling of one inbound text; what it would send that phone is held and goes out as one reply."""
         if self.writer is None or handle in self._turns:
@@ -320,7 +320,7 @@ class Messenger:
         phone = self.store.phone(handle=handle)
         text = with_drill_prefix(text)
         turn = self._held(handle)
-        if turn is not None:  # part of this turn's reply (D63)
+        if turn is not None:  # part of this turn's reply (D76)
             on_call = self.voice is not None and self.voice.live(handle) is not None
             delivery = ("sent" if on_call else "dev" if self.photon is None else "no_phone" if phone is None
                         else "not_opted_in" if not self.opted_in(phone) else "sent")
@@ -402,7 +402,7 @@ class Messenger:
                "t_s": self._t_s(), "plan_version": plan_version, "assignment_id": assignment_id, "report_id": None}
         phone = phone_for_thread(self.store, thread)
         turn = self._held(phone["handle"] if phone else None)
-        if turn is not None:  # part of this turn's reply (D63): recorded now, delivered at the end of the turn
+        if turn is not None:  # part of this turn's reply (D76): recorded now, delivered at the end of the turn
             on_call = self.voice is not None and self.voice.live(phone["handle"]) is not None
             delivery = ("sent" if on_call else "dev" if self.photon is None
                         else "not_opted_in" if not self.opted_in(phone) else "sent")
@@ -412,7 +412,7 @@ class Messenger:
             return msg, delivery
         spoken = self.voice is not None and phone is not None and self.voice.capture(phone["handle"], msg["text"])
         if spoken:
-            delivery = "sent"  # said on the live call (D61); counts as delivered everywhere a text would
+            delivery = "sent"  # said on the live call (D74); counts as delivered everywhere a text would
         elif self.photon is None:
             delivery = "dev"
         elif phone is None:

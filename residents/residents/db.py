@@ -164,7 +164,7 @@ class Store:
             self._db.execute("ALTER TABLE messages ADD COLUMN created_wall REAL")
         if "recipient_handle" not in cols:
             self._db.execute("ALTER TABLE messages ADD COLUMN recipient_handle TEXT")
-        if "said" not in cols:  # D63: the reply the person actually got for a turn ('' = merged into a later one)
+        if "said" not in cols:  # D76: the reply the person actually got for a turn ('' = merged into a later one)
             self._db.execute("ALTER TABLE messages ADD COLUMN said TEXT")
         cols = {r["name"] for r in self._db.execute("PRAGMA table_info(phones)")}
         if "thread_key" not in cols:
@@ -413,7 +413,7 @@ class Store:
         return rows[0]["plan_version"] if rows else None
 
     def set_said(self, message_ids: list[str], text: str) -> None:
-        """One turn's computed messages went out as one reply `text` (D63): it's stored on the last of them; the
+        """One turn's computed messages went out as one reply `text` (D76): it's stored on the last of them; the
         others are marked as merged ('') so the conversation shows what the person actually got, once."""
         with self._tx() as db:
             for i, mid in enumerate(message_ids):

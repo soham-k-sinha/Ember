@@ -1,4 +1,4 @@
-"""Phone calls (D61): ElevenLabs runs the call (speech-to-text, text-to-speech, turn-taking, the Photon SIP
+"""Phone calls (D74): ElevenLabs runs the call (speech-to-text, text-to-speech, turn-taking, the Photon SIP
 number); EMBER's backend is its "Custom LLM", so every sentence on the call is ours, never generated.
 
 How one call works:
