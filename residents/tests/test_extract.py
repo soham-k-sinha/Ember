@@ -52,6 +52,9 @@ def test_resolve_road_near_household_and_at_cross_street(bridge):  # noqa: F811
     assert at and set(at) <= set(e["id"] for e in bridge.town["edges"] if e["name"] == "River Street")
     assert bridge.resolve_road("Nonexistent Lane", None, JUDGE) == []
     assert bridge.resolve_road("River St", None, None) == []          # no anchor, no cross street → ask
+    # near the household = engine's 150 m (its tested demo beat), both directions
+    assert sorted(near) == sorted(bridge.both_directions(bridge.session.edges_by_name("River Street", near_household=JUDGE, radius_m=150)))
+    assert len(near) <= 4                                              # a block, not the whole street
 
 
 # ---------- deterministic outcome ----------

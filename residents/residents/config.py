@@ -28,6 +28,8 @@ class Settings:
     scenario: Path | None = field(default_factory=lambda: (
         Path(v) if (v := os.environ.get("SCENARIO", str(REPO_ROOT / "scenarios" / "allston_flood_v1" / "scenario.json"))) else None))
     start_t_s: float = field(default_factory=lambda: float(os.environ.get("START_T_S", "0")))
+    # allocator search budget per (re)plan; unset = engine's default. Tests use a small one for speed.
+    engine_moves: int | None = field(default_factory=lambda: int(v) if (v := os.environ.get("ENGINE_MOVES")) else None)
     # Static mode only: the snapshot the DB is seeded from.
     seed_state: Path = field(default_factory=lambda: Path(os.environ.get("SEED_STATE", CONTRACTS / "fixtures" / "state.fixture.json")))
     reset_on_start: bool = field(default_factory=lambda: _flag("RESET_ON_START", False))
@@ -37,6 +39,7 @@ class Settings:
     photon_enabled: bool = field(default_factory=lambda: _flag("PHOTON_ENABLED", False))
     # The socket listener; off in tests that inject a client and drive inbound by hand.
     photon_listen: bool = field(default_factory=lambda: _flag("PHOTON_LISTEN", True))
+    retry_every_s: float = field(default_factory=lambda: float(os.environ.get("RETRY_EVERY_S", "20")))
     photon_api_key: str = field(default_factory=lambda: os.environ.get("PHOTON_API_KEY", ""))
     photon_project_id: str = field(default_factory=lambda: os.environ.get("PHOTON_PROJECT_ID", ""))
     # The one LLM call (text → report). On when engine mode is on and a key is set.

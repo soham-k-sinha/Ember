@@ -106,6 +106,27 @@ class Messenger:
         return msg
 
     # ---------- outbound ----------
+    async def retry_failed(self, max_age_s: float = 600.0) -> int:
+        """Re-send outbound messages whose delivery failed (e.g. Photon was down), with the SAME
+        Idempotency-Key, so a send that actually went through can't arrive twice. Returns how many sent."""
+        if self.photon is None:
+            return 0
+        sent = 0
+        for m in self.store.failed_outbound(max_age_s):
+            role = role_for_thread(self.store, m["thread"])
+            phone = self.store.phone(role=role) if role else None
+            if not phone or not (phone["space_id"] and phone["agent_user_id"]):
+                continue
+            try:
+                res = await self.photon.send_text(phone["space_id"], phone["agent_user_id"], m["text"],
+                                                  idempotency_key=f"ember-{m['id']}")
+                self.store.set_delivery(m["id"], "sent", external_id=(res or {}).get("id"))
+                sent += 1
+            except Exception as e:  # noqa: BLE001 - still down: try again next round
+                log.info("retry of %s failed: %s", m["id"], e)
+                break
+        return sent
+
     async def send_message(self, thread: dict, text: str, plan_version: int | None,
                            assignment_id: str | None = None) -> tuple[dict, str]:
         """Store + broadcast an outbound message, then deliver it if this thread has an opted-in phone.

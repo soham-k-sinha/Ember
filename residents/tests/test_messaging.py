@@ -23,7 +23,7 @@ def fp():
 
 @pytest.fixture
 def app_client(settings, fp, monkeypatch):
-    monkeypatch.setattr("residents.photon.asyncio.sleep", _no_sleep)
+    monkeypatch.setattr("residents.photon._backoff", _no_sleep)
     s = replace(settings, photon_enabled=True, photon_listen=False)  # inbound driven by hand below
     with TestClient(create_app(s, photon_client=fp.client())) as c:
         yield c

@@ -57,6 +57,13 @@ Live accuracy: `uv run python scripts/eval_extract.py` on `tests/samples.json` (
 ## Outbound instructions
 After every plan version (`residents/outbound.py`), each opted-in phone thread is compared with the last instruction actually texted to it: a text goes out only if a vehicle is newly assigned / replaced, is no longer coming, or the ETA moved ≥ 10 min. Fixed templates over computed fields, `[EMBER drill]` prefix, `plan_version` + `assignment_id` on every message; the assignment becomes `offered` (WS `assignment` with `change: status_changed`). The plan's `info_requests` for a phone thread are asked once each (e.g. right after the tester's first "hi").
 
+## Robustness
+- Inbound texts are processed one at a time end to end (the next text sees the previous one's needs and plan); Photon deliveries are deduped by message id across socket, redelivery and polling.
+- A double-sent fact (same kind, target and payload as that thread's previous report) is answered with the person's status, not a second replan.
+- If the planner throws, the report is kept (unresolved), the person is told a coordinator is looking at it, and the server keeps serving; the next replan uses the report.
+- Failed outbound sends (Photon down) are retried every `RETRY_EVERY_S` (20 s) for up to 10 minutes with the same Idempotency-Key, so a retry can never double-text.
+- Street names in texts resolve to that street within 150 m of the household (engine's `edges_by_name`, same as the tested demo beat) or at a named cross street, both directions; wider would close whole streets and can cut a household off.
+
 ## Confirm / reject
 A "yes"/"no" text is extracted as `confirm`/`reject` for the last instruction texted on that thread, carrying the plan version it answered. If the plan moved on and that assignment changed (gone / other vehicle / other target), nothing is applied and the latest instruction is re-sent. Confirm → `confirmed` on the stored raw plan (the allocator keeps confirmed work across replans) + ack text; a later material change to it is texted as "Update: …" without asking again. Reject → `rejected` + ack + replan; the backend never re-offers that vehicle to that thread and keeps re-proposed copies `rejected` (engine doesn't exclude declined pairs yet).
 

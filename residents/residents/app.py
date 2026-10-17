@@ -124,7 +124,7 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         app.state.hub = Hub()
         app.state.planner = None
         if engine_mode:
-            b = bridge or await run_in_threadpool(EngineBridge, settings.scenario)
+            b = bridge or await run_in_threadpool(EngineBridge, settings.scenario, None, 0, settings.engine_moves)
             app.state.planner = Planner(app.state.store, app.state.hub, b)
             await start_engine(settings, app.state.store, app.state.planner)
         photon = photon_client
@@ -144,9 +144,23 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         if photon is not None and settings.photon_listen:
             app.state.listener = PhotonListener(photon, app.state.store, app.state.messenger.handle_inbound)
             await app.state.listener.start()
+        retry_task = None
+        if photon is not None:
+            async def retry_loop() -> None:
+                while True:
+                    await asyncio.sleep(settings.retry_every_s)
+                    try:
+                        n = await app.state.messenger.retry_failed()
+                        if n:
+                            log.info("re-sent %d failed message(s)", n)
+                    except Exception:  # noqa: BLE001 - keep retrying
+                        log.exception("retry loop")
+            retry_task = asyncio.create_task(retry_loop())
         try:
             yield
         finally:
+            if retry_task is not None:
+                retry_task.cancel()
             if app.state.listener is not None:
                 await app.state.listener.stop()
             if photon is not None:

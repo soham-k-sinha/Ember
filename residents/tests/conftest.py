@@ -1,6 +1,7 @@
 import copy
 import gzip
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,9 @@ from residents.app import create_app
 from residents.config import CONTRACTS, REPO_ROOT, Settings
 
 FIXTURE = CONTRACTS / "fixtures" / "state.fixture.json"
+
+# Never start real Daytona sandboxes from tests (engine uses them when DAYTONA_API_KEY is set; D48).
+os.environ["EMBER_LOCAL_POOL"] = "1"
 
 
 @pytest.fixture(scope="session")
@@ -33,7 +37,7 @@ def settings(tmp_path: Path) -> Settings:
     """Static mode (no engine): the state fixture as-is. Engine tests use `engine_client`."""
     return Settings(db_path=tmp_path / "ember.db", seed_state=FIXTURE, reset_on_start=False,
                     dev_endpoints=True, photon_enabled=False, scenario=None,
-                    extract_enabled=False, anthropic_api_key="")
+                    extract_enabled=False, anthropic_api_key="", retry_every_s=3600.0)
 
 
 @pytest.fixture
