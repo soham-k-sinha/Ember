@@ -1,0 +1,17 @@
+{
+  "_comment": "Lane ownership. GitHub login -> lane. Fill in the missing logins. Paths are prefixes. 'authors' (git emails) is optional; when present, every commit in a PR must come from one of them.",
+  "logins": {
+    "aryamangoenka": "aryaman",
+    "soham-k-sinha": "soham",
+    "FILL_ME_arnav_login": "arnav",
+    "FILL_ME_anshuman_login": "anshuman"
+  },
+  "lanes": {
+    "aryaman":  {"paths": ["engine/", "contracts/", "docs/TECHNICAL.md", "docs/SIM_ENV_PLAN.md", "docs/HANDOFF.md", "docs/team/", ".github/", "CLAUDE.md", "README.md", ".gitignore", ".python-version"], "authors": ["aryamansgoenka@gmail.com"]},
+    "soham":    {"paths": ["web/"], "authors": []},
+    "arnav":    {"paths": ["residents/"], "authors": []},
+    "anshuman": {"paths": ["scenarios/", "docs/DEMO.md", "docs/QA.md", "docs/devpost/"], "authors": []}
+  },
+  "shared_for_everyone": ["docs/DECISIONS.md"],
+  "own_log_prefix": "docs/log/"
+}
