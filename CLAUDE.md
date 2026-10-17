@@ -22,12 +22,8 @@ A city-scale disaster simulation around the David Rubenstein Treehouse (Harvard,
 ## The build plan and the team
 `docs/TECHNICAL.md` is the execution plan (architecture, models, allocator, API, UI, timeline, git protocol). Each person has a self-contained brief in `docs/team/<name>.md` and an append-only feature log in `docs/log/<name>.md`. **Every session starts by reading all of `docs/log/*.md` and `docs/DECISIONS.md`, and ends each feature by appending to its own log.**
 
-## Ownership (one directory each; never edit another's without asking)
-- `engine/` — Aryaman: world, hazards, models, plan simulator, allocator, baseline, run_job, Daytona pool; owns `contracts/` schemas.
-- `web/` — Arnav: map, panels, comparison, WebSocket client. **Aryaman also owns it for now (D49).**
-- `residents/` — Soham: backend (shared-state DB, API, WS), Photon threads, the one LLM extraction call, replan loop.
-- `scenarios/`, `docs/DEMO.md`, `docs/QA.md`, Devpost — Anshuman: scenario JSON, flood keyframes, assumptions and sources, demo script, submission. **Aryaman also owns these for now (D49).**
-- `contracts/`, `docs/DECISIONS.md` — shared; append-only or PR + announce; `docs/log/<name>.md` — own file only.
+## Ownership
+Aryaman owns the whole repo (D77). Branch `aryaman/<topic>`, PR, rebase-merge.
 
 ## Commands
 ```bash
