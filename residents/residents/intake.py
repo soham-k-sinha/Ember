@@ -14,10 +14,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any, Callable
 
 from .db import Store, thread_key
-from .extract import LLM, Outcome, extract
+from . import fallback
+from .extract import LLM, Outcome, extract, to_outcome
 from .guide import STEP_DONE
 from .messaging import Messenger
 from .outbound import Outbound
@@ -25,7 +27,13 @@ from .planner import Planner, ReportError
 
 log = logging.getLogger("residents.intake")
 
+# a bare yes to the offer we just made: no model needed (and no ambiguity when the reply also asked something)
+YES_ONLY = re.compile(r"^\s*(yes|yeah|yep|yup|sure|ok|okay|confirm(ed)?|yes please|yes,? confirm)\s*[.!]*\s*$", re.I)
 SORRY = "Sorry, we couldn't read that. Could you say it another way?"
+# the LLM is unavailable and the keyword parser found nothing: ask for something it can read (never a loop of SORRY)
+HELP = ("Sorry, I didn't catch that. Short answers work best, like \"yes\", \"no\", \"done\", \"2 people, one "
+        "wheelchair\", or \"what's the plan?\"")
+_outage = {"since": None, "logged": 0.0}  # one console line per minute while the LLM is down, not one per text
 PLANNER_DOWN = "Got your message. Our planner hit a problem; a coordinator is looking at it and will text you."
 ESCALATED = "Our plan doesn't cover that, so we've passed your question to a coordinator, who will reply here."
 NO_PLAN = "Got your question. We're still building the plan; we'll text you as soon as we have something for you."
@@ -158,15 +166,39 @@ class Intake:
         earlier = self.store.delivered_outbound(key)
         last_out = earlier[-1]["text"] if earlier else None
         last_assignment = next((m["assignment_id"] for m in reversed(earlier) if m.get("assignment_id")), None)
+        record = self._record(thread)
+        if YES_ONLY.match(msg["text"]) and last_assignment is not None:
+            out = Outcome(reports=[{"source": "resident" if role == "resident" else "operator", "kind": "confirm",
+                                    "assignment_id": last_assignment, "confidence": 1.0, "text": msg["text"],
+                                    **({"household_id": thread["household_id"]} if "household_id" in thread else {}),
+                                    **({"facility_id": thread["facility_id"]} if "facility_id" in thread else {})}])
+            return await self._handle(msg, role, thread, key, out, pending)
         try:
-            out = await extract(self.llm, msg["text"], role=role, thread=thread, record=self._record(thread),
+            history = [x for x in self.store.conversation(key, 9)]
+            if history and history[-1] == {"from": "them", "text": msg["text"]}:
+                history = history[:-1]  # the message itself is already stored
+            out = await extract(self.llm, msg["text"], role=role, thread=thread, record=record,
                                 last_outbound=last_out, pending=pending, resolve_road=self.planner.bridge.resolve_road,
-                                last_assignment_id=last_assignment)
-        except Exception as e:  # noqa: BLE001 - API down, refusal, timeout: ask, never crash or guess
-            log.error("extraction failed for %s: %r", msg["id"], e)
-            await self.messenger.send_message(thread, SORRY, self.store.meta().get("plan_version"))
-            return None
+                                last_assignment_id=last_assignment, history=history[-8:])
+            _outage["since"] = None
+        except Exception as e:  # noqa: BLE001 - API down, usage limit, refusal, timeout: never crash or guess
+            import time
+            if time.monotonic() - _outage["logged"] > 60:
+                log.error("the LLM is unavailable (%s); reading texts with the keyword parser until it's back", str(e)[:200])
+                _outage["logged"] = time.monotonic()
+            _outage["since"] = _outage["since"] or time.monotonic()
+            ex = fallback.parse(msg["text"], role)
+            if ex is None:
+                await self._help(thread, last_out)
+                return None
+            out = to_outcome(ex, role=role, thread=thread, text=msg["text"], pending=pending,
+                             resolve_road=self.planner.bridge.resolve_road, last_assignment_id=last_assignment,
+                             known_needs=record.get("needs"))
 
+        return await self._handle(msg, role, thread, key, out, pending)
+
+    async def _handle(self, msg: dict, role: str, thread: dict, key: str, out: Outcome, pending: dict | None) -> Outcome:
+        """What was understood (by the model, the keyword parser or the YES fast path) → reports, replan, replies."""
         if out.step_done and self.guide is not None and await self.guide.done(thread):  # "we're at the corner now"
             if not out.reports and not out.question:
                 return out
@@ -232,6 +264,16 @@ class Intake:
         elif out.question:
             await self.messenger.send_message(thread, out.question, version)
         return out
+
+    async def _help(self, thread: dict, last_out: str | None) -> None:
+        """Nothing readable without the LLM: repeat what we need from them (the plan's open question), with
+        examples, never the same apology twice in a row."""
+        view = self.store.plan_view() or {}
+        q = next((x["question"] for x in view.get("info_requests", []) if x["to"] == thread), None)
+        text = f"Sorry, I didn't catch that. {q}" if q else HELP
+        if last_out and last_out.removeprefix("[EMBER drill] ").startswith(text[:40]):
+            text = HELP if q else "Sorry, I still didn't catch that. Try a few words, like \"yes\" or \"done\"."
+        await self.messenger.send_message(thread, text, self.store.meta().get("plan_version"))
 
     async def _reply_without_facts(self, thread: dict, out: Outcome, stored: list[dict]) -> None:
         """Chatter or a question. A question is answered from the plan by topic (briefing.py, never

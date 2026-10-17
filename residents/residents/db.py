@@ -164,6 +164,8 @@ class Store:
             self._db.execute("ALTER TABLE messages ADD COLUMN created_wall REAL")
         if "recipient_handle" not in cols:
             self._db.execute("ALTER TABLE messages ADD COLUMN recipient_handle TEXT")
+        if "said" not in cols:  # D76: the reply the person actually got for a turn ('' = merged into a later one)
+            self._db.execute("ALTER TABLE messages ADD COLUMN said TEXT")
         cols = {r["name"] for r in self._db.execute("PRAGMA table_info(phones)")}
         if "thread_key" not in cols:
             # SQLite cannot drop the old UNIQUE(role) constraint in place. Keep every
@@ -409,6 +411,26 @@ class Store:
         rows = self._rows("SELECT plan_version FROM messages WHERE thread_key = ? AND direction = 'out' "
                           "AND delivery IN ('sent', 'dev') ORDER BY seq DESC LIMIT 1", (key,))
         return rows[0]["plan_version"] if rows else None
+
+    def set_said(self, message_ids: list[str], text: str) -> None:
+        """One turn's computed messages went out as one reply `text` (D76): it's stored on the last of them; the
+        others are marked as merged ('') so the conversation shows what the person actually got, once."""
+        with self._tx() as db:
+            for i, mid in enumerate(message_ids):
+                db.execute("UPDATE messages SET said = ? WHERE id = ?", (text if i == len(message_ids) - 1 else "", mid))
+
+    def conversation(self, key: str, n: int = 8) -> list[dict]:
+        """The last `n` turns as the person experienced them: [{"from": "them" | "EMBER", "text"}], oldest first."""
+        out = []
+        for r in self._rows("SELECT data, direction, said, delivery FROM messages WHERE thread_key = ? ORDER BY seq", (key,)):
+            m = json.loads(r["data"])
+            if r["direction"] == "in":
+                out.append({"from": "them", "text": m["text"]})
+            elif r["delivery"] in ("sent", "dev", "failed"):
+                text = r["said"] if r["said"] is not None else m["text"]
+                if text:
+                    out.append({"from": "EMBER", "text": text.removeprefix("[EMBER drill] ")})
+        return out[-n:]
 
     def delivered_outbound(self, key: str) -> list[dict]:
         return [json.loads(r["data"]) for r in self._rows(

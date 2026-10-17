@@ -64,7 +64,8 @@ async def main() -> int:
     passed, lat = 0, []
     for i, s in enumerate(samples, 1):
         ctx = s.get("context", {})
-        prompt = build_prompt(s["text"], s["role"], RECORDS[s["role"]], ctx.get("last_outbound"), ctx.get("pending"))
+        prompt = build_prompt(s["text"], s["role"], RECORDS[s["role"]], ctx.get("last_outbound"), ctx.get("pending"),
+                              ctx.get("history"))
         t0 = time.time()
         try:
             ex = await llm(SYSTEM, prompt)
