@@ -1,10 +1,12 @@
 # HANDOFF — read this first in a fresh session
 
 Last updated: **Sat 2026-10-17, evening** (after the end-to-end integration pass). Submission: **Sunday 8:00 AM** on Devpost.
-Then read: `CLAUDE.md`, `docs/DECISIONS.md` (D1–D60), all of `docs/log/*.md`, `docs/TECHNICAL.md` (the plan), `residents/HANDOFF.md` (backend detail).
+Then read: `CLAUDE.md`, `docs/DECISIONS.md` (D1–D69), all of `docs/log/*.md`, `docs/TECHNICAL.md` (the plan), `residents/HANDOFF.md` (backend detail).
 
 ## The product in one breath
-A Charles River flood around the David Rubenstein Treehouse. EMBER keeps one shared picture (water, roads, 40 households that need help, a hospital, a sewage pumping station, vans, generators), plans who goes where with a simulator-scored allocator, replans in ~0.7 s when a person texts a fact (Photon iMessage → one LLM extraction → report), and shows it on a map. It beats an incident-by-incident baseline on people reached and on untreated sewage overflow (m³), and stress-tests plans on Daytona.
+**Flood response is our first demonstration. Adaptive coordination is the product** (D63). EMBER is a reusable coordination layer: people report over Photon → one LLM call turns each text into a structured fact → a simulator-scored planner replans in ~0.7 s → everyone gets a personal instruction, on a live map. Demonstrated on a Charles River flood around the David Rubenstein Treehouse with **two incident types on one engine** (D64): household rescue (the judge) and critical-infrastructure power loss (Mount Auburn Hospital, Cottage Farm sewage station). It beats an incident-by-incident baseline on people reached and on untreated sewage overflow (0 vs 2,317 m³; the real 2024 Cottage Farm storm released ≈80,700 m³), and stress-tests plans on Daytona. We do not claim other disaster types: they are "what's next".
+
+**Line against plan-once tools:** "Forecasts are wrong by minute 10; EMBER keeps the plan right once real people start texting." Closest rival (public repo `ezou1/hh26-landfall`, LANDFALL): Hurricane Ian replay with real data, Chalk, a Cesium 3D globe, but it plans once with no people in the loop. Our own repo `soham-k-sinha/Ember` is public too.
 
 ## What's on `main` (integrated and tested end to end)
 | Part | Owner | State |
@@ -36,13 +38,21 @@ Demo beats by hand: `docs/DEMO.md` § Replay. Every step with expected values: `
 - Hospital at 15 min ("on backup, 10 min left"): Generator 1 → Mount Auburn, outage 13 min, overflow 0 → 9,600 m³ (stated with simulated numbers).
 - `/optimize` from the backend: Daytona, 8 sandboxes, ~10 s; chooses c02 over c00 (worst-20% unreached 16.8 vs 29).
 
-## Open, in order
-1. Merge the 2.5D website branch, re-run `e2e.py` + QA browser rows. If it uses Google 3D tiles: a DECISIONS line amending D50 (no 3D models), key in `.env`, Google attribution, flat CARTO fallback.
-2. Real-phone run on the machine with **both** `engine/.env` (Daytona) and `residents/.env` (Photon + Anthropic): `e2e.py`, then `docs/QA.md` with the two opted-in phones.
-3. Soham: commit the `residents/uv.lock` refresh (`uv sync` picks up the engine's new `daytona` dependency).
-4. Tier 2 Daytona → `EMBER_DAYTONA_WORKERS≈90`.
-5. Run-through ×3, then Devpost (≥900 words, ≥8 screenshots, video < 3 min), README, ASUS post. Decide voice (Soham's `residents/VOICE_PLAN.md`) and the name.
-6. Engine, low priority: planner-side shared-trip estimate in `construct` (today the simulator and local search find shared trips); hand-curated exits; walk network.
+## Priorities, in order (D63–D69)
+1. **8 PM run-through** with `docs/QA.md` (on the machine with both `engine/.env` and `residents/.env`; `engine/scripts/e2e.py` first).
+2. **Devpost** (≥900 words, ≥8 screenshots, the new framing; outline in `docs/devpost/README.md`) + **video < 3 min**.
+3. **Daytona Tier 2** → `EMBER_DAYTONA_WORKERS≈90`.
+4. **Multiplayer** (stretch, Soham + Aryaman, ~4–6 h, D66), only if Photon allows it. Dropped before anything above.
+5. **Chalk** (stretch, Soham, D67): gateway + an eval graded by the simulator.
+6. **Sim realism** (only after the Devpost and video, D69), cheapest first; nothing new in the planner's inner loop; time a replan after each change (> 1 s → move it to precompute).
+7. Still open from before: merge the 2.5D website branch and re-run `e2e.py` + QA browser rows (if it uses Google 3D tiles: a DECISIONS line amending D50, key in `.env`, attribution, flat fallback); Soham commits the `residents/uv.lock` refresh; low-priority engine items (shared-trip estimate in `construct`, exits, walk network).
+
+Skipped: **SpaceXAI** (D68): needs Grok Voice/Imagine and "built with Cursor", which we can't honestly claim for most of the code.
+
+## Open questions
+- **Photon phone limit:** how many new phones does one shared line accept (testers must text first; no group chats)? Decides multiplayer. Owner: Soham (`docs/team/soham.md` task 10).
+- **Chalk account:** sign up at chalk.ai/hackharvard; who holds the router key and our `X-Chalk-Env-Id`? Owner: Soham.
+- Voice (Soham's open #45, D61) and the project name are still undecided.
 
 ## Gotchas learned the hard way
 - **Decision numbers collide**: check main *and* open PRs before taking a number (D58 was taken because open PRs held D55–D57).
@@ -55,5 +65,5 @@ Demo beats by hand: `docs/DEMO.md` § Replay. Every step with expected values: `
 
 ## Opening prompt for a new session
 ```
-Read CLAUDE.md, docs/HANDOFF.md, docs/DECISIONS.md and all of docs/log/*.md. I'm Aryaman; I own engine/, contracts/, web/, scenarios/ and the demo/QA/Devpost docs (D49); Soham owns residents/. Pull main, check open PRs and what changed since HANDOFF's timestamp, then continue with HANDOFF "Open, in order". Rebase before every push, open a PR, check decision numbers (main and open PRs), append to docs/log/aryaman.md after each feature, and re-run engine/scripts/e2e.py after every merge.
+Read CLAUDE.md, docs/HANDOFF.md, docs/DECISIONS.md and all of docs/log/*.md. I'm Aryaman; I own engine/, contracts/, web/, scenarios/ and the demo/QA/Devpost docs (D49); Soham owns residents/. Pull main, check open PRs and what changed since HANDOFF's timestamp, then continue with HANDOFF "Priorities, in order". Rebase before every push, open a PR, check decision numbers (main and open PRs), append to docs/log/aryaman.md after each feature, and re-run engine/scripts/e2e.py after every merge.
 ```
