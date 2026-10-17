@@ -228,6 +228,7 @@ class Store:
             for t in ("meta", "closures", "households", "facilities", "resources", "reports", "plans", "assignments", "messages"):
                 db.execute(f"DELETE FROM {t}")
             db.execute("DELETE FROM sqlite_sequence WHERE name IN ('reports', 'messages')")
+            db.execute("DELETE FROM kv WHERE key LIKE 'pending:%'")  # half-answered questions belong to the old run
 
     def apply_snapshot(self, state: dict) -> None:
         """Replace the engine-derived part of the state (hazard, closures, households, facilities,
@@ -345,6 +346,18 @@ class Store:
     def kv_get(self, key: str, default: str | None = None) -> str | None:
         rows = self._rows("SELECT value FROM kv WHERE key = ?", (key,))
         return rows[0]["value"] if rows else default
+
+    def kv_delete(self, key: str) -> None:
+        with self._tx() as db:
+            db.execute("DELETE FROM kv WHERE key = ?", (key,))
+
+    def set_message_report(self, message_id: str, report_id: str) -> None:
+        """Link an inbound message to the report extracted from it (state.messages[].report_id)."""
+        with self._tx() as db:
+            row = db.execute("SELECT data FROM messages WHERE id = ?", (message_id,)).fetchone()
+            if row:
+                d = json.loads(row["data"]); d["report_id"] = report_id
+                db.execute("UPDATE messages SET data = ? WHERE id = ?", (_dump(d), message_id))
 
     def kv_set(self, key: str, value: str) -> None:
         with self._tx() as db:

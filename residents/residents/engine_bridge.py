@@ -101,3 +101,60 @@ class EngineBridge:
 
     def edge_name(self, eid: int) -> str:
         return self._edges[eid].get("name") or f"edge {eid}"
+
+    # ---------- street name → edges (for closure reports from texts) ----------
+    def resolve_road(self, road_hint: str, cross_street: str | None, household_id: int | None,
+                     radius_m: float = 500.0) -> list[int]:
+        """Deterministic: edges of the named street, located by the cross street's intersection if given,
+        else within `radius_m` of the household. Both directions. [] = can't place it (ask, don't guess)."""
+        named = [e for e in self.town["edges"] if street_matches(e.get("name"), road_hint)]
+        if not named:
+            return []
+        if cross_street:
+            cross_nodes = {n for e in self.town["edges"] if street_matches(e.get("name"), cross_street) for n in (e["u"], e["v"])}
+            at = [e["id"] for e in named if e["u"] in cross_nodes or e["v"] in cross_nodes]
+            if at:
+                return self.both_directions(at)
+        anchor = self._household_point(household_id)
+        if anchor is None:
+            return []
+        near = [e["id"] for e in named if _min_dist_m(anchor, e["geom"]) <= radius_m]
+        return self.both_directions(near)
+
+    def _household_point(self, household_id: int | None) -> tuple[float, float] | None:
+        if household_id is None:
+            return None
+        if not hasattr(self, "_hh_pt"):
+            self._hh_pt = {h["id"]: (h["lon"], h["lat"]) for h in self.town["households"]}
+        return self._hh_pt.get(household_id)
+
+
+_ABBREV = {"st": "street", "ave": "avenue", "av": "avenue", "rd": "road", "dr": "drive", "blvd": "boulevard",
+           "pkwy": "parkway", "sq": "square", "pl": "place", "ct": "court", "ln": "lane", "hwy": "highway",
+           "ter": "terrace", "terr": "terrace", "n": "north", "s": "south", "e": "east", "w": "west", "mt": "mount"}
+
+
+def normalize_street(name: str) -> str:
+    words = "".join(ch.lower() if ch.isalnum() else " " for ch in name).split()
+    words = [w for w in words if w != "the"]
+    return " ".join(_ABBREV.get(w, w) for w in words)
+
+
+def street_matches(edge_name: str | None, hint: str) -> bool:
+    """'River St' ~ 'River Street'; 'Western Ave bridge' ~ 'Western Avenue'. Needs ≥ 1 non-generic word."""
+    if not edge_name:
+        return False
+    a, b = normalize_street(edge_name), normalize_street(hint)
+    if not a or not b:
+        return False
+    if a == b or (" " + a + " ") in (" " + b + " ") or (" " + b + " ") in (" " + a + " "):
+        generic = {"street", "avenue", "road", "drive", "boulevard", "parkway", "square", "place", "court", "lane", "bridge"}
+        return bool(set(a.split()) & set(b.split()) - generic)
+    return False
+
+
+def _min_dist_m(pt: tuple[float, float], geom: list) -> float:
+    import math
+    lon0, lat0 = pt
+    k = math.cos(math.radians(lat0)) * 111_320.0
+    return min(math.hypot((lon - lon0) * k, (lat - lat0) * 110_540.0) for lon, lat in geom)

@@ -18,6 +18,8 @@ from .bus import Hub
 from .config import CONTRACTS, Settings
 from .db import Store
 from .engine_bridge import EngineBridge
+from .extract import LLM, make_llm
+from .intake import Intake
 from .messaging import Messenger
 from .photon import PhotonClient, PhotonError, PhotonListener
 from .planner import Planner, ReportError
@@ -104,7 +106,7 @@ class DevInboundIn(BaseModel):
 
 
 def create_app(settings: Settings | None = None, photon_client: PhotonClient | None = None,
-               bridge: EngineBridge | None = None) -> FastAPI:
+               bridge: EngineBridge | None = None, llm: LLM | None = None) -> FastAPI:
     settings = settings or Settings()
 
     @asynccontextmanager
@@ -122,6 +124,11 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         if photon is None and settings.photon_enabled:
             photon = PhotonClient(settings.photon_api_key, settings.photon_project_id)
         app.state.messenger = Messenger(app.state.store, app.state.hub, photon)
+        app.state.intake = None
+        if app.state.planner is not None and settings.extract_enabled and (llm is not None or settings.anthropic_api_key):
+            app.state.intake = Intake(app.state.store, app.state.messenger, app.state.planner,
+                                      llm or make_llm(settings.anthropic_api_key))
+            app.state.messenger.inbound_hooks.append(app.state.intake.on_inbound)
         app.state.listener = None
         if photon is not None and settings.photon_listen:
             app.state.listener = PhotonListener(photon, app.state.store, app.state.messenger.handle_inbound)
@@ -155,7 +162,8 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         meta = store().meta()
         listener = app.state.listener
         return {"ok": True, "scenario_id": meta.get("scenario_id"), "plan_version": meta.get("plan_version"),
-                "t_s": meta.get("t_s"), "mode": "engine" if app.state.planner is not None else "static", "photon": "enabled" if messenger().photon is not None else "disabled",
+                "t_s": meta.get("t_s"), "mode": "engine" if app.state.planner is not None else "static",
+                "extraction": "on" if app.state.intake is not None else "off", "photon": "enabled" if messenger().photon is not None else "disabled",
                 "photon_listener": listener.status() if listener is not None else None}
 
     @app.get("/state")
