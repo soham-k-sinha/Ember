@@ -19,11 +19,15 @@ A city-scale disaster simulation around the David Rubenstein Treehouse (Harvard,
 9. **Photon:** use Beta (Photon 2.0, `api.photon.codes/v1`). Shared iMessage lines: tester must text first; no group chats; no calls on shared lines.
 10. **Label what's synthetic.** Household counts, behavior parameters, hazard timing: say it in the UI and the write-up.
 
+## The build plan and the team
+`docs/TECHNICAL.md` is the execution plan (architecture, models, allocator, API, UI, timeline, git protocol). Each person has a self-contained brief in `docs/team/<name>.md` and an append-only feature log in `docs/log/<name>.md`. **Every session starts by reading all of `docs/log/*.md` and `docs/DECISIONS.md`, and ends each feature by appending to its own log.**
+
 ## Ownership (one directory each; never edit another's without asking)
-- `engine/` — world build, hazards, engines, job runner, Daytona pool.
-- `web/` — map, panels, WebSocket client.
-- `residents/` — DB, Photon, need extraction, assignments.
-- `contracts/`, `docs/` — shared; small, announced edits only.
+- `engine/` — Aryaman: world, hazards, models, plan simulator, allocator, baseline, run_job, Daytona pool; owns `contracts/` schemas.
+- `web/` — Soham: map, panels, comparison, WebSocket client.
+- `residents/` — Arnav: backend (shared-state DB, API, WS), Photon threads, the one LLM extraction call, replan loop.
+- `scenarios/`, `docs/DEMO.md`, `docs/QA.md`, Devpost — Anshuman: scenario JSON, flood keyframes, assumptions and sources, demo script, submission.
+- `contracts/`, `docs/DECISIONS.md` — shared; append-only or PR + announce; `docs/log/<name>.md` — own file only.
 
 ## Commands
 ```bash

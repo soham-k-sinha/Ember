@@ -35,5 +35,5 @@ Last updated: 2026-10-16, Friday evening (hacking started ~4 PM; venue closes 8 
 - Photon shared iMessage lines: no group chats, no calls; voice needs a bought SMS number + SIP vendor.
 - Don't add 3D, LLM personas, or multi-agent orchestration. See `CLAUDE.md` hard rules.
 
-## Team
-3 people. Directories: `engine/` (world/hazards/engines/Daytona), `web/` (map), `residents/` (Photon/LLM/assignments). Task split is decided in chat, not here.
+## Team (updated Fri night)
+Four people, one directory each; the idea is locked (DECISIONS D17). The execution plan is `docs/TECHNICAL.md`; each person's brief is `docs/team/<name>.md` (aryaman, soham, arnav, anshuman); feature logs are `docs/log/<name>.md`. Start every session by reading the logs and the decision log.
