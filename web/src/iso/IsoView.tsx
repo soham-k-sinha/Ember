@@ -146,7 +146,7 @@ export function IsoView(props: IsoProps) {
         closedKey: "", cam, drag: { on: false, moved: false, x: 0, y: 0 },
       };
       ctxRef.current = ctx;
-      if (import.meta.env.DEV) (window as unknown as { __iso?: { app: Application; ctx: Ctx; frame: () => void } }).__iso = { app, ctx, frame: () => frame(ctx, propsRef.current) };
+      if (import.meta.env.DEV) (window as unknown as { __iso?: { app: Application; ctx: Ctx; frame: () => void; props: () => IsoProps } }).__iso = { app, ctx, frame: () => frame(ctx, propsRef.current), props: () => propsRef.current };
 
       // pan / zoom
       app.stage.eventMode = "static";
