@@ -1,0 +1,247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ember/state.schema.json",
+  "title": "Ember shared state",
+  "description": "Snapshot of the situation at sim time t_s: what the web renders, what the backend stores and serves at GET /state, what the planner reads. Static geometry (roads, all households, buildings) stays in town.json; this holds only what changes. Coordinates [lon, lat]; times are seconds since sim start.",
+  "type": "object",
+  "required": ["version", "scenario_id", "t_s", "plan_version", "hazard", "closures", "households", "facilities", "resources", "plan", "reports", "messages", "metrics"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {"const": "0.1"},
+    "scenario_id": {"type": "string"},
+    "t_s": {"type": "number", "minimum": 0, "description": "Sim clock."},
+    "plan_version": {"type": ["integer", "null"], "description": "Current plan version (null before the first plan)."},
+    "source": {"enum": ["engine-example", "simulator", "backend"], "description": "Who produced this snapshot."},
+    "synthetic": {"type": "array", "items": {"type": "string"}, "description": "What in this snapshot is assumed or illustrative. Show it."},
+
+    "hazard": {
+      "type": "object", "required": ["keyframe_t_s", "geometry", "next_keyframe_t_s"], "additionalProperties": false,
+      "properties": {
+        "keyframe_t_s": {"type": ["number", "null"], "description": "t_s of the keyframe in effect (null = still dry)."},
+        "geometry": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/area"}], "description": "Flood extent in effect now."},
+        "next_keyframe_t_s": {"type": ["number", "null"]},
+        "keyframe_times_s": {"type": "array", "items": {"type": "number"}, "description": "All keyframe times (the scrubber's tick marks)."}
+      }
+    },
+
+    "closures": {
+      "type": "array", "description": "Closed edges only (everything else in town.json is open).",
+      "items": {
+        "type": "object", "required": ["edge_id", "closed_from_t_s", "source"], "additionalProperties": false,
+        "properties": {
+          "edge_id": {"type": "integer"},
+          "closed_from_t_s": {"type": "number", "minimum": 0},
+          "source": {"enum": ["hazard", "report", "plan", "judge"]},
+          "report_id": {"type": "string"},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+        }
+      }
+    },
+
+    "households": {
+      "type": "array", "description": "Assisted households only; background households come from town.json.",
+      "items": {
+        "type": "object", "required": ["household_id", "lon", "lat", "node", "needs", "deadline_s", "status"], "additionalProperties": false,
+        "properties": {
+          "household_id": {"type": "integer"},
+          "label": {"type": "string"},
+          "lon": {"type": "number"}, "lat": {"type": "number"},
+          "node": {"type": "integer", "description": "OSM node id (pickup point)."},
+          "judge": {"type": "boolean"},
+          "phone_role": {"enum": ["resident", "none"]},
+          "needs": {
+            "oneOf": [
+              {"const": "unknown"},
+              {"type": "object", "required": ["people"], "additionalProperties": false,
+               "properties": {"people": {"type": "integer", "minimum": 1}, "mobility": {"type": "boolean"}, "accessible_vehicle": {"type": "boolean"},
+                              "medical": {"type": "boolean"}, "note": {"type": "string"}}}
+            ]
+          },
+          "needs_source": {"enum": ["scenario", "report"], "description": "Where the current needs came from."},
+          "deadline_s": {"type": ["number", "null"], "description": "First flood keyframe covering the node − margin; null = not threatened."},
+          "status": {"enum": ["unknown", "needs", "assigned", "confirmed", "picked_up", "safe", "unreached"]},
+          "assignment_id": {"type": ["string", "null"]}
+        }
+      }
+    },
+
+    "facilities": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["id", "type", "name", "lon", "lat", "node", "state"], "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string"},
+          "type": {"enum": ["hospital", "clinic", "pumping_station", "substation", "outfall", "response_base", "shelter"]},
+          "name": {"type": "string"},
+          "lon": {"type": "number"}, "lat": {"type": "number"},
+          "node": {"type": "integer"},
+          "synthetic": {"type": "boolean"},
+          "critical": {"type": "boolean"},
+          "state": {"enum": ["ok", "backup", "down"]},
+          "state_since_t_s": {"type": "number", "minimum": 0},
+          "endurance_left_s": {"type": ["number", "null"], "description": "On backup: seconds until down. null = not on backup."},
+          "powered_by": {"type": ["string", "null"], "description": "Generator resource id when on a generator."},
+          "threatened_at_s": {"type": ["number", "null"], "description": "First flood keyframe covering the facility."},
+          "depends_on": {"type": "array", "items": {"type": "string"}},
+          "consequence": {"type": "string"},
+          "people_on_site": {"type": "integer", "minimum": 0, "description": "response_base / shelter."},
+          "capacity_people": {"type": "integer", "minimum": 0},
+          "wastewater": {
+            "type": ["object", "null"], "additionalProperties": false,
+            "required": ["storage_m3", "storage_max_m3", "inflow_m3ph", "pumped_m3ph", "overflow_m3"],
+            "properties": {
+              "storage_m3": {"type": "number", "minimum": 0},
+              "storage_max_m3": {"type": "number"},
+              "inflow_m3ph": {"type": "number", "minimum": 0, "description": "Now."},
+              "pumped_m3ph": {"type": "number", "minimum": 0, "description": "Now (0 when unpowered)."},
+              "overflow_m3": {"type": "number", "minimum": 0, "description": "Cumulative untreated overflow to the river."},
+              "series": {
+                "type": "object", "additionalProperties": false, "required": ["t_s", "storage_m3", "overflow_m3"],
+                "description": "History for the panel chart (same length arrays).",
+                "properties": {
+                  "t_s": {"type": "array", "items": {"type": "number"}},
+                  "storage_m3": {"type": "array", "items": {"type": "number"}},
+                  "overflow_m3": {"type": "array", "items": {"type": "number"}}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["id", "kind", "name", "lon", "lat", "status"], "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string"},
+          "kind": {"enum": ["van", "accessible_van", "truck", "crew", "generator"]},
+          "name": {"type": "string"},
+          "lon": {"type": "number"}, "lat": {"type": "number"},
+          "node": {"type": ["integer", "null"], "description": "OSM node when at a node; null when mid-edge."},
+          "edge_id": {"type": ["integer", "null"], "description": "Edge it is on when moving."},
+          "heading_deg": {"type": ["number", "null"]},
+          "status": {"enum": ["available", "en_route", "working", "returning", "reserved", "stalled", "out_of_service"]},
+          "assignment_id": {"type": ["string", "null"]},
+          "eta_s": {"type": ["number", "null"]},
+          "capacity_people": {"type": "integer", "minimum": 0},
+          "people_on_board": {"type": "integer", "minimum": 0},
+          "accessible": {"type": "boolean"},
+          "kw": {"type": "number"},
+          "connector": {"type": "string"},
+          "fuel_l": {"type": "number", "minimum": 0},
+          "km_driven": {"type": "number", "minimum": 0}
+        }
+      }
+    },
+
+    "plan": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object", "required": ["version", "created_at_t_s", "assignments", "unresolved", "info_requests"], "additionalProperties": false,
+          "properties": {
+            "version": {"type": "integer", "minimum": 1},
+            "parent_version": {"type": ["integer", "null"]},
+            "created_at_t_s": {"type": "number", "minimum": 0},
+            "trigger": {"type": "string", "description": "Why this version exists, e.g. 'report r-7: judge needs accessible vehicle'."},
+            "planner": {"enum": ["ember", "baseline", "example"]},
+            "assignments": {"type": "array", "items": {"$ref": "assignment.schema.json"}},
+            "changes": {
+              "type": "array", "description": "Diff vs parent_version (drives the version timeline and outbound messages).",
+              "items": {"type": "object", "required": ["assignment_id", "change"], "additionalProperties": false,
+                        "properties": {"assignment_id": {"type": "string"}, "change": {"enum": ["added", "removed", "retargeted", "eta_changed", "resource_changed"]},
+                                       "note": {"type": "string"}}}
+            },
+            "unresolved": {
+              "type": "array",
+              "items": {
+                "type": "object", "required": ["target", "need", "blocked_by"], "additionalProperties": false,
+                "properties": {
+                  "target": {"oneOf": [
+                    {"type": "object", "required": ["household_id"], "additionalProperties": false, "properties": {"household_id": {"type": "integer"}}},
+                    {"type": "object", "required": ["facility_id"], "additionalProperties": false, "properties": {"facility_id": {"type": "string"}}}
+                  ]},
+                  "need": {"type": "string"},
+                  "blocked_by": {"type": "string", "description": "Which constraint, e.g. 'needs unknown', 'no accessible vehicle before deadline'."},
+                  "would_unblock": {"type": "string"},
+                  "alternatives": {"type": "array", "items": {"type": "string"}}
+                }
+              }
+            },
+            "info_requests": {
+              "type": "array", "description": "Questions whose answer would change a decision; the backend sends them.",
+              "items": {
+                "type": "object", "required": ["id", "to", "question", "why"], "additionalProperties": false,
+                "properties": {
+                  "id": {"type": "string"},
+                  "to": {"oneOf": [
+                    {"type": "object", "required": ["household_id"], "additionalProperties": false, "properties": {"household_id": {"type": "integer"}}},
+                    {"type": "object", "required": ["facility_id"], "additionalProperties": false, "properties": {"facility_id": {"type": "string"}}}
+                  ]},
+                  "question": {"type": "string"},
+                  "why": {"type": "string"}
+                }
+              }
+            },
+            "metrics": {"$ref": "#/$defs/plan_metrics"}
+          }
+        }
+      ]
+    },
+
+    "reports": {"type": "array", "items": {"$ref": "report.schema.json"}},
+
+    "messages": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["id", "thread", "direction", "text", "t_s"], "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string"},
+          "thread": {"oneOf": [
+            {"type": "object", "required": ["household_id"], "additionalProperties": false, "properties": {"household_id": {"type": "integer"}}},
+            {"type": "object", "required": ["facility_id"], "additionalProperties": false, "properties": {"facility_id": {"type": "string"}}}
+          ]},
+          "direction": {"enum": ["in", "out"]},
+          "text": {"type": "string", "description": "Outbound text starts with '[EMBER drill]'."},
+          "t_s": {"type": "number", "minimum": 0},
+          "plan_version": {"type": ["integer", "null"]},
+          "assignment_id": {"type": ["string", "null"]},
+          "report_id": {"type": ["string", "null"], "description": "inbound: the report extracted from it"}
+        }
+      }
+    },
+
+    "metrics": {"$ref": "#/$defs/plan_metrics", "description": "Outcome so far (or projected by the simulator for the current plan)."}
+  },
+
+  "$defs": {
+    "lonlat": {"type": "array", "prefixItems": [{"type": "number"}, {"type": "number"}], "minItems": 2, "maxItems": 2},
+    "ring": {"type": "array", "minItems": 4, "items": {"$ref": "#/$defs/lonlat"}},
+    "area": {
+      "oneOf": [
+        {"type": "object", "required": ["type", "coordinates"], "properties": {"type": {"const": "Polygon"}, "coordinates": {"type": "array", "items": {"$ref": "#/$defs/ring"}}}},
+        {"type": "object", "required": ["type", "coordinates"], "properties": {"type": {"const": "MultiPolygon"}, "coordinates": {"type": "array", "items": {"type": "array", "items": {"$ref": "#/$defs/ring"}}}}}
+      ]
+    },
+    "plan_metrics": {
+      "type": "object", "additionalProperties": false,
+      "description": "TECHNICAL.md §3.4. People counts are people, not households.",
+      "properties": {
+        "projected": {"type": "boolean", "description": "true = simulator projection for the rest of the horizon; false = outcome so far."},
+        "people_reached_before_deadline": {"type": "integer", "minimum": 0},
+        "people_unreached": {"type": "integer", "minimum": 0},
+        "unresolved_needs": {"type": "integer", "minimum": 0},
+        "hospital_outage_s": {"type": "number", "minimum": 0},
+        "service_outage_s_total": {"type": "number", "minimum": 0},
+        "overflow_m3": {"type": "number", "minimum": 0},
+        "fuel_l": {"type": "number", "minimum": 0},
+        "vehicle_km": {"type": "number", "minimum": 0},
+        "infeasible_assignments": {"type": "integer", "minimum": 0},
+        "reserve_remaining": {"type": "integer", "minimum": 0},
+        "replan_latency_s": {"type": ["number", "null"]}
+      }
+    }
+  }
+}

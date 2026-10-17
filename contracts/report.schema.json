@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ember/report.schema.json",
+  "title": "Ember report",
+  "description": "A structured fact from a person (resident, operator, responder, judge) or a scripted scenario event. The backend writes one per inbound message after the LLM extraction; the planner reads them. Never contains routes, times or assignments.",
+  "type": "object",
+  "required": ["id", "source", "kind", "observed_at_t_s"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string"},
+    "source": {"enum": ["resident", "operator", "responder", "judge", "scenario"]},
+    "kind": {"enum": ["need", "closure_report", "facility_status", "confirm", "reject", "question", "other"]},
+    "household_id": {"type": "integer", "description": "town.json households[].id (assisted household)"},
+    "facility_id": {"type": "string"},
+    "assignment_id": {"type": "string", "description": "confirm / reject: which offer this answers"},
+    "plan_version": {"type": ["integer", "null"], "description": "Plan version of the message this replies to (an older version triggers a replan check)."},
+    "observed_at_t_s": {"type": "number", "minimum": 0, "description": "Sim time the fact applies from."},
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1, "default": 1.0},
+    "resolved": {"type": "boolean", "default": false, "description": "The planner has taken it into account."},
+    "text": {"type": "string", "description": "Original message text, if any."},
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "need: people/mobility/accessible_vehicle/medical. closure_report: edge_ids or road_hint/cross_street. facility_status: set{}. question/other: text only.",
+      "properties": {
+        "people": {"type": "integer", "minimum": 0},
+        "mobility": {"type": "boolean"},
+        "accessible_vehicle": {"type": "boolean"},
+        "medical": {"type": "boolean"},
+        "edge_ids": {"type": "array", "items": {"type": "integer"}},
+        "road_hint": {"type": "string"},
+        "cross_street": {"type": "string"},
+        "set": {"type": "object", "description": "facility fields, e.g. {\"backup_endurance_s\": 7200, \"storage_pct\": 80}"}
+      }
+    }
+  },
+  "allOf": [
+    {"if": {"properties": {"kind": {"const": "need"}}}, "then": {"required": ["household_id", "payload"]}},
+    {"if": {"properties": {"kind": {"const": "facility_status"}}}, "then": {"required": ["facility_id", "payload"]}},
+    {"if": {"properties": {"kind": {"enum": ["confirm", "reject"]}}}, "then": {"required": ["assignment_id"]}}
+  ]
+}

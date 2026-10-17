@@ -9,6 +9,9 @@ The interface between `engine/`, `web/` and `residents/`. Build against the fixt
 | Job = plan + scenario (hazard, compliance, seed, horizon) | `job.schema.json` | `fixtures/job.fixture.json` | planner / Daytona fan-out | engine (`run_job`) |
 | Metrics (one run's outcome) | `metrics.schema.json` | `fixtures/metrics.fixture.json` | `run_job` (return value; Daytona returns it as `run_code` output) | web (scatter / comparison), residents |
 | Scenario (district, flood keyframes, facilities, resources, assisted households, judge, reserve, scripted reports) | `scenario.schema.json` | `fixtures/scenario.fixture.json` (engine-generated example; placeholder numbers) | Anshuman → `scenarios/<name>/scenario.json` | engine (hazard, deadlines, simulator, allocator), backend, web |
+| **State** (snapshot at sim time `t_s`: flood extent, closed edges, assisted households + status, facilities + state + wastewater, resources + position, current plan with assignments / unresolved / info requests, reports, messages, metrics) | `state.schema.json` | `fixtures/state.fixture.json` (example snapshot at 80 min of the example scenario) | backend `GET /state` / WS `state`; engine simulator | web (map + panels), backend |
+| Assignment (one resource → one target in a plan version, with ETA, deadline, rationale, route) | `assignment.schema.json` | inside `state.fixture.json` → `plan.assignments` | allocator / example planner | backend (offers, confirmations), web |
+| Report (a structured fact from a person or the scenario script) | `report.schema.json` | inside `state.fixture.json` → `reports` | backend (after LLM extraction), scenario `scripted_reports` | engine (replan), web |
 | Trajectories (sampled vehicles for TripsLayer) | `trajectories.schema.json` | `fixtures/trajectories.fixture.json` (200 trips) | `ember smoke` → `data/trajectories.json` | web (deck.gl `TripsLayer`) |
 
 ## Conventions (same as CLAUDE.md)
@@ -26,6 +29,14 @@ uv run --project engine ember validate-scenario scenarios/allston_flood_v1/scena
 Schema errors, then referential checks against `town.json` (household / asset / node / edge ids exist, depends_on targets exist and have no cycles, exactly one judge with needs `unknown`, generators have kw + connector, reserve ≤ fleet, keyframes sorted), then warnings (district misses the venue, households outside the district, no generator fits a facility, flood recedes). Prints a one-line summary; exit 1 on errors. `--deadlines` lists each household's deadline (first keyframe that covers its node − `deadline_margin_s`).
 
 Household ids come from **your** `data/town.json`; validate against the same town the engine runs on.
+
+## Checking a state snapshot
+```bash
+uv run --project engine ember validate-state contracts/fixtures/state.fixture.json --scenario contracts/fixtures/scenario.fixture.json
+```
+Schema (state + embedded assignment/report) then references: closed edges, households, facilities, resources and assignment ids all exist and agree with each other and with the scenario. Soham: run it on your `GET /state` output.
+
+The state fixture is computed, not hand-typed: flood and closures from the keyframes, facility states from events and dependencies, wastewater integrated per tick, and a deadline-ordered example dispatch with real routes and ETAs. `plan.planner = "example"` until the allocator lands; `synthetic[]` lists what's illustrative.
 
 ## Vehicle states (`trajectories.trips[].final`, engine snapshots)
 `0 waiting · 1 moving · 2 queued · 3 exited · 4 exposed · 5 stuck`

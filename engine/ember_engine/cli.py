@@ -134,7 +134,10 @@ def cmd_fixtures(a):
     (fx / "job.fixture.json").write_text(json.dumps(j, indent=2))
     (fx / "plan.fixture.json").write_text(json.dumps(j["plan"], indent=2))
     from .scenario import example_scenario
-    (fx / "scenario.fixture.json").write_text(json.dumps(example_scenario(town), indent=1))
+    from .state import example_state
+    scn = example_scenario(town)
+    (fx / "scenario.fixture.json").write_text(json.dumps(scn, indent=1))
+    (fx / "state.fixture.json").write_text(json.dumps(example_state(town, scn), indent=1))
     print(f"[fixtures] wrote to {fx}")
 
 
@@ -152,6 +155,23 @@ def cmd_pin_town(a):
     c = json.loads(TOWN.read_text())["meta"]["counts"]
     print(f"[pin-town] wrote {CANONICAL_TOWN.relative_to(ROOT)} ({len(buf.getvalue())/1e3:.0f} KB; {c}). "
           "Commit it, then re-run `ember fixtures` and re-validate scenarios: ids may have changed.")
+
+
+def cmd_validate_state(a):
+    """Check a state snapshot (e.g. the backend's GET /state) against state.schema.json and town ids."""
+    from .scenario import load_scenario
+    from .state import load, validate_state
+    town = json.loads((Path(a.town) if a.town else _ensure_town()).read_text())
+    st = load(a.path)
+    errs = validate_state(st, load_scenario(a.scenario) if a.scenario else None, town)
+    for e in errs:
+        print(f"ERROR   {e}")
+    p = st.get("plan") or {}
+    print(f"{'FAIL' if errs else 'OK'} state t={st.get('t_s', 0)/60:.0f} min plan v{st.get('plan_version')}: "
+          f"{len(st.get('households', []))} households, {len(st.get('resources', []))} resources, {len(p.get('assignments', []))} assignments, "
+          f"{len(p.get('unresolved', []))} unresolved, {len(st.get('closures', []))} closed edges"
+          + (f"; {len(errs)} error(s)" if errs else ""))
+    sys.exit(1 if errs else 0)
 
 
 def cmd_validate_scenario(a):
@@ -189,6 +209,9 @@ def main(argv=None):
     v.add_argument("path"); v.add_argument("--town", default=None, help="town.json to check ids against (default data/town.json)")
     v.add_argument("--deadlines", action="store_true", help="also print per-household deadlines")
     v.set_defaults(f=cmd_validate_scenario)
+    vs = sp.add_parser("validate-state", help="check a state snapshot against state.schema.json and town/scenario ids")
+    vs.add_argument("path"); vs.add_argument("--scenario", default=None); vs.add_argument("--town", default=None)
+    vs.set_defaults(f=cmd_validate_state)
     a = p.parse_args(argv)
     a.f(a)
 
