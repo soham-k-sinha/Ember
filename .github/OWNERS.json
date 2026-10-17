@@ -7,11 +7,48 @@
     "FILL_ME_anshuman_login": "anshuman"
   },
   "lanes": {
-    "aryaman":  {"paths": ["engine/", "contracts/", "docs/TECHNICAL.md", "docs/SIM_ENV_PLAN.md", "docs/HANDOFF.md", "docs/team/", ".github/", "CLAUDE.md", "README.md", ".gitignore", ".python-version"], "authors": ["aryamansgoenka@gmail.com"]},
-    "soham":    {"paths": ["web/"], "authors": []},
-    "arnav":    {"paths": ["residents/"], "authors": []},
-    "anshuman": {"paths": ["scenarios/", "docs/DEMO.md", "docs/QA.md", "docs/devpost/"], "authors": []}
+    "aryaman": {
+      "paths": [
+        "engine/",
+        "contracts/",
+        "docs/TECHNICAL.md",
+        "docs/SIM_ENV_PLAN.md",
+        "docs/HANDOFF.md",
+        "docs/team/",
+        ".github/",
+        "CLAUDE.md",
+        "README.md",
+        ".gitignore",
+        ".python-version"
+      ],
+      "authors": [
+        "aryamansgoenka@gmail.com"
+      ]
+    },
+    "soham": {
+      "paths": [
+        "residents/"
+      ],
+      "authors": []
+    },
+    "arnav": {
+      "paths": [
+        "web/"
+      ],
+      "authors": []
+    },
+    "anshuman": {
+      "paths": [
+        "scenarios/",
+        "docs/DEMO.md",
+        "docs/QA.md",
+        "docs/devpost/"
+      ],
+      "authors": []
+    }
   },
-  "shared_for_everyone": ["docs/DECISIONS.md"],
+  "shared_for_everyone": [
+    "docs/DECISIONS.md"
+  ],
   "own_log_prefix": "docs/log/"
 }
