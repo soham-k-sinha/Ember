@@ -177,22 +177,32 @@ class World:
         next_edge[self.exits] = -2   # -2 = at exit
         return next_edge, dist
 
-    def route(self, src: int, dst: int, closed: np.ndarray | None = None,
-              weight: np.ndarray | None = None) -> tuple[list[int], float]:
-        """Shortest open route between node indices: (edge indices in order, seconds). ([], inf) if none."""
-        if src == dst:
-            return [], 0.0
+    def _graph(self, closed=None, weight=None, reverse: bool = False):
+        """CSR graph of open edges (parallel edges collapsed to the fastest): (csr, weights, kept edge idx)."""
         N = self.n_nodes
         w = (self.edge_tt if weight is None else np.asarray(weight, dtype=np.float64)).copy()
         if closed is not None and closed.any():
             w = np.where(closed, np.inf, w)
         ok = np.isfinite(w) & (self.edge_u != self.edge_v)
         ei = np.where(ok)[0]
-        ei = ei[np.lexsort((w[ei], self.edge_v[ei], self.edge_u[ei]))]   # parallel edges: keep the fastest
+        ei = ei[np.lexsort((w[ei], self.edge_v[ei], self.edge_u[ei]))]
         pair = self.edge_u[ei] * N + self.edge_v[ei]
         first = np.ones(len(ei), dtype=bool); first[1:] = pair[1:] != pair[:-1]
         ei = ei[first]
-        g = csr_matrix((w[ei], (self.edge_u[ei], self.edge_v[ei])), shape=(N, N))
+        a, b = (self.edge_v[ei], self.edge_u[ei]) if reverse else (self.edge_u[ei], self.edge_v[ei])
+        return csr_matrix((w[ei], (a, b)), shape=(N, N)), w, ei
+
+    def times_from(self, src: int, closed: np.ndarray | None = None, reverse: bool = False) -> np.ndarray:
+        """Free-flow seconds from node src to every node (reverse=True: from every node to src)."""
+        g, _, _ = self._graph(closed, reverse=reverse)
+        return dijkstra(g, directed=True, indices=src)
+
+    def route(self, src: int, dst: int, closed: np.ndarray | None = None,
+              weight: np.ndarray | None = None) -> tuple[list[int], float]:
+        """Shortest open route between node indices: (edge indices in order, seconds). ([], inf) if none."""
+        if src == dst:
+            return [], 0.0
+        g, w, ei = self._graph(closed, weight)
         dist, pred = dijkstra(g, directed=True, indices=src, return_predecessors=True)
         if not np.isfinite(dist[dst]):
             return [], float("inf")
