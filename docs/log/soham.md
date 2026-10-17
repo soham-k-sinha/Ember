@@ -111,3 +111,11 @@ Run: cd residents && uv run pytest -q (129 pass)
 Verified live: restart without reset → socket subscribed, redelivered the 7 old events from the saved cursor → all deduped, 0 texts sent.
 Interfaces: none changed. D54.
 Status: done.
+
+## 2026-10-17 14:00 · residents/HANDOFF.md · branch soham/handoff-doc · commit (this PR)
+What: a full-context handoff for the next agent in this lane: project, hard rules, team/lanes, git protocol, architecture + every residents file, API, running it, task status, every PR and the bugs each fixed, demo numbers, open items, gotchas.
+Files: residents/HANDOFF.md
+Run: read it first in a fresh session (then CLAUDE.md, docs/HANDOFF.md, DECISIONS, logs)
+Interfaces: none.
+Status: done. 129 tests pass on main c0c65ba.
+Next: re-measure the demo beats after Aryaman's #36; Task 9 only if green-lit.
