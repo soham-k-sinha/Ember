@@ -102,3 +102,29 @@ def test_question_goes_to_coordinators_with_status(settings, bridge):  # noqa: F
         say(c, "2 of us, my mom uses a wheelchair")
         [r] = say(c, "is the western ave bridge open?")
         assert r.startswith("[EMBER drill] We've passed your question to the coordinators.")
+
+
+def test_tuned_demo_beat_through_the_text_pipeline(settings, bridge):  # noqa: F811
+    """Engine's judge beat (engine/tests/test_demo_beats.py), but starting from the judge's TEXT: at minute 5
+    "2 of us, my mom's in a wheelchair, River St is blocked" → one replan → the judge gets the accessible van
+    before the deadline AND the generator plan changes; the judge is texted the instruction."""
+    text = "2 of us, my mom's in a wheelchair, River St is blocked"
+    llm = FakeLLM({text: ex(fact("need", people=2, mobility=True, accessible_vehicle=True),
+                            fact("closure_report", road_hint="River St"))})
+    s = replace(settings, scenario=SCENARIO, extract_enabled=True)
+    with TestClient(create_app(s, bridge=bridge, llm=llm)) as c:
+        c.post("/phones", json={"role": "resident", "handle": "4133620520"})
+        c.post("/clock", json={"t_s": 300})
+        v1 = c.get("/plan/1").json()
+        replies = say(c, text)
+        st = c.get("/state").json()
+        assert st["plan_version"] == 2
+        v2 = c.get("/plan/2").json()
+        mine = [a for a in v2["assignments"] if a["target"] == JT and a.get("status") not in ("cancelled", "rejected")]
+        assert mine and mine[0]["resource_id"] in ACCESSIBLE and mine[0]["eta_s"] <= mine[0]["deadline_s"]
+        gb = {a["id"]: a["eta_s"] for a in v1["assignments"] if a["task"] == "protect"}
+        ga = {a["id"]: a["eta_s"] for a in v2["assignments"] if a["task"] == "protect"}
+        assert set(ga) != set(gb) or any(abs(ga.get(i, 1e9) - e) > 120 for i, e in gb.items())
+        assert any("Accessible Van 3 will pick you up" in r for r in replies)
+        closure = next(r for r in st["reports"] if r["kind"] == "closure_report")
+        assert len(closure["payload"]["edge_ids"]) <= 4

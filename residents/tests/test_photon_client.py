@@ -28,7 +28,7 @@ async def test_send_text_shape():
 
 
 async def test_retry_on_503_reuses_the_idempotency_key(monkeypatch):
-    monkeypatch.setattr("residents.photon.asyncio.sleep", _no_sleep)
+    monkeypatch.setattr("residents.photon._backoff", _no_sleep)
     fp = FakePhoton(); fp.fail_sends = 2; c = fp.client()
     await c.send_text("s", "u", "t", idempotency_key="ember-m-9")
     keys = [r.headers["idempotency-key"] for r in fp.requests]
@@ -36,7 +36,7 @@ async def test_retry_on_503_reuses_the_idempotency_key(monkeypatch):
 
 
 async def test_gives_up_after_max_attempts(monkeypatch):
-    monkeypatch.setattr("residents.photon.asyncio.sleep", _no_sleep)
+    monkeypatch.setattr("residents.photon._backoff", _no_sleep)
     fp = FakePhoton(); fp.fail_sends = 10; c = fp.client()
     with pytest.raises(PhotonError) as e:
         await c.send_text("s", "u", "t", idempotency_key="k")
@@ -51,7 +51,7 @@ async def test_4xx_is_not_retried():
 
 
 async def test_network_error_retried(monkeypatch):
-    monkeypatch.setattr("residents.photon.asyncio.sleep", _no_sleep)
+    monkeypatch.setattr("residents.photon._backoff", _no_sleep)
     calls = {"n": 0}
     def handler(req):
         calls["n"] += 1

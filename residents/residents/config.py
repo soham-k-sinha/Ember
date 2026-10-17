@@ -37,6 +37,7 @@ class Settings:
     photon_enabled: bool = field(default_factory=lambda: _flag("PHOTON_ENABLED", False))
     # The socket listener; off in tests that inject a client and drive inbound by hand.
     photon_listen: bool = field(default_factory=lambda: _flag("PHOTON_LISTEN", True))
+    retry_every_s: float = field(default_factory=lambda: float(os.environ.get("RETRY_EVERY_S", "20")))
     photon_api_key: str = field(default_factory=lambda: os.environ.get("PHOTON_API_KEY", ""))
     photon_project_id: str = field(default_factory=lambda: os.environ.get("PHOTON_PROJECT_ID", ""))
     # The one LLM call (text → report). On when engine mode is on and a key is set.

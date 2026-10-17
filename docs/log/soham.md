@@ -75,3 +75,12 @@ Interfaces: none changed.
 Status: done. (residents/ws-events.schema.json was already removed in #16.)
 Note for Aryaman: could EngineSession.__init__ take an optional `moves=` passed to allocate()? Our test suite went from 18 s to 56 s without the shortened search.
 Next: Task 8 robustness, Task 6 scripted operator prompt, Task 7 POST /simulate.
+
+## 2026-10-17 11:00 · robustness (Task 8) + street resolution aligned to the tuned beat · branch soham/robustness · commit (this PR)
+What: intake serialized end to end; double-sent facts don't replan twice; planner failure → stored report + honest text + server stays up; failed sends retried with the same Idempotency-Key; "River St" near the judge now = engine's edges_by_name 150 m (+ reverse twin 951) instead of 12 edges at 500 m. Tuned judge beat (D47) driven from the judge's text passes end to end. EMBER_LOCAL_POOL=1 in tests (Aryaman's D48 request).
+Files: residents/residents/{intake,messaging,engine_bridge,photon,db,app,config}.py, residents/tests/{test_robustness,test_conversation,test_extract,conftest,...}.py, residents/{README.md,.env.example}
+Run: cd residents && uv run pytest -q (119 pass, ~60 s)
+Interfaces: none changed. D51.
+Status: done. Found while building it: tests had patched the global asyncio.sleep (to skip Photon backoff), which made the new retry loop spin without yielding and hang the suite; fixed with a photon-local `_backoff` hook.
+Notes: Aryaman — closing both directions adds 951 (reverse of 833) to your [523, 833, 952]; I re-ran your beat with it: judge still gets van-3 at 121 min (deadline 165) and the generator still changes. Anshuman — the judge's text in DEMO.md can be "2 of us, my mom's in a wheelchair, River St is blocked" at minute ~5; that exact flow is a residents test now.
+Next: Task 6 (operator prompt from the web), Task 7 (POST /simulate), live phone re-run.

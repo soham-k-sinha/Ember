@@ -119,10 +119,13 @@ class EngineBridge:
         return self._edges[eid].get("name") or f"edge {eid}"
 
     # ---------- street name → edges (for closure reports from texts) ----------
-    def resolve_road(self, road_hint: str, cross_street: str | None, household_id: int | None,
-                     radius_m: float = 500.0) -> list[int]:
-        """Deterministic: edges of the named street, located by the cross street's intersection if given,
-        else within `radius_m` of the household. Both directions. [] = can't place it (ask, don't guess)."""
+    NEAR_HOUSEHOLD_M = 150.0  # same radius as engine's tested demo beat (edges_by_name, near_household=…)
+
+    def resolve_road(self, road_hint: str, cross_street: str | None, household_id: int | None) -> list[int]:
+        """Deterministic: edges of the named street ('River St' → 'River Street'), at the cross street's
+        intersection if one is given, else within 150 m of the household (engine's EngineSession.edges_by_name).
+        Both directions. [] = can't place it (ask, don't guess). A wider radius closes whole streets and
+        can cut a household off entirely (seen live)."""
         named = [e for e in self.town["edges"] if street_matches(e.get("name"), road_hint)]
         if not named:
             return []
@@ -131,18 +134,12 @@ class EngineBridge:
             at = [e["id"] for e in named if e["u"] in cross_nodes or e["v"] in cross_nodes]
             if at:
                 return self.both_directions(at)
-        anchor = self._household_point(household_id)
-        if anchor is None:
+        if household_id is None or household_id not in self._household_ids:
             return []
-        near = [e["id"] for e in named if _min_dist_m(anchor, e["geom"]) <= radius_m]
-        return self.both_directions(near)
-
-    def _household_point(self, household_id: int | None) -> tuple[float, float] | None:
-        if household_id is None:
-            return None
-        if not hasattr(self, "_hh_pt"):
-            self._hh_pt = {h["id"]: (h["lon"], h["lat"]) for h in self.town["households"]}
-        return self._hh_pt.get(household_id)
+        near: list[int] = []
+        for name in sorted({e["name"] for e in named}):
+            near += self.session.edges_by_name(name, near_household=household_id, radius_m=self.NEAR_HOUSEHOLD_M)
+        return self.both_directions(sorted(set(near)))
 
 
 _ABBREV = {"st": "street", "ave": "avenue", "av": "avenue", "rd": "road", "dr": "drive", "blvd": "boulevard",
@@ -167,10 +164,3 @@ def street_matches(edge_name: str | None, hint: str) -> bool:
         generic = {"street", "avenue", "road", "drive", "boulevard", "parkway", "square", "place", "court", "lane", "bridge"}
         return bool(set(a.split()) & set(b.split()) - generic)
     return False
-
-
-def _min_dist_m(pt: tuple[float, float], geom: list) -> float:
-    import math
-    lon0, lat0 = pt
-    k = math.cos(math.radians(lat0)) * 111_320.0
-    return min(math.hypot((lon - lon0) * k, (lat - lat0) * 110_540.0) for lon, lat in geom)

@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +78,7 @@ CREATE TABLE IF NOT EXISTS messages (
     plan_version INTEGER,
     external_id  TEXT UNIQUE,                -- Photon message id (dedupes inbound redeliveries)
     delivery     TEXT,                       -- outbound: pending | sent | failed | dev | no_phone | not_opted_in
+    created_wall REAL,                       -- wall-clock seconds (only for retry age; the sim uses t_s)
     data         TEXT NOT NULL               -- the state.messages[] object, verbatim
 );
 CREATE INDEX IF NOT EXISTS messages_thread ON messages (thread_key, seq);
@@ -141,6 +143,9 @@ class Store:
         cols = {r["name"] for r in self._db.execute("PRAGMA table_info(plans)")}
         if "reports_used" not in cols:
             self._db.execute("ALTER TABLE plans ADD COLUMN reports_used TEXT NOT NULL DEFAULT '[]'")
+        cols = {r["name"] for r in self._db.execute("PRAGMA table_info(messages)")}
+        if "created_wall" not in cols:
+            self._db.execute("ALTER TABLE messages ADD COLUMN created_wall REAL")
 
     def close(self) -> None:
         with self._lock:
@@ -218,8 +223,9 @@ class Store:
     @staticmethod
     def _insert_message(db: sqlite3.Connection, m: dict, external_id: str | None, delivery: str | None = None) -> None:
         db.execute(
-            "INSERT INTO messages (id, thread_key, direction, plan_version, external_id, delivery, data) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (m["id"], thread_key(m["thread"]), m["direction"], m.get("plan_version"), external_id, delivery, _dump(m)),
+            "INSERT INTO messages (id, thread_key, direction, plan_version, external_id, delivery, created_wall, data) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (m["id"], thread_key(m["thread"]), m["direction"], m.get("plan_version"), external_id, delivery, time.time(), _dump(m)),
         )
 
     def clear_scenario(self) -> None:
@@ -338,6 +344,13 @@ class Store:
     def message_delivery(self, message_id: str) -> tuple[str | None, str | None]:
         rows = self._rows("SELECT delivery, external_id FROM messages WHERE id = ?", (message_id,))
         return (rows[0]["delivery"], rows[0]["external_id"]) if rows else (None, None)
+
+    def failed_outbound(self, max_age_s: float) -> list[dict]:
+        """Outbound messages whose delivery failed within the last `max_age_s` wall seconds, oldest first
+        (an instruction from long ago is no longer worth sending)."""
+        rows = self._rows("SELECT data FROM messages WHERE direction = 'out' AND delivery = 'failed' "
+                          "AND created_wall >= ? ORDER BY seq", (time.time() - max_age_s,))
+        return [json.loads(r["data"]) for r in rows]
 
     def has_external_id(self, external_id: str) -> bool:
         return bool(self._rows("SELECT 1 FROM messages WHERE external_id = ?", (external_id,)))

@@ -32,6 +32,11 @@ API_VERSION = "2026-07-01"
 RETRY_STATUS = {429, 500, 502, 503, 504}
 
 
+async def _backoff(seconds: float) -> None:
+    """Retry waits go through here so tests can skip them without patching the global asyncio.sleep."""
+    await asyncio.sleep(seconds)
+
+
 class PhotonError(RuntimeError):
     def __init__(self, status: int, body: Any):
         self.status, self.body = status, body
@@ -112,9 +117,9 @@ class PhotonClient:
                     raise PhotonError(r.status_code, body)
                 retry_after = r.headers.get("Retry-After")
                 if retry_after and retry_after.isdigit():
-                    await asyncio.sleep(min(float(retry_after), 10.0))
+                    await _backoff(min(float(retry_after), 10.0))
                     continue
-            await asyncio.sleep(min(0.5 * 2 ** (attempt - 1), 4.0) * (1 + random.random() * 0.2))
+            await _backoff(min(0.5 * 2 ** (attempt - 1), 4.0) * (1 + random.random() * 0.2))
         raise AssertionError("unreachable")
 
     # ---------- REST ----------
@@ -286,7 +291,7 @@ class PhotonListener:
                 return
             except Exception:  # noqa: BLE001 - one bad message must not stop the stream
                 log.exception("inbound handler failed (attempt %d) for %s", attempt + 1, inbound.external_id)
-                await asyncio.sleep(0.2 * (attempt + 1))
+                await _backoff(0.2 * (attempt + 1))
         log.error("dropping inbound %s after 3 failures: %r", inbound.external_id, inbound.text[:80])
 
     # ---------- polling fallback ----------

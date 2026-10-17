@@ -6,6 +6,7 @@ in a row are handled in order, each against the plan the previous one produced.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -18,12 +19,26 @@ from .planner import Planner, ReportError
 log = logging.getLogger("residents.intake")
 
 SORRY = "Sorry, we couldn't read that. Could you say it another way?"
+PLANNER_DOWN = "Got your message. Our planner hit a problem; a coordinator is looking at it and will text you."
 
 
 class Intake:
     def __init__(self, store: Store, messenger: Messenger, planner: Planner, llm: LLM, outbound: Outbound | None = None):
         self.store, self.messenger, self.planner, self.llm = store, messenger, planner, llm
         self.outbound = outbound
+        # one message at a time, end to end: the next text must see what the previous one changed
+        # (known needs, pending questions, the new plan). Photon's worker is serial; HTTP isn't.
+        self._lock = asyncio.Lock()
+
+    async def on_inbound(self, msg: dict, role: str) -> Outcome | None:
+        async with self._lock:
+            return await self._on_inbound(msg, role)
+
+    def _duplicate(self, r: dict) -> bool:
+        """Same fact as this thread's previous report of that kind (double-sent text): don't replan again."""
+        same = [x for x in self.store.reports() if x["kind"] == r["kind"] and x.get("source") != "scenario"
+                and x.get("household_id") == r.get("household_id") and x.get("facility_id") == r.get("facility_id")]
+        return bool(same) and same[-1].get("payload") == r.get("payload") and r["kind"] in ("need", "closure_report", "facility_status")
 
     async def _respond(self, rep: dict, thread: dict) -> None:
         """YES / NO to the last offered instruction → confirm / reject, or the latest instruction if stale."""
@@ -43,7 +58,7 @@ class Intake:
         f = next((x for x in self.store.facilities() if x["id"] == thread["facility_id"]), None)
         return {k: f[k] for k in ("id", "name", "type", "state", "endurance_left_s") if k in f} if f else {}
 
-    async def on_inbound(self, msg: dict, role: str) -> Outcome | None:
+    async def _on_inbound(self, msg: dict, role: str) -> Outcome | None:
         thread = msg["thread"]
         key = thread_key(thread)
         pending_raw = self.store.kv_get(f"pending:{key}")
@@ -68,6 +83,8 @@ class Intake:
         replanned = False
         outs_before = sum(1 for m in self.store.thread_messages(key) if m["direction"] == "out")
         stored: list[dict] = []
+        dupes = [r for r in out.reports if self._duplicate(r)]
+        out.reports = [r for r in out.reports if r not in dupes]
         for r in out.reports:
             try:
                 rep, _ = await self.planner.submit_report({**r, "plan_version": msg.get("plan_version")}, replan=False)
@@ -82,8 +99,15 @@ class Intake:
             await self.messenger.hub.broadcast("message", msg, msg["t_s"])  # clients upsert by id
             facts = [r for r in stored if r["kind"] in ("need", "closure_report", "facility_status")]
             if facts:
-                await self.planner.replan(trigger="; ".join(self.planner._trigger(r) for r in facts))
+                try:
+                    await self.planner.replan(trigger="; ".join(self.planner._trigger(r) for r in facts))
+                except Exception:  # noqa: BLE001 - the report is stored (unresolved); tell them, keep serving
+                    log.exception("replan failed after %s", [r["id"] for r in facts])
+                    await self.messenger.send_message(thread, PLANNER_DOWN, self.store.meta().get("plan_version"))
+                    return out
                 replanned = True  # the plan hook already texted any changed instruction
+        if dupes and not stored:
+            replanned = True  # nothing new: answer with where they stand
         answered = any(r["kind"] in ("confirm", "reject") for r in stored)  # ack / latest already texted
         texted = sum(1 for m in self.store.thread_messages(key) if m["direction"] == "out") > outs_before
         version = self.store.meta().get("plan_version")

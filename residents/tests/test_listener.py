@@ -47,7 +47,7 @@ async def test_replayed_seq_is_skipped(store):
 
 
 async def test_handler_failure_does_not_block_the_stream(store, monkeypatch):
-    monkeypatch.setattr("residents.photon.asyncio.sleep", _no_sleep)
+    monkeypatch.setattr("residents.photon._backoff", _no_sleep)
     got = []
     async def on_message(i):
         if i.text == "bad":
