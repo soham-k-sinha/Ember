@@ -106,3 +106,11 @@ Files: engine/ember_engine/daytona/{pool,robust}.py, engine/ember_engine/cli.py,
 Run: uv run --project engine ember daytona-snapshot   # after any change to sim/models/allocator search/world/scenario
 Interfaces: D48. Soham: set `EMBER_LOCAL_POOL=1` in residents' tests (conftest) — otherwise `test_optimize_streams_points_then_plan` starts 8 real Daytona sandboxes on every run (or, before this fix, built a snapshot and hung). 101 residents tests pass with it.
 Status: done.
+
+## 2026-10-17 16:10 · taking over the web and scenario/demo lanes · branch aryaman/take-over-lanes · commit (this PR)
+What: added `web/`, `scenarios/`, `docs/DEMO.md`, `docs/QA.md`, `docs/devpost/` to Aryaman's lane in `.github/OWNERS.json` (and Cursor Agent's email to his authors so Arnav's commits can be brought in); CLAUDE.md ownership updated. Arnav's and Anshuman's lanes stay active.
+Files: .github/OWNERS.json, CLAUDE.md, docs/DECISIONS.md, docs/HANDOFF.md, docs/log/aryaman.md
+Run: AUTHOR=aryamangoenka BASE=origin/main HEAD=HEAD HEAD_REF=aryaman/x python3 .github/ownership.py
+Interfaces: none (process only, D49). Arnav/Anshuman: you can still push to your lanes; tell Aryaman before you do so we don't collide.
+Status: done.
+Next: bring Arnav's website (arnav/operator-ui) to main and fix it against the contracts; DEMO.md, QA.md, Devpost.

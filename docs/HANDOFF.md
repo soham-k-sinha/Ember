@@ -17,6 +17,8 @@ Last updated: 2026-10-16, Friday 23:00 (hacking started ~4 PM; venue closes 8 PM
   - **Assets** came from the cache fallback (D26). Rebuild once Overpass answers to get the live query.
   - The venv is Python 3.13 (the pin says 3.12); everything works on 3.13.
 
+**Lanes (D49):** Aryaman now also covers `web/` (Arnav) and `scenarios/` + demo/QA/Devpost (Anshuman); their lanes stay open if they return.
+
 ## Immediate next steps, in order
 1. **Hand-curate exits** (`build_town.py`). Several current exits are residential side streets that just cross the box edge (Gardner Terrace, President Terrace). Replace them with the real ones: Charles River bridges (River St, Western Ave, Anderson/JFK, Eliot), Soldiers Field Rd / Storrow both ways, Memorial Dr both ways, Mass Pike ramps, Cambridge St, N Harvard St, Mass Ave. Then re-run smoke + gate-a + fixtures.
 2. Rebuild with walk network + live assets when Overpass recovers: `rm engine/cache/layers/assets_*; uv run ember build`.
