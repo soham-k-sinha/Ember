@@ -52,7 +52,7 @@ function boundsOf(g: Graphics, x: number, y: number) {
   return { x0: x + b.minX, y0: y + b.minY, x1: x + b.maxX, y1: y + b.maxY };
 }
 
-function car(p: Projector, a: number, b: number, ang: number, color: number): Graphics {
+export function car(p: Projector, a: number, b: number, ang: number, color: number): Graphics {
   const [ox, oy] = p.iso(a, b);
   const g = new Graphics();
   // soft contact shadow, then body, cabin, glass

@@ -365,7 +365,8 @@ def cmd_playback(a):
         fx = ROOT / "contracts" / "fixtures"
         scn = load_scenario(ROOT / "scenarios" / "allston_flood_v1" / "scenario.json")
         for which, name in (("ember", "playback.fixture.json"), ("baseline", "playback.baseline.fixture.json")):
-            pb = playback(simulate(w, scn, _make_plan(w, scn, which, [])), which)
+            # the background traffic is the same for every plan: ship it once, with EMBER's replay
+            pb = playback(simulate(w, scn, _make_plan(w, scn, which, [])), which, traffic=which == "ember")
             (fx / name).write_text(json.dumps(pb, separators=(",", ":"), allow_nan=False))
             print(f"[playback] {which}: {len(pb['tracks'])} tracks, overflow {pb['metrics'].get('overflow_m3')} m³ → {fx / name}")
         return

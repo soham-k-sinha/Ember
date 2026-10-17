@@ -420,7 +420,7 @@ function Legend(props: {
         <p className="legend-crowd">
           <strong>{props.crowd.walking}</strong> walking · <strong>{props.crowd.sheltered}</strong> reached the shelter · <strong>{props.crowd.left}</strong> left the area
           {props.crowd.turnedBack > 0 ? <> · <strong>{props.crowd.turnedBack}</strong> turned back at water</> : null}
-          <span>Neighbours on foot, passers-by and the shelter crowd moving about are illustrative, not simulated.</span>
+          <span>Neighbours on foot, passers-by and the shelter crowd moving about are illustrative, not simulated. Background cars are a synthetic staged evacuation, simulated once; the vans drive through the same traffic.</span>
         </p>
       ) : null}
       {!props.playback ? <p className="legend-crowd"><span>No replay loaded: vehicles move between snapshots.</span></p> : null}
