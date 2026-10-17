@@ -315,6 +315,10 @@ const initial: Model = {
 
 export function App() {
   const [model, dispatch] = useReducer(reducer, initial);
+  if (import.meta.env.DEV) (window as unknown as { __clock?: (t: number, playing?: boolean) => void }).__clock = (t, playing = false) => {
+    dispatch({ type: "playing", playing });
+    dispatch({ type: "clock", t });
+  };
   const playback = model.playbacks[model.replay];
   const replaying = playback != null && playback.scenario_id === model.snapshot.scenario_id;
   // the picture at the clock: the replay over the base snapshot, or the snapshot itself

@@ -113,10 +113,10 @@ function water() {
   });
 }
 
-const ROAD_W: Record<string, number> = {
+export const ROAD_W: Record<string, number> = {
   motorway: 15, trunk: 13, primary: 12, secondary: 10, tertiary: 9, residential: 7.5, unclassified: 7, living_street: 6, service: 4.5, unknown: 5,
 };
-const FOOT = new Set(["footway", "cycleway", "pedestrian", "path", "steps", "track", "bridleway"]);
+export const FOOT = new Set(["footway", "cycleway", "pedestrian", "path", "steps", "track", "bridleway"]);
 const MARKED = new Set(["motorway", "trunk", "primary", "secondary", "tertiary"]);
 
 export type Lamp = { a: number; b: number };

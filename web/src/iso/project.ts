@@ -10,6 +10,7 @@ export const KZ = 1.22; // screen px per vertical metre (2:1 dimetric with a sli
 export type Projector = {
   origin: [number, number];
   toAB: (lon: number, lat: number) => [number, number];
+  fromAB: (a: number, b: number) => [number, number];
   iso: (a: number, b: number, z?: number) => [number, number];
   lonlat: (lon: number, lat: number, z?: number) => [number, number];
   depth: (lon: number, lat: number) => number;
@@ -30,6 +31,7 @@ export function projector(bbox: [number, number, number, number]): Projector {
   return {
     origin,
     toAB,
+    fromAB: (a, b) => [origin[0] + a / kx, origin[1] - b / ky],
     iso,
     lonlat: (lon, lat, z = 0) => {
       const [a, b] = toAB(lon, lat);

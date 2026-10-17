@@ -7,12 +7,13 @@
 import { useEffect, useRef } from "react";
 import { Application, Container, Graphics, Sprite, Text, type FederatedPointerEvent } from "pixi.js";
 import { loadDiorama, type Diorama } from "./data";
-import { LOOKS, RES, type Pose } from "./atlas";
+import { agentWorld, buildAgents, waitLonLat, type AgentWorld } from "./agents";
+import { Crowd } from "./crowd";
 import { clockLabel, lightAt, tint } from "./lighting";
-import { hashN, SKY_BG } from "./palette";
+import { SKY_BG } from "./palette";
 import { scenario, town } from "../fixtures";
-import { curb, householdColor, peopleCount, type LegendMode } from "../layers";
-import { cluster, crowd, walkersAt, type WalkerPlan } from "../people";
+import { householdColor, peopleCount, type LegendMode } from "../layers";
+import type { WalkerPlan } from "../people";
 import { pathAhead, type Playback } from "../playback";
 import type { Closure, FloodGeometry, Selection, StateFacility, StateResource, StateSnapshot } from "../types";
 import { edgePoint, projector, type Projector } from "./project";
@@ -58,8 +59,6 @@ const toHex = (c: [number, number, number]) => (c[0] << 16) | (c[1] << 8) | c[2]
 
 type Pill = { root: Container; bg: Graphics; text: Text; key: string; used: boolean };
 
-type Figure = { root: Container; body: Sprite; cloth: Sprite };
-
 type Ctx = {
   app: Application;
   data: Diorama;
@@ -70,8 +69,14 @@ type Ctx = {
   flood: Graphics;
   closed: Graphics;
   trails: Graphics;
-  decals: Graphics;
-  figures: Figure[];
+  decals: Graphics; // selection rings on the ground
+  marks: Container; // per-person ground marks (atlas sprites)
+  top: Graphics; // markers over heads
+  crowd: Crowd;
+  aw: AgentWorld;
+  awFor: Playback | null;
+  lastT: number;
+  lastNow: number;
   vehicles: Map<string, Graphics>;
   lightKey: string;
   fitS: number;
@@ -117,9 +122,13 @@ export function IsoView(props: IsoProps) {
       const closed = new Graphics();
       const trails = new Graphics();
       const decals = new Graphics();
-      dyn.addChild(flood, closed, trails, decals);
+      const marks = new Container();
+      dyn.addChild(flood, closed, trails, marks, decals);
       dyn.mask = scene.slabMask;
-      world.addChild(scene.slab, scene.ground, scene.shadow, scene.pools, scene.slabMask, dyn, scene.objects);
+      const top = new Graphics();
+      world.addChild(scene.slab, scene.ground, scene.shadow, scene.pools, scene.slabMask, dyn, scene.objects, top);
+      const crowd = new Crowd(scene.objects, marks, scene.atlas, p, scene.depthFor);
+      const aw = agentWorld(p, scene.insideBuilding, scene.onRoad, propsRef.current.playback);
       const overlay = new Graphics();
       const hits = new Container();
       const pillLayer = new Container();
@@ -130,7 +139,7 @@ export function IsoView(props: IsoProps) {
       const s = Math.min(app.screen.width / (b.width * 1.08), app.screen.height / (b.height * 1.12));
       const cam = { s, x: app.screen.width / 2 - (b.x + b.width / 2) * s, y: app.screen.height / 2 - (b.y + b.height / 2) * s };
       const ctx: Ctx = {
-        app, data, p, scene, world, dyn, flood, closed, trails, decals, figures: [], vehicles: new Map(), lightKey: "", fitS: s, focusKey: 0, target: null, overlay, hits, pills: new Map(), pillLayer,
+        app, data, p, scene, world, dyn, flood, closed, trails, decals, marks, top, crowd, aw, awFor: propsRef.current.playback, lastT: propsRef.current.t, lastNow: performance.now() / 1000, vehicles: new Map(), lightKey: "", fitS: s, focusKey: 0, target: null, overlay, hits, pills: new Map(), pillLayer,
         floodKey: null, closedKey: "", cam, drag: { on: false, moved: false, x: 0, y: 0 },
       };
       ctxRef.current = ctx;
@@ -162,8 +171,10 @@ export function IsoView(props: IsoProps) {
       };
       app.stage.on("pointerup", end);
       app.stage.on("pointerupoutside", end);
-      app.stage.on("pointertap", () => {
-        if (!ctx.drag.moved) propsRef.current.onSelect(null);
+      app.stage.on("pointertap", (e: FederatedPointerEvent) => {
+        if (ctx.drag.moved) return;
+        const household = ctx.crowd.pick(e.global.x, e.global.y, ctx.cam);
+        propsRef.current.onSelect(household != null ? { kind: "household", id: household } : null);
       });
       app.canvas.addEventListener(
         "wheel",
@@ -241,6 +252,8 @@ function frame(ctx: Ctx, props: IsoProps) {
   drawClosures(ctx, props);
   drawTrails(ctx, props, t);
   drawPeople(ctx, props, t, now);
+  ctx.lastT = t;
+  ctx.lastNow = now;
   drawVehicles(ctx, props, now);
   drawOverlay(ctx, props, now, pulse);
 }
@@ -399,89 +412,22 @@ function applyLight(ctx: Ctx, t: number) {
   ctx.flood.tint = tint([Math.min(1, L.world[0] * 0.5 + 0.5), Math.min(1, L.world[1] * 0.5 + 0.5), Math.min(1, L.world[2] * 0.4 + 0.6)]);
 }
 
-/** Where a household's people wait: toward their nearest street, but never more than 18 m from home. */
-function waitPoint(h: { lon: number; lat: number; node: number }): [number, number] {
-  const c = curb(h.lon, h.lat, h.node);
-  const dx = (c[0] - h.lon) * 82_000;
-  const dy = (c[1] - h.lat) * 111_000;
-  const d = Math.hypot(dx, dy);
-  if (d <= 18) return c;
-  const k = 18 / d;
-  return [h.lon + (c[0] - h.lon) * k, h.lat + (c[1] - h.lat) * k];
-}
-
-type FigureSpec = { lon: number; lat: number; color: number; look: number; pose: Pose; ring?: number; onTop?: boolean };
-
 function drawPeople(ctx: Ctx, props: IsoProps, t: number, now: number) {
-  const { p } = ctx;
-  const L = lightAt(t);
-  const peopleTint = tint(L.people);
-  const specs: FigureSpec[] = [];
-  // households waiting for help, at the curb (the engine's status colours their clothes)
-  for (const household of props.state.households) {
-    if (household.status === "picked_up" || household.status === "safe") continue;
-    if (!p.inside(household.lon, household.lat)) continue;
-    const c = toHex(householdColor(household, props.legend, t));
-    const n = Math.min(6, peopleCount(household));
-    const urgent = household.status === "needs" || household.status === "unknown";
-    cluster(waitPoint(household), n, household.household_id, 1.6).forEach(([lon, lat], i) => {
-      const wave = urgent && i === 0 && Math.floor(now * 1.6 + household.household_id) % 2 === 0;
-      specs.push({ lon, lat, color: c, look: (household.household_id + i) % LOOKS, pose: wave ? "wave" : "stand", ring: c, onTop: true });
-    });
+  if (ctx.awFor !== props.playback) {
+    ctx.awFor = props.playback;
+    ctx.aw = agentWorld(ctx.p, ctx.scene.insideBuilding, ctx.scene.onRoad, props.playback);
   }
-  // the shelter crowd (dropped off by the fleet)
-  const shelter = props.state.facilities.find((facility) => facility.type === "shelter");
-  if (shelter && p.inside(shelter.lon, shelter.lat)) {
-    const n = Math.min(80, shelter.people_on_site ?? 0);
-    crowd([shelter.lon, shelter.lat], n, 2.6).forEach(([lon, lat], i) => {
-      specs.push({ lon, lat, color: 0x3fbf7f, look: i % LOOKS, pose: Math.floor(now * 0.7 + i) % 9 === 0 ? "wave" : "stand" });
-    });
-  }
-  // neighbours on foot (illustrative)
-  if (props.walkers && props.showWalkers) {
-    let n = 0;
-    for (const pose of walkersAt(props.walkers, t, null)) {
-      if (n > 600) break;
-      if (!p.inside(pose.position[0], pose.position[1])) continue;
-      specs.push({ lon: pose.position[0], lat: pose.position[1], color: pose.walker.turnedBack ? 0xe08a4f : 0xb8c2d0, look: pose.walker.household % LOOKS, pose: pose.frame === "walk1" ? "walkA" : pose.frame === "walk2" ? "walkB" : "stand" });
-      n++;
-    }
-  }
-
-  // keep people legible when zoomed out (never smaller than ~10 px tall)
-  const figurePx = ctx.scene.atlas.figureM * 1.22 * ctx.cam.s;
-  const k = Math.max(1, 10 / figurePx);
-  const atlas = ctx.scene.atlas;
-  while (ctx.figures.length < specs.length) {
-    const root = new Container();
-    const body = new Sprite(atlas.person[0][0].tex);
-    const cloth = new Sprite(atlas.cloth[0].tex);
-    body.anchor.set(atlas.person[0][0].ax, atlas.person[0][0].ay);
-    cloth.anchor.set(atlas.cloth[0].ax, atlas.cloth[0].ay);
-    root.addChild(body, cloth);
-    ctx.scene.objects.addChild(root);
-    ctx.figures.push({ root, body, cloth });
-  }
-  const g = ctx.decals;
-  g.clear();
-  specs.forEach((spec, i) => {
-    const f = ctx.figures[i];
-    const poseIdx = ["stand", "walkA", "walkB", "wave"].indexOf(spec.pose);
-    f.body.texture = atlas.person[spec.look][poseIdx].tex;
-    f.cloth.texture = atlas.cloth[poseIdx].tex;
-    f.cloth.tint = spec.color;
-    f.body.tint = peopleTint;
-    const [a, b] = p.toAB(spec.lon, spec.lat);
-    const [x, y] = p.iso(a, b);
-    f.root.position.set(x, y);
-    f.root.scale.set((k / RES) * (hashN(i, 3) < 0.5 ? 1 : -1), k / RES);
-    // people waiting for help are the subject: never hidden behind a building
-    f.root.zIndex = spec.onTop ? 1e6 + a + b : a + b + 0.25;
-    f.root.visible = true;
-    if (spec.ring != null) g.ellipse(x, y, 0.75 * k, 0.37 * k).stroke({ width: 0.22 * k, color: spec.ring, alpha: 0.95 });
-    g.ellipse(x + 0.15 * k, y + 0.05 * k, 0.5 * k, 0.24 * k).fill({ color: 0x000000, alpha: 0.28 });
-  });
-  for (let i = specs.length; i < ctx.figures.length; i++) ctx.figures[i].root.visible = false;
+  // a seek (scrub, replay switch): no strides or springs carried across the jump
+  if (t < ctx.lastT || t - ctx.lastT > 600) ctx.crowd.reset();
+  const dtS = Math.min(0.1, Math.max(0, now - ctx.lastNow));
+  const agents = buildAgents({ w: ctx.aw, state: props.state, t, legend: props.legend, walkers: props.walkers, showWalkers: props.showWalkers, now });
+  const { cam, app } = ctx;
+  const view = { x0: -cam.x / cam.s, y0: -cam.y / cam.s, x1: (app.screen.width - cam.x) / cam.s, y1: (app.screen.height - cam.y) / cam.s };
+  ctx.crowd.update(agents, dtS, cam.s, view, tint(lightAt(t).people));
+  ctx.decals.clear();
+  ctx.top.clear();
+  const sel = props.selection?.kind === "household" ? props.selection.id : props.follow?.kind === "household" ? props.follow.id : null;
+  ctx.crowd.drawSelection(ctx.decals, ctx.top, sel, cam.s, now);
 }
 
 /** Oriented vehicle seen in iso: footprint L×W (m), height H, light bar and headlights glowing after dusk. */
@@ -570,7 +516,7 @@ function drawVehicles(ctx: Ctx, props: IsoProps, now: number) {
     const [ox, oy] = ctx.p.iso(a, b);
     g.position.set(ox, oy);
     vehicle(g, ctx.p, r, now, r.id === sel, lights, ox, oy);
-    g.zIndex = a + b + 1.5;
+    g.zIndex = ctx.scene.depthFor(a, b, ox, oy, 4, 4);
     g.visible = true;
   }
 }
@@ -708,9 +654,9 @@ function drawOverlay(ctx: Ctx, props: IsoProps, _now: number, pulse: number) {
     const lost = household.status === "unreached";
     if (!waiting && !lost && !(props.selection?.kind === "household" && props.selection.id === household.household_id)) continue;
     const color = toHex(householdColor(household, props.legend, props.t));
-    const [gx, gy] = toScreen(ctx, ...p.lonlat(...waitPoint(household)));
+    const [gx, gy] = toScreen(ctx, ...p.lonlat(...waitLonLat(ctx.aw, household)));
     const urgent = household.status === "needs" || household.status === "unknown";
-    if (urgent) g.ellipse(gx, gy, (14 + 10 * pulse) * Math.max(0.6, ctx.cam.s * 0.5), (7 + 5 * pulse) * Math.max(0.6, ctx.cam.s * 0.5)).stroke({ width: 2, color, alpha: 0.85 - 0.5 * pulse });
+    if (urgent) g.ellipse(gx, gy, (14 + 10 * pulse) * Math.min(1.6, Math.max(0.6, ctx.cam.s * 0.5)), (7 + 5 * pulse) * Math.min(1.6, Math.max(0.6, ctx.cam.s * 0.5))).stroke({ width: 2, color, alpha: 0.85 - 0.5 * pulse });
     const py = gy - 30;
     g.moveTo(gx, gy - 4).lineTo(gx, py + 9).stroke({ width: 1.5, color, alpha: 0.9 });
     g.circle(gx, py, 10).fill(household.judge ? 0xffc542 : color).stroke({ width: 2, color: 0xffffff });
