@@ -58,10 +58,14 @@ def test_yes_confirms_acks_and_sticks(cc):
 
 def test_no_rejects_replans_and_never_reoffers_that_vehicle(cc):
     offer = outs(cc)[-1]
-    text(cc, "no thanks")
+    text(cc, "no thanks")  # the only wheelchair-accessible vehicle: EMBER makes sure first (D57)
+    assert cc.get("/state").json()["plan_version"] == 2 and judge_asg(cc)["status"] == "offered"
+    assert outs(cc)[-1]["text"].startswith("[EMBER drill] Accessible Van 3 is the only wheelchair-accessible vehicle")
+    assert "Reply YES to keep it, or NO to decline anyway" in outs(cc)[-1]["text"]
+    text(cc, "no thanks")  # declined anyway
     st = cc.get("/state").json()
     assert st["plan_version"] == 3                         # reject → replan
-    acks = [m["text"] for m in outs(cc)[1:]]
+    acks = [m["text"] for m in outs(cc)[2:]]
     assert acks[0].startswith("[EMBER drill] Understood, we won't send Accessible Van 3")
     assert not any("Accessible Van 3 will pick you up" in t for t in acks)     # never re-offered
     van3 = [a for a in st["plan"]["assignments"] if a["target"] == JT and a["resource_id"] == "van-3"]

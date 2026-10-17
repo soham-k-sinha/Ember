@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 
+from .briefing import Briefing
 from .db import Store, thread_key
 from .messaging import Messenger
 from .threads import phone_thread
@@ -34,6 +35,7 @@ class Outbound:
     def __init__(self, store: Store, messenger: Messenger, bridge=None):
         self.store, self.messenger = store, messenger
         self.bridge = bridge  # for the pickup corner's name (engine_bridge.EngineBridge); optional
+        self.briefing = Briefing(store, bridge) if bridge is not None else None
 
     def _names(self) -> tuple[dict, dict]:
         res = {r["id"]: r for r in self.store.snapshot()["resources"]}
@@ -69,11 +71,15 @@ class Outbound:
             elif self.bridge is not None and self.bridge.is_assisted(thread["household_id"]):
                 where = "at " + self.bridge.places.corner_label(self.bridge.household_node(thread["household_id"]))
             out_by = h.get("deadline_s")
+            why = self.briefing.why(a, thread) if self.briefing is not None else ""
             return (f"{who} will pick you up {where} {_mins(a['eta_s'], now)}"
                     + (f" and take you to {drop}" if drop else "")
                     + (f". Plan to be out within about {round((out_by - now) / 60)} min, before the water reaches your street"
                        if out_by is not None and out_by > now else "")
-                    + f". Reply YES to confirm, or tell us what changed. (plan v{version})")
+                    + "." + (f" {why}" if why else "")
+                    + (" Your street isn't forecast to flood, so this is a precaution; reply NO if you'd rather stay put."
+                       if out_by is None and self.bridge is not None else "")
+                    + f" Reply YES to confirm, or tell us what changed. (plan v{version})")
         return (f"{who} is on its way to you, arriving {_mins(a['eta_s'], now)}. "
                 f"Reply YES to confirm someone will meet it. (plan v{version})")
 
@@ -215,7 +221,8 @@ class Outbound:
                         f"changes. (plan v{v})")
         if a is not None:
             who = res.get(a["resource_id"], {}).get("name", a["resource_id"])
-            if a["status"] == "confirmed":
+            stored = next((x["status"] for x in (self.store.current_plan() or {}).get("assignments", []) if x["id"] == a["id"]), None)
+            if a["status"] == "confirmed" or stored == "confirmed":  # the view shows sim progress (en_route…)
                 return f"Your pickup is confirmed: {who} is arriving {_mins(a['eta_s'], now)}. (plan v{v})" \
                     if "household_id" in thread else f"Confirmed: {who} is arriving {_mins(a['eta_s'], now)}. (plan v{v})"
             if "household_id" in thread:
@@ -237,7 +244,18 @@ class Outbound:
                 return (f"We have your details ({need}). No suitable vehicle is free yet: {blocked['blocked_by']}. "
                         + (f"Until one is: {' or '.join(alts)}. " if alts else "")
                         + f"We'll text you as soon as one is assigned. (plan v{v})")
-            return f"We have your details ({need}) and are arranging a pickup; we'll text you. (plan v{v})"
+            if self.briefing is not None:
+                fits = self.briefing.fits(thread)
+                declined = [r for r in fits if r["id"] in self.rejected(key)]
+                if fits and len(declined) == len(fits):
+                    names = " and ".join(r["name"] for r in declined)
+                    return (f"You declined {names}, the only {'vehicle' if len(declined) == 1 else 'vehicles'} that can "
+                            f"take {need}, so no pickup is scheduled. Reply YES if you want {declined[0]['name']} "
+                            f"after all. (plan v{v})")
+                if not fits:
+                    return f"We have your details ({need}). No vehicle in the fleet fits that; a coordinator has been told. (plan v{v})"
+            return (f"We have your details ({need}). No vehicle is scheduled for you in the current plan yet; "
+                    f"we'll text you as soon as one is. (plan v{v})")
         if blocked:
             return f"No generator is free for you right now: {blocked['blocked_by']}. We'll text you if that changes. (plan v{v})"
         f = next((x for x in self.store.facilities() if x["id"] == thread.get("facility_id")), {})

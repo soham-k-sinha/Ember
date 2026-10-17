@@ -44,6 +44,10 @@ What happens, all by text:
 5. **The clock moves one step at a time:** when everyone EMBER is waiting on has replied DONE, the sim clock
    jumps to the next event (the vehicle arriving, the pickup, the drop-off). `--manual-clock` turns that off.
 
+Ask anything: "how long?", "where do we go?", "are there other vans?", "is anyone near me?", "what should we
+bring?" are answered from the plan (which vehicles fit you and what each is doing, who's ahead of you on yours,
+other households near you). Anything else goes to the coordinators. Offers say why you got that vehicle and who
+is picked up before you. Saying NO to the only vehicle that can take you asks you to confirm first.
 Anything else you text goes through the same path as always: "my dad uses a wheelchair" or "the corner is
 flooded" → replan → changed instruction; "NO" → another vehicle; questions → "passed to the coordinators".
 Console: `status`, `next` (jump to the next step), `+10` (minutes), `@r1 <text>` (text as r1), `close <street>
