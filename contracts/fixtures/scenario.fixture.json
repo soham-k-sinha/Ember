@@ -1,5 +1,5 @@
 {
- "version": "0.1",
+ "version": "0.2",
  "scenario_id": "example_flood",
  "name": "Example flood around the Treehouse (contract fixture)",
  "description": "Engine-generated example for the scenario contract. All numbers are placeholders; the real scenario is scenarios/allston_flood_v1.",
@@ -13,6 +13,7 @@
  ],
  "t_end_s": 10800,
  "tick_s": 60,
+ "background_traffic": {"rule": "staged_evacuation", "zone_buffer_m": 600, "lead_s": 900, "compliance": 0.85, "shadow_share": 0.3, "mobilization_median_s": 480, "mobilization_sigma": 0.5, "seed": 7},
  "deadline_margin_s": 900,
  "district": {
   "name": "Treehouse district (example)",

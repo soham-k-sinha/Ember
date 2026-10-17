@@ -90,6 +90,15 @@ export type Playback = {
     metrics?: PlanMetrics;
   };
   metrics: PlanMetrics;
+  /** v0.2 (D63): synthetic background cars from the scenario's staged evacuation */
+  traffic?: {
+    synthetic: true;
+    rule: string;
+    config?: Record<string, unknown>;
+    bin_s?: number;
+    metrics?: Record<string, number>;
+    cars: Array<{ id: string; path: LngLat[]; t: number[] }>;
+  };
 };
 
 export function asPlayback(value: unknown): Playback | null {

@@ -1,6 +1,8 @@
 """Resource movement on the closed-edge-aware graph (TECHNICAL.md §3.3).
 
-A mover drives edge by edge at free-flow speed (× speed_factor, ÷ travel-time multiplier). At every
+A mover drives edge by edge at free-flow speed (× speed_factor, ÷ travel-time multiplier), slowed by the
+scenario's background traffic when it has one (traffic_bg: a per-5-minute, per-road multiplier, looked up;
+routes are chosen on those congested times, one cached routing tree per bin). At every
 node it checks the road ahead: if the next edge has closed it re-routes from there; with no open
 route it stalls (and retries every tick; stall time counts as delay). If water closes the edge it
 is on, it turns back to the node it came from. Fuel burns per km; an empty tank means out of service.
@@ -22,6 +24,8 @@ class Mover:
     fuel_l: float = float("inf")
     fuel_l_per_km: float = 0.0
     tt_mult: float = 1.0              # perturbation: travel times × this
+    traffic: np.ndarray | None = None # background traffic: travel-time multiplier per (5-min bin, edge)
+    t_now: float = 0.0                # sim time, set by the simulator each tick (picks the traffic bin)
     dest: int | None = field(default=None)
     route: list = field(default_factory=list)
     edge: int = -1                    # edge being traversed (-1 = at a node)
@@ -41,11 +45,21 @@ class Mover:
     def at_dest(self) -> bool:
         return self.edge < 0 and self.dest is not None and self.node == self.dest
 
+    def _bin(self) -> int:
+        return int(min(max(self.t_now, 0.0) // 300.0, len(self.traffic) - 1))
+
     def _edge_s(self, e: int) -> float:
-        return float(self.world.edge_tt[e]) * self.tt_mult / self.speed_factor
+        jam = float(self.traffic[self._bin(), e]) if self.traffic is not None else 1.0
+        return float(self.world.edge_tt[e]) * jam * self.tt_mult / self.speed_factor
+
+    def _route(self, src: int, closed: np.ndarray):
+        if self.traffic is None:
+            return self.world.route(src, self.dest, closed)
+        b = self._bin()
+        return self.world.route(src, self.dest, closed, weight=self.world.edge_tt * self.traffic[b], weight_key=("traffic", id(self.traffic), b))
 
     def _plan(self, closed: np.ndarray) -> bool:
-        path, _ = self.world.route(self.node, self.dest, closed)
+        path, _ = self._route(self.node, closed)
         self.route = list(path)
         return bool(path) or self.node == self.dest
 
@@ -54,7 +68,7 @@ class Mover:
         if self.dest is None:
             return 0.0
         start = self.toward if self.edge >= 0 else self.node
-        _, tt = self.world.route(start, self.dest, closed)
+        _, tt = self._route(start, closed)
         return (self.rem_s if self.edge >= 0 else 0.0) + tt * self.tt_mult / self.speed_factor
 
     def advance(self, dt: float, closed: np.ndarray) -> str:

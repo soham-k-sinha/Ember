@@ -196,28 +196,30 @@ class World:
     def _closed_key(closed) -> bytes:
         return b"" if closed is None or not closed.any() else np.packbits(closed).tobytes()
 
-    def _graph_cached(self, key: bytes, closed):
+    def _graph_cached(self, key: bytes, closed, weight=None):
         cache = self.__dict__.setdefault("_graph_cache", {})
         if key not in cache:
             if len(cache) > 256:
                 cache.clear()
-            g, _, ei = self._graph(closed)
+            g, _, ei = self._graph(closed, weight)
             cache[key] = (g, {(int(u), int(v)): int(e) for u, v, e in zip(self.edge_u[ei], self.edge_v[ei], ei)})
         return cache[key]
 
-    def times_from(self, src: int, closed: np.ndarray | None = None, reverse: bool = False) -> np.ndarray:
-        """Free-flow seconds from node src to every node (reverse=True: from every node to src)."""
-        g, _, _ = self._graph(closed, reverse=reverse)
+    def times_from(self, src: int, closed: np.ndarray | None = None, reverse: bool = False,
+                   weight: np.ndarray | None = None) -> np.ndarray:
+        """Seconds from node src to every node (reverse=True: from every node to src); free-flow unless `weight`."""
+        g, _, _ = self._graph(closed, weight, reverse=reverse)
         return dijkstra(g, directed=True, indices=src)
 
     def route(self, src: int, dst: int, closed: np.ndarray | None = None,
-              weight: np.ndarray | None = None) -> tuple[list[int], float]:
-        """Shortest open route between node indices: (edge indices in order, seconds). ([], inf) if none."""
+              weight: np.ndarray | None = None, weight_key: object = None) -> tuple[list[int], float]:
+        """Shortest open route between node indices: (edge indices in order, seconds). ([], inf) if none.
+        A `weight` with a `weight_key` (e.g. one 5-minute traffic bin) is cached like free flow."""
         if src == dst:
             return [], 0.0
-        if weight is None:   # cached per closure pattern and source (closures change only a few times per run)
-            key = self._closed_key(closed)
-            g, best = self._graph_cached(key, closed)
+        if weight is None or weight_key is not None:   # cached per closure pattern (+ weight key) and source
+            key = self._closed_key(closed) + (b"" if weight_key is None else b"|" + repr(weight_key).encode())
+            g, best = self._graph_cached(key, closed, weight)
             tk = (key, int(src))
             cache = self.__dict__.setdefault("_tree_cache", {})
             if tk not in cache:

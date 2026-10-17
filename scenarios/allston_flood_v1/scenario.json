@@ -1,5 +1,5 @@
 {
- "version": "0.1",
+ "version": "0.2",
  "scenario_id": "allston_flood_v1",
  "name": "Charles River flood, Allston-Riverside reach (drill)",
  "description": "A 3-hour Charles River flood in the reach between the Anderson and River St bridges, next to the David Rubenstein Treehouse. Real roads, facilities and household ids; flood extents, timing, fleet and needs are synthetic (assumptions.md); real facts in sources.md.",
@@ -14,6 +14,7 @@
  ],
  "t_end_s": 14400,
  "tick_s": 60,
+ "background_traffic": {"rule": "staged_evacuation", "zone_buffer_m": 600, "lead_s": 900, "compliance": 0.85, "shadow_share": 0.3, "mobilization_median_s": 480, "mobilization_sigma": 0.5, "seed": 7},
  "deadline_margin_s": 900,
  "district": {
   "name": "Allston-Riverside riverfront",

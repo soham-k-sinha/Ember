@@ -21,7 +21,7 @@ import math
 
 import numpy as np
 
-VERSION = "0.1"
+VERSION = "0.2"
 _DEG = 5                      # 5 decimals of a degree ≈ 1 m
 _MATCH = 0.35                 # rebuilt path must be within 35 % (+60 m) of the km the Mover logged that tick
 
@@ -154,8 +154,8 @@ def _target(a: dict) -> dict:
     return {"household_id": int(t["household_id"])} if "household_id" in t else dict(t)
 
 
-def playback(res, planner: str | None = None) -> dict:
-    """The run as contracts/playback.schema.json v0.1."""
+def playback(res, planner: str | None = None, traffic: bool = True) -> dict:
+    """The run as contracts/playback.schema.json v0.2 (v0.2: optional background `traffic`, D63)."""
     w, scn, plan, T = res.world, res.scenario, res.plan, res.timeline
     ts = [float(t) for t in T["t_s"]]
     names = {r["id"]: r for r in scn["resources"]}
@@ -206,4 +206,30 @@ def playback(res, planner: str | None = None) -> dict:
             "metrics": plan.get("metrics", {}),
         },
         "metrics": dict(res.metrics),
+        **({"traffic": cars} if traffic and (cars := _traffic(w, scn)) else {}),
     })
+
+
+def _traffic(w, scn: dict) -> dict | None:
+    """Sampled background cars for the map (synthetic, D63), cached on the world per scenario."""
+    from . import traffic_bg
+    cfg = traffic_bg.config(scn)
+    if cfg is None:
+        return None
+    key = (scn.get("scenario_id"), repr(sorted(cfg.items())))
+    cache = w.__dict__.setdefault("_traffic_trails", {})
+    if key not in cache:
+        r = traffic_bg.run(w, scn, n_trails=3000)
+        cars = []
+        for c in r["trails"]:
+            pts, ts = c["path"], c["t"]
+            moves = [i for i in range(1, len(pts)) if pts[i] != pts[i - 1]]
+            if not moves:
+                continue
+            # on the road only: from just before it first moves to where it stops for good (exit / exposure)
+            i0, i1 = moves[0] - 1, moves[-1]
+            cars.append({"id": str(c["id"]), "path": [[round(x, 5), round(y, 5)] for x, y in pts[i0:i1 + 1]],
+                         "t": [round(float(t)) for t in ts[i0:i1 + 1]]})
+        cache[key] = {"synthetic": True, "rule": cfg["rule"], "config": cfg, "bin_s": r["bin_s"],
+                      "metrics": r["metrics"], "cars": cars}
+    return cache[key]

@@ -99,14 +99,22 @@ class Context:
         return out
 
     # ---------- travel ----------
+    def _weight(self):
+        """Road times the planner estimates with: free flow, or the background traffic at t_now (D63)."""
+        if not hasattr(self, "_w"):
+            from ..traffic_bg import bin_of, table
+            mult = table(self.world, self.scn)
+            self._w = None if mult is None else self.world.edge_tt * mult[bin_of(self.t_now, mult)]
+        return self._w
+
     def tf(self, node: int) -> np.ndarray:
         if node not in self._tf:
-            self._tf[node] = self.world.times_from(node, self.closed)
+            self._tf[node] = self.world.times_from(node, self.closed, weight=self._weight())
         return self._tf[node]
 
     def tb(self, node: int) -> np.ndarray:
         if node not in self._tb:
-            self._tb[node] = self.world.times_from(node, self.closed, reverse=True)
+            self._tb[node] = self.world.times_from(node, self.closed, reverse=True, weight=self._weight())
         return self._tb[node]
 
     def travel(self, spec: dict, a: int, b: int) -> float:

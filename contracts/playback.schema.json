@@ -11,7 +11,7 @@
     "changes": {"type": "array", "items": {"$ref": "#/$defs/change"}, "minItems": 1}
   },
   "properties": {
-    "version": {"const": "0.1"},
+    "version": {"enum": ["0.1", "0.2"]},
     "scenario_id": {"type": "string"},
     "planner": {"type": "string", "description": "ember | baseline | example"},
     "plan_version": {"type": ["integer", "null"]},
@@ -100,6 +100,20 @@
       "description": "The plan that was simulated, trimmed to what the map shows (assignments with rationale, unresolved, info requests, metrics).",
       "properties": {"assignments": {"type": "array", "items": {"type": "object", "required": ["id", "resource_id", "task", "target"]}}}
     },
-    "metrics": {"type": "object"}
+    "metrics": {"type": "object"},
+    "traffic": {
+      "type": "object",
+      "description": "v0.2 (D63): synthetic background cars from the scenario's staged evacuation, simulated once by queue_traffic. A sample of cars (path along roads with timestamps, holding still while queued). The same run gives the planner its per-road slowdown table.",
+      "required": ["synthetic", "rule", "cars"],
+      "properties": {
+        "synthetic": {"const": true},
+        "rule": {"type": "string"},
+        "config": {"type": "object"},
+        "bin_s": {"type": "number"},
+        "metrics": {"type": "object"},
+        "cars": {"type": "array", "items": {"type": "object", "required": ["id", "path", "t"],
+          "properties": {"id": {"type": "string"}, "path": {"type": "array", "items": {"$ref": "#/$defs/lonlat"}}, "t": {"type": "array", "items": {"type": "number"}}}}}
+      }
+    }
   }
 }

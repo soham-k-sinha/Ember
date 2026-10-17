@@ -143,6 +143,8 @@ def simulate(world, scn: dict, plan: dict, reports=(), perturbation: dict | None
     dt = float(dt or scn.get("tick_s", 60.0))
     t_end = float(t_end if t_end is not None else scn["t_end_s"])
     tt_mult = float(pert.get("travel_time_mult", 1.0))
+    from ..traffic_bg import table as traffic_table
+    traffic = traffic_table(world, scn)   # None unless the scenario has background traffic (D63)
 
     # ---------- hazard: closed mask per keyframe (latest keyframe ≤ t applies) ----------
     frames, kf_t, kf_mask = _flood_masks(world, scn)
@@ -197,7 +199,7 @@ def simulate(world, scn: dict, plan: dict, reports=(), perturbation: dict | None
         res[x["id"]] = {"spec": x, "phase": "idle", "cur": None, "timer": 0.0, "on_board": 0, "failed": False, "aboard": [],
                         "mv": Mover(world, x["id"], start, speed_factor=float(x.get("speed_factor", 1.0)),
                                     fuel_l=float(x.get("fuel_l", float("inf"))), fuel_l_per_km=float(x.get("fuel_l_per_km", 0.0)),
-                                    tt_mult=tt_mult)}
+                                    tt_mult=tt_mult, traffic=traffic)}
     fail = pert.get("resource_failure")   # {"resource_id": ..., "t_s": ...}
 
     def to_dropoff(r, t, closed):
@@ -229,7 +231,13 @@ def simulate(world, scn: dict, plan: dict, reports=(), perturbation: dict | None
             return None
         if need["people"] + r["on_board"] > spec.get("capacity_people", 0):
             return None
-        secs = world.route(r["mv"].node, h["node"], closed)[1] / float(spec.get("speed_factor", 1.0))
+        here = r["mv"].node
+        if traffic is not None:
+            tbin = r["mv"]._bin()
+            secs = world.route(here, h["node"], closed, weight=world.edge_tt * traffic[tbin], weight_key=("traffic", id(traffic), tbin))[1]
+        else:
+            secs = world.route(here, h["node"], closed)[1]
+        secs /= float(spec.get("speed_factor", 1.0))
         return b if secs <= POOL_DETOUR_S else None
 
     events: list[dict] = []
@@ -286,6 +294,7 @@ def simulate(world, scn: dict, plan: dict, reports=(), perturbation: dict | None
             if r["failed"]:
                 continue
             spec, mv = r["spec"], r["mv"]
+            mv.t_now = t
             cur = r["cur"]
             if cur is not None and cut_at(cur) is not None and cut_at(cur) <= t \
                     and r["phase"] in ("to_target", "service", "working") and r["on_board"] == 0:
