@@ -14,15 +14,16 @@ from .scenario import CONTRACTS
 
 
 def example_state(town: dict, scn: dict, t_s: float = 4800.0) -> dict:
-    from .sim import example_plan, simulate
+    from .allocator.rolling import run_ember
+    from .sim import simulate
     from .world import World
 
     w = World.from_dict(town)
-    plan = example_plan(w, scn)
+    _, versions = run_ember(w, scn)
+    plan = [v for v in versions if v["created_at_t_s"] <= t_s][-1]   # the plan in effect at t_s
     st = simulate(w, scn, plan).state_at(t_s)
     st["source"] = "engine-example"
-    st["synthetic"] = ["plan from the example planner (dependency-first protect + deadline-ordered greedy), not the allocator",
-                       "messages are examples of what the backend sends"] + st["synthetic"]
+    st["synthetic"] = ["messages are examples of what the backend sends"] + st["synthetic"]
     judge = next(h for h in st["households"] if h["judge"])
     st["messages"] = [{"id": "m-1", "thread": {"household_id": judge["household_id"]}, "direction": "out", "t_s": 60.0,
                        "plan_version": st["plan_version"], "assignment_id": None, "report_id": None,

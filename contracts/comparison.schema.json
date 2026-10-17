@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ember/comparison.schema.json",
+  "title": "Ember outcome comparison",
+  "description": "Baseline vs EMBER on the same scenario, fleet, reports and paired perturbation seeds (`ember compare`). The web's comparison panel renders `metrics` (one row each) and `headline`; sentences are computed and say plainly when EMBER is worse.",
+  "type": "object",
+  "required": ["version", "scenario_id", "seeds", "perturbation_ranges", "plans", "nominal", "per_seed", "metrics", "headline", "notes"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {"const": "0.1"},
+    "scenario_id": {"type": "string"},
+    "seeds": {"type": "array", "items": {"type": "integer"}},
+    "perturbation_ranges": {"type": "object", "description": "factor → [low, high] uniform range (synthetic stress factors)",
+                            "additionalProperties": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}},
+    "plans": {
+      "type": "object", "required": ["baseline", "ember"],
+      "properties": {
+        "baseline": {"type": "object", "required": ["planner", "assignments"], "properties": {"planner": {"const": "baseline"}, "assignments": {"type": "integer"}, "rule": {"type": "string"}}},
+        "ember": {"type": "object", "required": ["planner", "assignments"], "properties": {
+          "planner": {"const": "ember"}, "assignments": {"type": "integer"},
+          "versions": {"type": "array", "description": "The plan-version timeline (initial plan + one replan per report).",
+                       "items": {"type": "object", "required": ["version", "t_s", "trigger"], "properties": {
+                         "version": {"type": "integer"}, "t_s": {"type": "number"}, "trigger": {"type": "string"},
+                         "changes": {"type": "integer"}, "wall_s": {"type": "number"}}}}}}
+      }
+    },
+    "nominal": {"type": "object", "required": ["baseline", "ember"], "description": "Metrics with no perturbation.",
+                "properties": {"baseline": {"$ref": "#/$defs/metrics"}, "ember": {"$ref": "#/$defs/metrics"}}},
+    "per_seed": {
+      "type": "array",
+      "items": {"type": "object", "required": ["seed", "perturbation", "baseline", "ember"], "additionalProperties": false,
+                "properties": {"seed": {"type": "integer"}, "perturbation": {"type": "object"},
+                               "baseline": {"$ref": "#/$defs/metrics"}, "ember": {"$ref": "#/$defs/metrics"}}}
+    },
+    "metrics": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["metric", "label", "better", "unit", "baseline_mean", "ember_mean", "diff_mean", "diff_min", "diff_max", "ember_better_seeds", "ember_worse_seeds", "ties", "sentence"],
+        "properties": {
+          "metric": {"type": "string"}, "label": {"type": "string"}, "better": {"enum": ["higher", "lower"]}, "unit": {"type": "string"},
+          "baseline_mean": {"type": "number"}, "ember_mean": {"type": "number"},
+          "diff_mean": {"type": "number", "description": "EMBER − baseline"}, "diff_min": {"type": "number"}, "diff_max": {"type": "number"},
+          "ember_better_seeds": {"type": "integer"}, "ember_worse_seeds": {"type": "integer"}, "ties": {"type": "integer"},
+          "sentence": {"type": "string"}
+        }
+      }
+    },
+    "headline": {"type": "array", "items": {"type": "string"}},
+    "notes": {"type": "array", "items": {"type": "string"}},
+    "wall_s": {"type": "number"}
+  },
+  "$defs": {
+    "metrics": {"type": "object", "required": ["people_reached_before_deadline", "people_unreached", "overflow_m3"],
+                "description": "Plan metrics (state.schema.json $defs/plan_metrics).",
+                "properties": {"people_reached_before_deadline": {"type": "integer"}, "people_unreached": {"type": "integer"}, "overflow_m3": {"type": "number"}}}
+  }
+}

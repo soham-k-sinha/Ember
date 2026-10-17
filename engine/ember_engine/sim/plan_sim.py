@@ -41,6 +41,7 @@ class Outcome:
     arrive_t: float | None = None
     complete_t: float | None = None    # rescue: drop-off; protect: connected; clear: reopened
     pickup_t: float | None = None
+    end_t: float | None = None         # when it stopped (done, infeasible, abandoned, cancelled)
     deadline_s: float | None = None
     met_deadline: bool | None = None
     people: int = 0
@@ -73,6 +74,23 @@ class SimResult:
         return snapshot(self, t_s)
 
 
+def _flood_masks(world, scn: dict):
+    """(frames, keyframe times, closed-edge mask per keyframe), cached on the world per scenario keyframe list:
+    the allocator simulates the same scenario hundreds of times."""
+    import shapely
+    kfs = scn["hazard"].get("keyframes", [])
+    key = (scn.get("scenario_id"), id(kfs), len(kfs), tuple(k["t_s"] for k in kfs))
+    cache = world.__dict__.setdefault("_flood_cache", {})
+    if key not in cache:
+        if len(cache) > 32:
+            cache.clear()
+        frames = flood_keyframes(scn, world)
+        lines = world.edge_lines()
+        cache[key] = (frames, np.array([t for t, _ in frames]) if frames else np.zeros(0),
+                      [shapely.intersects(g, lines) if not g.is_empty else np.zeros(world.n_edges, bool) for _, g in frames])
+    return cache[key]
+
+
 def _report_events(scn: dict, reports, delay_s: float) -> list[dict]:
     """Scripted scenario reports + live reports (report.schema) → one sorted event list."""
     ev = []
@@ -103,18 +121,15 @@ def _report_events(scn: dict, reports, delay_s: float) -> list[dict]:
 
 
 def simulate(world, scn: dict, plan: dict, reports=(), perturbation: dict | None = None,
-             t0: float = 0.0, t_end: float | None = None, dt: float | None = None) -> SimResult:
+             t0: float = 0.0, t_end: float | None = None, dt: float | None = None, record: bool = True) -> SimResult:
+    """record=False skips the per-tick replay (state_at unavailable): use it for candidate scoring."""
     pert = perturbation or {}
     dt = float(dt or scn.get("tick_s", 60.0))
     t_end = float(t_end if t_end is not None else scn["t_end_s"])
     tt_mult = float(pert.get("travel_time_mult", 1.0))
 
     # ---------- hazard: closed mask per keyframe (latest keyframe ≤ t applies) ----------
-    import shapely
-    frames = flood_keyframes(scn, world)
-    lines = world.edge_lines()
-    kf_t = np.array([t for t, _ in frames]) if frames else np.zeros(0)
-    kf_mask = [shapely.intersects(g, lines) if not g.is_empty else np.zeros(world.n_edges, bool) for _, g in frames]
+    frames, kf_t, kf_mask = _flood_masks(world, scn)
     report_closed = np.zeros(world.n_edges, dtype=bool)
     extra = [(float(t), list(e)) for t, e in pert.get("extra_closures", [])]
 
@@ -137,7 +152,11 @@ def simulate(world, scn: dict, plan: dict, reports=(), perturbation: dict | None
     on_site = {k: 0 for k, f in fac.items() if f["type"] in ("response_base", "shelter")}
 
     # ---------- households ----------
-    dl = deadlines(scn, world, frames)["households"]
+    dl_key = ("dl",) + (scn.get("scenario_id"), id(scn["hazard"].get("keyframes", [])), float(scn.get("deadline_margin_s", 900)))
+    dcache = world.__dict__.setdefault("_flood_cache", {})
+    if dl_key not in dcache:
+        dcache[dl_key] = deadlines(scn, world, frames)["households"]
+    dl = dcache[dl_key]
     rows = {int(h): i for i, h in enumerate(world.hh_id)}
     hh = {}
     for h in scn["households"]:
@@ -178,6 +197,7 @@ def simulate(world, scn: dict, plan: dict, reports=(), perturbation: dict | None
 
     def finish(o: Outcome, status: str, t: float, reason: str = ""):
         o.status, o.reason = status, reason
+        o.end_t = t
         if status == "done" and o.complete_t is None:
             o.complete_t = t
         events.append({"t_s": t, "kind": f"assignment_{status}", "assignment_id": o.assignment_id, "resource_id": o.resource_id,
@@ -218,7 +238,21 @@ def simulate(world, scn: dict, plan: dict, reports=(), perturbation: dict | None
             if r["failed"]:
                 continue
             spec, mv = r["spec"], r["mv"]
-            if r["phase"] == "idle" and queues[rid]:
+            cur = r["cur"]
+            if cur is not None and cur.get("cancelled_at_t_s") is not None and float(cur["cancelled_at_t_s"]) <= t \
+                    and r["phase"] in ("to_target", "service", "working") and r["on_board"] == 0:
+                if r["phase"] == "working" and cur["task"] == "protect":   # connected generator moves on
+                    fm.disconnect_generator(cur["target"]["facility_id"])
+                    events.append({"t_s": t, "kind": "generator_disconnected", "facility_id": cur["target"]["facility_id"], "resource_id": rid})
+                    out[cur["id"]].reason = "moved by replan"
+                else:
+                    finish(out[cur["id"]], "incomplete", t, "cancelled by replan")
+                mv.dest, mv.route = None, []
+                r["phase"], r["cur"], r["last"] = "idle", None, None
+            while r["phase"] == "idle" and queues[rid] and queues[rid][0].get("cancelled_at_t_s") is not None \
+                    and float(queues[rid][0]["cancelled_at_t_s"]) <= t:
+                finish(out[queues[rid].pop(0)["id"]], "incomplete", t, "cancelled by replan")
+            if r["phase"] == "idle" and queues[rid] and float(queues[rid][0].get("not_before_t_s") or 0.0) <= t:
                 a = queues[rid].pop(0)
                 o = out[a["id"]]
                 r["cur"], o.start_t = a, t
@@ -353,6 +387,9 @@ def simulate(world, scn: dict, plan: dict, reports=(), perturbation: dict | None
                 events.append({"t_s": t, "kind": "deadline_missed", "household_id": hid})
 
         # 5) record
+        if not record:
+            t += dt
+            continue
         T["t_s"].append(t)
         T["closed_n"].append(int(closed.sum()))
         for rid, r in res.items():

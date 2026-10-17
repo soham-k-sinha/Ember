@@ -192,6 +192,19 @@ class World:
         a, b = (self.edge_v[ei], self.edge_u[ei]) if reverse else (self.edge_u[ei], self.edge_v[ei])
         return csr_matrix((w[ei], (a, b)), shape=(N, N)), w, ei
 
+    @staticmethod
+    def _closed_key(closed) -> bytes:
+        return b"" if closed is None or not closed.any() else np.packbits(closed).tobytes()
+
+    def _graph_cached(self, key: bytes, closed):
+        cache = self.__dict__.setdefault("_graph_cache", {})
+        if key not in cache:
+            if len(cache) > 256:
+                cache.clear()
+            g, _, ei = self._graph(closed)
+            cache[key] = (g, {(int(u), int(v)): int(e) for u, v, e in zip(self.edge_u[ei], self.edge_v[ei], ei)})
+        return cache[key]
+
     def times_from(self, src: int, closed: np.ndarray | None = None, reverse: bool = False) -> np.ndarray:
         """Free-flow seconds from node src to every node (reverse=True: from every node to src)."""
         g, _, _ = self._graph(closed, reverse=reverse)
@@ -202,11 +215,22 @@ class World:
         """Shortest open route between node indices: (edge indices in order, seconds). ([], inf) if none."""
         if src == dst:
             return [], 0.0
-        g, w, ei = self._graph(closed, weight)
-        dist, pred = dijkstra(g, directed=True, indices=src, return_predecessors=True)
+        if weight is None:   # cached per closure pattern and source (closures change only a few times per run)
+            key = self._closed_key(closed)
+            g, best = self._graph_cached(key, closed)
+            tk = (key, int(src))
+            cache = self.__dict__.setdefault("_tree_cache", {})
+            if tk not in cache:
+                if len(cache) > 4096:
+                    cache.clear()
+                cache[tk] = dijkstra(g, directed=True, indices=src, return_predecessors=True)
+            dist, pred = cache[tk]
+        else:
+            g, w, ei = self._graph(closed, weight)
+            dist, pred = dijkstra(g, directed=True, indices=src, return_predecessors=True)
+            best = {(int(self.edge_u[e]), int(self.edge_v[e])): int(e) for e in ei}
         if not np.isfinite(dist[dst]):
             return [], float("inf")
-        best = {(int(self.edge_u[e]), int(self.edge_v[e])): int(e) for e in ei}
         path, n = [], dst
         while n != src:
             p = int(pred[n]); path.append(best[(p, n)]); n = p

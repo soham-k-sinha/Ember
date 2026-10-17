@@ -7,7 +7,7 @@
   "required": ["version", "scenario_id", "t_s", "plan_version", "hazard", "closures", "households", "facilities", "resources", "plan", "reports", "messages", "metrics"],
   "additionalProperties": false,
   "properties": {
-    "version": {"const": "0.1"},
+    "version": {"const": "0.2"},
     "scenario_id": {"type": "string"},
     "t_s": {"type": "number", "minimum": 0, "description": "Sim clock."},
     "plan_version": {"type": ["integer", "null"], "description": "Current plan version (null before the first plan)."},
@@ -147,6 +147,8 @@
             "created_at_t_s": {"type": "number", "minimum": 0},
             "trigger": {"type": "string", "description": "Why this version exists, e.g. 'report r-7: judge needs accessible vehicle'."},
             "planner": {"enum": ["ember", "baseline", "example"]},
+            "reserved": {"type": "array", "items": {"type": "string"}, "description": "Resource ids held back by the reserve rule."},
+            "search": {"type": "object", "description": "How the allocator found this plan (candidates, moves scored, winning rule, seed, objective, wall time)."},
             "assignments": {"type": "array", "items": {"$ref": "assignment.schema.json"}},
             "changes": {
               "type": "array", "description": "Diff vs parent_version (drives the version timeline and outbound messages).",

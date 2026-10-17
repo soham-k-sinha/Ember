@@ -55,3 +55,15 @@ Run: uv run --project engine pytest -q engine/tests/test_scenario.py
 Interfaces: none changed. Anshuman: `"keyframes_file": "keyframes.geojson"` works now.
 Status: done.
 Next: baseline, allocator, compare.
+
+## 2026-10-17 11:30 · baseline + allocator + compare · branch aryaman/allocator · commit (this PR)
+What: `baseline.py` (incident-by-incident), `allocator/` (candidate plans + local search scored by the simulator; replan with carry-over, cancellation, generator re-targeting; computed rationale, unmet needs, info requests, diff), `allocator/rolling.py` (plan at t=0 + replan at every report), `compare.py` (paired perturbation seeds). CLI: `ember allocate`, `ember replan`, `ember compare`, `ember simulate --plan ember|baseline|example`. Simulator: `not_before_t_s`, `cancelled_at_t_s`, `record=False`, cached routing + flood masks (10 ms/sim).
+Files: engine/ember_engine/{baseline,compare,cli}.py, engine/ember_engine/allocator/*, engine/ember_engine/sim/{plan_sim,snapshot}.py, engine/ember_engine/world.py, engine/tests/test_allocator.py, contracts/{state,assignment,comparison}.schema.json, contracts/fixtures/{state,comparison}.fixture.json
+Run: uv run --project engine ember allocate --scenario scenarios/allston_flood_v1/scenario.json && uv run --project engine ember compare --scenario scenarios/allston_flood_v1/scenario.json --seeds 5
+Interfaces: state v0.2 (D35: plan.reserved, plan.search, assignment.not_before_t_s / cancelled_at_t_s; all optional). New comparison v0.1 + fixture. Soham: `from ember_engine.allocator import allocate` → `allocate(world, scn, reports=all_reports, t_now=now, prev=current_plan, prev_reports=reports_before)`; ~0.5 s. Arnav: render `contracts/fixtures/comparison.fixture.json` (rows + headline) and `plan.changes` for the version timeline.
+Status: done. 65 tests. allston_flood_v1: EMBER 87 people before deadline / 0 unreached vs baseline 31 / 56; 5 seeds: +55 people, −21 min critical-service outage, overflow 0 for both, +81 vehicle-km (EMBER drives more).
+Notes for Anshuman (scenario tuning, not engine bugs):
+  - Judge loop: the judge's need (accessible) at 60–90 min can't be served — one accessible van, 7 mobility households all due by 165 min; the allocator says so ("every eligible vehicle is committed to earlier deadlines"). For the demo beat, give the judge an earlier deadline than other mobility households, or a reserve accessible vehicle the report can release. The generator only reacts to the judge if they share a road or a vehicle; today they don't.
+  - Overflow: the baseline also ends at 0 m³ because storage doesn't fill before 180 min even with a reactive generator. Smaller storage_max_m3 or higher inflow makes the dependency-first story show up in the comparison.
+  - Infrastructure beat that already works (test): an operator report "10 min of backup left" at 50 min moves the generator from the pumping station to the hospital; hospital outage 15 min → 0, overflow 0 → 2,000 m³, stated in the rationale.
+Next: task 9 Daytona fan-out.

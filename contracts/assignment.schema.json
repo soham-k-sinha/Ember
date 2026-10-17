@@ -20,6 +20,8 @@
     },
     "dropoff_facility_id": {"type": ["string", "null"], "description": "rescue: where the people are taken."},
     "eta_s": {"type": "number", "minimum": 0, "description": "Sim time of arrival at the target."},
+    "not_before_t_s": {"type": ["number", "null"], "minimum": 0, "description": "Do not dispatch before this sim time (a replan's new work starts at the replan time; the baseline dispatches when an alert arrives)."},
+    "cancelled_at_t_s": {"type": ["number", "null"], "minimum": 0, "description": "A replan cancelled this (already started) assignment at this time; the resource stops and takes its next one."},
     "deadline_s": {"type": ["number", "null"], "description": "Target's deadline (household) or threatened_at (facility)."},
     "slack_s": {"type": ["number", "null"], "description": "deadline_s − eta_s."},
     "status": {"enum": ["proposed", "offered", "confirmed", "rejected", "en_route", "working", "done", "cancelled"]},

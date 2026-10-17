@@ -138,6 +138,8 @@ def cmd_fixtures(a):
     scn = example_scenario(town)
     (fx / "scenario.fixture.json").write_text(json.dumps(scn, indent=1))
     (fx / "state.fixture.json").write_text(json.dumps(example_state(town, scn), indent=1))
+    from .compare import compare
+    (fx / "comparison.fixture.json").write_text(json.dumps(compare(World.from_dict(town), scn, seeds=3), indent=1))
     print(f"[fixtures] wrote to {fx}")
 
 
@@ -157,6 +159,85 @@ def cmd_pin_town(a):
           "Commit it, then re-run `ember fixtures` and re-validate scenarios: ids may have changed.")
 
 
+def _read_reports(paths) -> list:
+    return [r for p in (paths or []) for r in (lambda d: d if isinstance(d, list) else [d])(json.loads(Path(p).read_text()))]
+
+
+def _make_plan(w, scn, which: str, reports: list) -> dict:
+    from .allocator.rolling import run_ember
+    from .baseline import baseline_plan
+    from .sim import example_plan
+    if which == "example":
+        return example_plan(w, scn)
+    if which == "baseline":
+        return baseline_plan(w, scn, reports)
+    if which == "ember":
+        return run_ember(w, scn, reports)[0]
+    return json.loads(Path(which).read_text())
+
+
+def cmd_allocate(a):
+    """EMBER plan: initial allocation + a replan at every report (scripted and --report)."""
+    from .allocator.rolling import run_ember
+    from .scenario import load_scenario
+    w = _load_world()
+    scn = load_scenario(a.scenario)
+    reports = _read_reports(a.report)
+    t0 = time.time()
+    plan, versions = run_ember(w, scn, reports, seed=a.seed)
+    print(f"[allocate] {scn['scenario_id']}: {len(versions)} plan version(s) in {time.time()-t0:.2f}s")
+    for v in versions:
+        print(f"  v{v['version']} @ {v['created_at_t_s']/60:5.1f} min  {v['search']['wall_s']:.2f}s  {len(v['changes']):>2} change(s)  "
+              f"[{v['search']['policy']}]  {v['trigger']}")
+    m = plan["metrics"]
+    print(f"[allocate] reached {m['people_reached_before_deadline']} people before deadline, {m['people_unreached']} not; "
+          f"hospital outage {m['hospital_outage_s']/60:.0f} min; overflow {m['overflow_m3']:,.0f} m³; {m['vehicle_km']:.0f} vehicle-km")
+    for x in plan["assignments"]:
+        if x["task"] == "protect":
+            print(f"  {x.get('status', ''):>9}  {x['rationale']}")
+    for u in plan["unresolved"]:
+        print(f"  unresolved {u['target']}: {u['need']} — {u['blocked_by']}")
+    out = Path(a.out or DATA / "plan.json")
+    out.write_text(json.dumps(plan, indent=1))
+    if a.versions_out:
+        Path(a.versions_out).write_text(json.dumps(versions, indent=1))
+    print(f"[allocate] wrote {out}")
+
+
+def cmd_replan(a):
+    """One replan: previous plan + new report(s) at --at seconds."""
+    from .allocator import allocate
+    from .scenario import load_scenario
+    w = _load_world()
+    scn = load_scenario(a.scenario)
+    prev = json.loads(Path(a.plan).read_text())
+    old = _read_reports(a.prev_report)
+    new = _read_reports(a.report)
+    plan = allocate(w, scn, reports=old + new, t_now=a.at, prev=prev, prev_reports=old, seed=a.seed,
+                    trigger="; ".join(f"{r.get('source', 'resident')} report {r['id']}: {r['kind']}" for r in new) or None)
+    print(f"[replan] v{prev.get('version')} → v{plan['version']} at {a.at/60:.0f} min in {plan['search']['wall_s']:.2f}s "
+          f"[{plan['search']['policy']}]")
+    for c in plan["changes"]:
+        print(f"  {c['change']:>16}  {c['assignment_id']}  {c.get('note', '')}")
+    out = Path(a.out or DATA / "plan.json")
+    out.write_text(json.dumps(plan, indent=1))
+    print(f"[replan] wrote {out}")
+
+
+def cmd_compare(a):
+    """Baseline vs EMBER on paired perturbation seeds → comparison.json."""
+    from .compare import compare
+    from .scenario import load_scenario
+    w = _load_world()
+    scn = load_scenario(a.scenario)
+    c = compare(w, scn, seeds=a.seeds, reports=_read_reports(a.report), seed=a.seed)
+    for r in c["metrics"]:
+        print(f"  {r['sentence']}")
+    out = Path(a.out or DATA / "comparison.json")
+    out.write_text(json.dumps(c, indent=1))
+    print(f"[compare] {a.seeds} paired seeds in {c['wall_s']:.1f}s → {out}")
+
+
 def cmd_simulate(a):
     """Run a plan on a scenario with the plan simulator; print metrics, outcomes and key events."""
     import collections
@@ -165,8 +246,8 @@ def cmd_simulate(a):
     from .sim import example_plan, simulate
     w = _load_world()
     scn = load_scenario(a.scenario)
-    plan = example_plan(w, scn) if a.plan == "example" else json.loads(Path(a.plan).read_text())
-    reports = [r for p in (a.report or []) for r in (lambda d: d if isinstance(d, list) else [d])(json.loads(Path(p).read_text()))]
+    reports = _read_reports(a.report)
+    plan = _make_plan(w, scn, a.plan, reports)
     t0 = time.time()
     res = simulate(w, scn, plan, reports=reports)
     wall = time.time() - t0
@@ -243,12 +324,23 @@ def main(argv=None):
     v.add_argument("--deadlines", action="store_true", help="also print per-household deadlines")
     v.set_defaults(f=cmd_validate_scenario)
     sm = sp.add_parser("simulate", help="run a plan on a scenario (plan simulator)")
-    sm.add_argument("--scenario", required=True); sm.add_argument("--plan", default="example", help="'example' or a plan JSON file")
+    sm.add_argument("--scenario", required=True)
+    sm.add_argument("--plan", default="ember", help="ember | baseline | example | a plan JSON file")
     sm.add_argument("--report", action="append", help="report JSON (object or list); repeatable")
     sm.add_argument("--out", default=None, help="write metrics + outcomes + events + timeline JSON here")
     sm.add_argument("--state-at", type=float, default=None, help="also write a state snapshot at this sim time (s)")
     sm.add_argument("--state-out", default=None)
     sm.set_defaults(f=cmd_simulate)
+    al = sp.add_parser("allocate", help="EMBER plan (initial + replan at every report)")
+    al.add_argument("--scenario", required=True); al.add_argument("--report", action="append"); al.add_argument("--seed", type=int, default=0)
+    al.add_argument("--out", default=None); al.add_argument("--versions-out", default=None); al.set_defaults(f=cmd_allocate)
+    rp = sp.add_parser("replan", help="replan a previous plan with new report(s) at --at")
+    rp.add_argument("--scenario", required=True); rp.add_argument("--plan", required=True); rp.add_argument("--at", type=float, required=True)
+    rp.add_argument("--report", action="append", required=True); rp.add_argument("--prev-report", action="append")
+    rp.add_argument("--seed", type=int, default=0); rp.add_argument("--out", default=None); rp.set_defaults(f=cmd_replan)
+    cp = sp.add_parser("compare", help="baseline vs EMBER on paired perturbation seeds")
+    cp.add_argument("--scenario", required=True); cp.add_argument("--seeds", type=int, default=5); cp.add_argument("--report", action="append")
+    cp.add_argument("--seed", type=int, default=0); cp.add_argument("--out", default=None); cp.set_defaults(f=cmd_compare)
     vs = sp.add_parser("validate-state", help="check a state snapshot against state.schema.json and town/scenario ids")
     vs.add_argument("path"); vs.add_argument("--scenario", default=None); vs.add_argument("--town", default=None)
     vs.set_defaults(f=cmd_validate_state)
