@@ -11,12 +11,30 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
 TOWN = Path(__import__("os").environ.get("EMBER_TOWN", DATA / "town.json"))
+# The team's shared world (D29): committed so every machine, scenario and Daytona snapshot uses the same ids.
+CANONICAL_TOWN = Path(__file__).resolve().parents[1] / "data" / "town.json.gz"
+
+
+def _ensure_town() -> Path:
+    """data/town.json, unpacked from the committed canonical copy when missing. Warns if a local
+    rebuild differs from the canonical one (ids in scenarios may not match)."""
+    import gzip
+    if not TOWN.exists() and TOWN == DATA / "town.json" and CANONICAL_TOWN.exists():
+        DATA.mkdir(exist_ok=True)
+        TOWN.write_bytes(gzip.decompress(CANONICAL_TOWN.read_bytes()))
+        print(f"[town] unpacked the shared {CANONICAL_TOWN.relative_to(ROOT)} → {TOWN.relative_to(ROOT)}")
+    elif TOWN.exists() and CANONICAL_TOWN.exists() and TOWN == DATA / "town.json":
+        if TOWN.read_bytes() != gzip.decompress(CANONICAL_TOWN.read_bytes()):
+            print(f"[town] warning: {TOWN.relative_to(ROOT)} differs from the shared {CANONICAL_TOWN.relative_to(ROOT)}; "
+                  "scenario ids may not match. Delete it to use the shared one, or `ember pin-town` to share yours.")
+    if not TOWN.exists():
+        sys.exit(f"{TOWN} not found. Run `uv run ember build` first.")
+    return TOWN
 
 
 def _load_world():
     from .world import World
-    if not TOWN.exists():
-        sys.exit(f"{TOWN} not found. Run `uv run ember build` first.")
+    _ensure_town()
     t0 = time.time()
     w = World.load(TOWN)
     print(f"[world] {w.n_nodes} nodes, {w.n_edges} edges, {len(w.hh_id)} households, {len(w.exits)} exits ({time.time()-t0:.2f}s)")
@@ -96,7 +114,7 @@ def cmd_fixtures(a):
     """Write small fixtures into contracts/fixtures from the current data/."""
     import copy
     fx = ROOT / "contracts" / "fixtures"; fx.mkdir(parents=True, exist_ok=True)
-    town = json.loads(TOWN.read_text())
+    town = json.loads(_ensure_town().read_text())
     # full road network (so trajectories line up) + every 12th household + a slice of footways; < 1 MB
     small = copy.deepcopy(town)
     small["households"] = town["households"][::12]
@@ -120,12 +138,28 @@ def cmd_fixtures(a):
     print(f"[fixtures] wrote to {fx}")
 
 
+def cmd_pin_town(a):
+    """Share the local data/town.json with the team: write it (gzip, deterministic) to engine/data/town.json.gz."""
+    import gzip
+    import io
+    if not TOWN.exists():
+        sys.exit(f"{TOWN} not found. Run `uv run ember build` first.")
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode="wb", mtime=0, compresslevel=9, filename="") as g:
+        g.write(TOWN.read_bytes())
+    CANONICAL_TOWN.parent.mkdir(parents=True, exist_ok=True)
+    CANONICAL_TOWN.write_bytes(buf.getvalue())
+    c = json.loads(TOWN.read_text())["meta"]["counts"]
+    print(f"[pin-town] wrote {CANONICAL_TOWN.relative_to(ROOT)} ({len(buf.getvalue())/1e3:.0f} KB; {c}). "
+          "Commit it, then re-run `ember fixtures` and re-validate scenarios: ids may have changed.")
+
+
 def cmd_validate_scenario(a):
     """Schema + referential checks against town.json; one-line summary; exit 1 on errors."""
     from .scenario import load_scenario, validate
-    town_path = Path(a.town) if a.town else TOWN
+    town_path = Path(a.town) if a.town else _ensure_town()
     if not town_path.exists():
-        sys.exit(f"{town_path} not found. Run `uv run --project engine ember build` first (or pass --town).")
+        sys.exit(f"{town_path} not found.")
     scn = load_scenario(a.path)
     rep = validate(scn, json.loads(town_path.read_text()))
     for e in rep.errors:
@@ -150,6 +184,7 @@ def main(argv=None):
     r = sp.add_parser("render"); r.add_argument("--t", type=float, default=None); r.add_argument("--plain", action="store_true"); r.set_defaults(f=cmd_render)
     g = sp.add_parser("gate-a"); g.add_argument("--heading", type=float, default=90.0); g.add_argument("--speed", type=float, default=0.6); g.add_argument("--T", type=float, default=7200.0); g.set_defaults(f=cmd_gate_a)
     f = sp.add_parser("fixtures"); f.set_defaults(f=cmd_fixtures)
+    pt = sp.add_parser("pin-town", help="share data/town.json as the committed engine/data/town.json.gz"); pt.set_defaults(f=cmd_pin_town)
     v = sp.add_parser("validate-scenario", help="check a scenario.json against the schema and town.json")
     v.add_argument("path"); v.add_argument("--town", default=None, help="town.json to check ids against (default data/town.json)")
     v.add_argument("--deadlines", action="store_true", help="also print per-household deadlines")

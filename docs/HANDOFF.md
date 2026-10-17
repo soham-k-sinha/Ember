@@ -10,6 +10,7 @@ Last updated: 2026-10-16, Friday 23:00 (hacking started ~4 PM; venue closes 8 PM
   - `ember render` → `data/town.png` with venue star, assets, exits, hazard ellipse, closed edges red, occupancy colored.
   - `ember gate-a` → **PASS**. 90° first closes the River St exit at 1,200 s; 180° first closes Gardner Terrace at 1,800 s; closure orders differ.
   - `uv run pytest -q` → 12 pass (7 engine tests on a synthetic grid + 5 fixture-vs-schema checks).
+- **Shared world (D29):** `engine/data/town.json.gz` is the team's town. Any `ember` command unpacks it to `data/town.json` if missing; nobody needs to run `ember build`. To change the world: `ember build` → `ember pin-town` → `ember fixtures` → commit.
 - `contracts/`: 5 schemas + fixtures + README are committed. **web/ and residents/ can start.**
 - Known gaps:
   - **Walk network** (`paths`) is empty: Overpass timed out. Run `uv run ember build` (without `--no-walk`) when Overpass is healthy.
