@@ -13,15 +13,14 @@ Last updated: 2026-10-16, Friday 23:00 (hacking started ~4 PM; venue closes 8 PM
 - `contracts/`: 5 schemas + fixtures + README are committed. **web/ and residents/ can start.**
 - Known gaps:
   - **Walk network** (`paths`) is empty: Overpass timed out. Run `uv run ember build` (without `--no-walk`) when Overpass is healthy.
-  - **Assets** came from the cache fallback (D19). Rebuild once Overpass answers to get the live query.
+  - **Assets** came from the cache fallback (D26). Rebuild once Overpass answers to get the live query.
   - The venv is Python 3.13 (the pin says 3.12); everything works on 3.13.
 
 ## Immediate next steps, in order
 1. **Hand-curate exits** (`build_town.py`). Several current exits are residential side streets that just cross the box edge (Gardner Terrace, President Terrace). Replace them with the real ones: Charles River bridges (River St, Western Ave, Anderson/JFK, Eliot), Soldiers Field Rd / Storrow both ways, Memorial Dr both ways, Mass Pike ramps, Cambridge St, N Harvard St, Mass Ave. Then re-run smoke + gate-a + fixtures.
 2. Rebuild with walk network + live assets when Overpass recovers: `rm engine/cache/layers/assets_*; uv run ember build`.
-3. Pick a hazard speed/start that tells the demo story. 0.6 m/s from the venue swallows most of the map within an hour.
+3. Then the coordination layer per **`docs/team/aryaman.md`** (flood is locked, D17): task 1 `scenario.schema.json` + `ember validate-scenario`, task 2 `state.schema.json` + fixture. These unblock three people.
 4. Trajectories are sampled every 60 s (`snapshot_every=6`), so TripsLayer cuts corners. Use `snapshot_every=1` for the demo file if it looks bad.
-5. Daytona pool (below).
 
 ## After the sim-env works (Saturday)
 - Daytona: snapshot with `data/town.json` + `ember_engine` baked in; pool of N sandboxes; `run_job` over a job list (see plan §6.5 for the verified API and tier limits; get Tier 2 with a card + $25).
