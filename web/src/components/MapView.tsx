@@ -2,18 +2,28 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Map as MapGL, useControl, type MapRef } from "react-map-gl/maplibre";
 import maplibregl from "maplibre-gl";
 import { MapLibreOverlay, type MapLibreOverlayProps } from "@deck.gl/maplibre";
-import type { PickingInfo } from "@deck.gl/core";
+import { FlyToInterpolator, MapView as DeckMapView, WebMercatorViewport, type PickingInfo } from "@deck.gl/core";
+import DeckGL from "@deck.gl/react";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { scenario, town } from "../fixtures";
 import { buildLayers, NEEDS_COLOR, STATUS_COLOR, type LegendMode } from "../layers";
 import { countWalking, type BgHousehold, type WalkerPlan } from "../people";
 import type { Playback } from "../playback";
+import { dioramaScene, loadDiorama, type Diorama } from "../diorama";
 import type { Closure, HouseholdStatus, LngLat, Selection, StateSnapshot } from "../types";
 
 const DARK = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
 const LIGHT = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
 
-type Camera = { longitude: number; latitude: number; zoom: number; pitch: number; bearing: number };
+type Camera = {
+  longitude: number;
+  latitude: number;
+  zoom: number;
+  pitch: number;
+  bearing: number;
+  transitionDuration?: number;
+  transitionInterpolator?: FlyToInterpolator;
+};
 
 const TILTED = { pitch: 55, bearing: -20 };
 
@@ -154,18 +164,61 @@ function positionOf(state: StateSnapshot, selection: Selection | null): LngLat |
   return null;
 }
 
+type Basemap = "model" | "night" | "day";
+
+const MODEL_VIEW = new DeckMapView({ id: "model", repeat: false, orthographic: true });
+const MODEL_TILT = { pitch: 52, bearing: -32 };
+const NO_EFFECTS: never[] = [];
+/** Our simulation layers sit a hair above the model's ground so the flood and trails aren't hidden by it. */
+const LIFT = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0.6, 1];
+const MODEL_HIDDEN = new Set(["households-bg", "roads", "district", "venue"]);
+
+function useSize(ref: React.RefObject<HTMLDivElement | null>): { width: number; height: number } {
+  const [size, setSize] = useState({ width: 1200, height: 800 });
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      if (width > 0 && height > 0) setSize({ width: Math.round(width), height: Math.round(height) });
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [ref]);
+  return size;
+}
+
 export function MapView(props: MapViewProps) {
   const mapRef = useRef<MapRef | null>(null);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const size = useSize(wrapRef);
   const [camera, setCamera] = useState<Camera>({ longitude: town.venue.lon, latitude: town.venue.lat, zoom: 14.6, ...TILTED });
-  const [dark, setDark] = useState(true);
+  const [basemap, setBasemap] = useState<Basemap>("model");
+  const [diorama, setDiorama] = useState<Diorama | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const photo = basemap === "model";
+  useEffect(() => {
+    let alive = true;
+    void loadDiorama("test").then((data) => {
+      if (!alive) return;
+      setDiorama(data);
+      if (data) {
+        const [w, s, e, n] = data.bbox;
+        setCamera({ longitude: (w + e) / 2, latitude: (s + n) / 2, zoom: 15.4, ...MODEL_TILT });
+      } else setBasemap("night");
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const dark = basemap !== "day";
   const tilted = camera.pitch > 5;
 
   // follow: keep the camera on the followed vehicle / household as the clock runs
   const followAt = positionOf(props.state, props.follow);
   useEffect(() => {
     if (!followAt) return;
-    setCamera((current) => ({ ...current, longitude: followAt[0], latitude: followAt[1] }));
+    setCamera((current) => ({ ...current, longitude: followAt[0], latitude: followAt[1], transitionDuration: 0 }));
   }, [followAt?.[0], followAt?.[1]]);
 
   // night falls with the clock
@@ -173,12 +226,19 @@ export function MapView(props: MapViewProps) {
   const nightStep = Math.round(night * 20);
   useEffect(() => {
     const map = mapRef.current?.getMap();
-    if (map && loaded) applyNight(map, nightStep / 20, dark);
-  }, [nightStep, loaded, dark]);
+    if (!photo && map && loaded) applyNight(map, nightStep / 20, dark);
+  }, [nightStep, loaded, dark, photo]);
 
-  const map = mapRef.current?.getMap();
-  const b = loaded && map ? map.getBounds() : null;
-  const bounds: [number, number, number, number] | null = b ? [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()] : null;
+  let bounds: [number, number, number, number] | null = null;
+  if (photo) {
+    const viewport = new WebMercatorViewport({ ...plainCamera(camera), width: size.width, height: size.height });
+    const [w, s, e, n] = viewport.getBounds();
+    bounds = [w, s, e, n];
+  } else {
+    const map = mapRef.current?.getMap();
+    const b = loaded && map ? map.getBounds() : null;
+    bounds = b ? [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()] : null;
+  }
   const view = { zoom: camera.zoom, bounds, pitch: camera.pitch };
 
   const layers = useMemo(
@@ -206,6 +266,28 @@ export function MapView(props: MapViewProps) {
       Math.round(camera.zoom * 4), bounds && Math.round(bounds[0] * 2000), bounds && Math.round(bounds[1] * 2000)],
   );
 
+  const scene = useMemo(() => (diorama ? dioramaScene(diorama) : null), [diorama]);
+  const photoLayers = useMemo(() => {
+    if (!photo || !scene) return [];
+    const overlay = layers
+      .filter((layer) => !MODEL_HIDDEN.has(layer.id))
+      .map((layer) => layer.clone({ modelMatrix: LIFT } as never));
+    return [...scene.layers, ...overlay, scene.labels];
+  }, [photo, scene, layers]);
+
+  function animate(target: Partial<Camera>, duration: number) {
+    if (photo) {
+      setCamera((current) => ({
+        ...current,
+        ...target,
+        transitionDuration: duration,
+        transitionInterpolator: new FlyToInterpolator({ speed: 1.6 }),
+      }));
+    } else {
+      mapRef.current?.flyTo({ center: target.longitude != null && target.latitude != null ? [target.longitude, target.latitude] : undefined, zoom: target.zoom, pitch: target.pitch, bearing: target.bearing, duration, essential: true });
+    }
+  }
+
   const judge = props.state.households.find((household) => household.judge);
   const facility = (type: string) => props.state.facilities.find((item) => item.type === type || item.id === type);
   const presets: Array<{ label: string; at: LngLat | null; zoom: number; pitch?: number; bearing?: number }> = [
@@ -218,57 +300,76 @@ export function MapView(props: MapViewProps) {
 
   function fly(at: LngLat, zoom: number, pitch = TILTED.pitch, bearing = TILTED.bearing) {
     props.onFollow(null);
-    mapRef.current?.flyTo({ center: at, zoom, pitch: tilted ? pitch : 0, bearing: tilted ? bearing : 0, duration: 1600, essential: true });
+    animate({ longitude: at[0], latitude: at[1], zoom: zoom + (photo ? 1.3 : 0), pitch: tilted ? (photo ? MODEL_TILT.pitch : pitch) : 0, bearing: tilted ? (photo ? MODEL_TILT.bearing : bearing) : 0 }, 1800);
   }
 
   const crowdCounts = props.walkers && props.showWalkers ? countWalking(props.walkers, props.t) : null;
+  const onClick = (info: PickingInfo) => props.onSelect(selectionFrom(info));
+  const getTooltip = (info: PickingInfo) => {
+    const text = tooltip(info);
+    return text ? { text, className: "deck-tip" } : null;
+  };
 
   return (
-    <div className="map-wrap">
-      <MapGL
-        ref={mapRef}
-        mapLib={maplibregl}
-        mapStyle={dark ? DARK : LIGHT}
-        {...camera}
-        maxPitch={70}
-        onMove={(event) => setCamera(event.viewState)}
-        onDragStart={() => props.follow && props.onFollow(null)}
-        onLoad={(event) => {
-          if (import.meta.env.DEV) (window as unknown as { __emberMap?: maplibregl.Map }).__emberMap = event.target;
-          addBuildings(event.target);
-          setLoaded(true);
-        }}
-        onStyleData={(event) => {
-          const target = event.target as maplibregl.Map;
-          if (import.meta.env.DEV) (window as unknown as { __emberMap?: maplibregl.Map }).__emberMap = target;
-          if (target.isStyleLoaded()) {
-            addBuildings(target);
-            setLoaded(true);
-          }
-        }}
-        onIdle={() => setLoaded(true)}
-        attributionControl={{ compact: true }}
-      >
-        <DeckOverlay
-          layers={layers}
-          onClick={(info) => props.onSelect(selectionFrom(info))}
-          getTooltip={(info) => {
-            const text = tooltip(info);
-            return text ? { text, className: "deck-tip" } : null;
+    <div className="map-wrap" ref={wrapRef}>
+      {photo ? (
+        <DeckGL
+          ref={(instance) => {
+            if (import.meta.env.DEV && instance) (window as unknown as { __emberDeck?: unknown }).__emberDeck = instance.deck;
           }}
-          getCursor={({ isHovering }) => (isHovering ? "pointer" : "grab")}
+          views={MODEL_VIEW}
+          effects={scene?.effects ?? NO_EFFECTS}
+          viewState={{ ...camera, maxPitch: 70, minZoom: 13.5, maxZoom: 20 } as never}
+          controller={{ dragRotate: true, touchRotate: true, inertia: 300 }}
+          onViewStateChange={({ viewState, interactionState }) => {
+            setCamera(viewState as Camera);
+            if (props.follow && interactionState?.isDragging) props.onFollow(null);
+          }}
+          layers={photoLayers}
+          onClick={onClick}
+          getTooltip={getTooltip}
+          getCursor={({ isHovering, isDragging }) => (isHovering ? "pointer" : isDragging ? "grabbing" : "grab")}
         />
-      </MapGL>
+      ) : (
+        <MapGL
+          ref={mapRef}
+          mapLib={maplibregl}
+          mapStyle={dark ? DARK : LIGHT}
+          {...plainCamera(camera)}
+          maxPitch={70}
+          onMove={(event) => setCamera(event.viewState)}
+          onDragStart={() => props.follow && props.onFollow(null)}
+          onLoad={(event) => {
+            if (import.meta.env.DEV) (window as unknown as { __emberMap?: maplibregl.Map }).__emberMap = event.target;
+            addBuildings(event.target);
+            setLoaded(true);
+          }}
+          onStyleData={(event) => {
+            const target = event.target as maplibregl.Map;
+            if (import.meta.env.DEV) (window as unknown as { __emberMap?: maplibregl.Map }).__emberMap = target;
+            if (target.isStyleLoaded()) {
+              addBuildings(target);
+              setLoaded(true);
+            }
+          }}
+          onIdle={() => setLoaded(true)}
+          attributionControl={{ compact: true }}
+        >
+          <DeckOverlay
+            layers={layers}
+            onClick={onClick}
+            getTooltip={getTooltip}
+            getCursor={({ isHovering }) => (isHovering ? "pointer" : "grab")}
+          />
+        </MapGL>
+      )}
 
       <div className="map-tools">
         <div className="segmented small" role="group" aria-label="Camera">
-          <button
-            className={tilted ? "on" : ""}
-            onClick={() => mapRef.current?.easeTo({ ...TILTED, duration: 700 })}
-          >
+          <button className={tilted ? "on" : ""} onClick={() => animate(photo ? MODEL_TILT : TILTED, 700)}>
             Tilted
           </button>
-          <button className={!tilted ? "on" : ""} onClick={() => mapRef.current?.easeTo({ pitch: 0, bearing: 0, duration: 700 })}>
+          <button className={!tilted ? "on" : ""} onClick={() => animate({ pitch: 0, bearing: 0 }, 700)}>
             Flat
           </button>
         </div>
@@ -279,15 +380,23 @@ export function MapView(props: MapViewProps) {
             </button>
           ))}
         </div>
-        <button className="chip" onClick={() => setDark(!dark)} title="Basemap">
-          {dark ? "Night map" : "Day map"}
-        </button>
+        <div className="segmented small" role="group" aria-label="Background">
+          {diorama ? (
+            <button className={photo ? "on" : ""} onClick={() => setBasemap("model")} title="Real buildings and trees as a 3D model">
+              Model
+            </button>
+          ) : null}
+          <button className={basemap === "night" ? "on" : ""} onClick={() => setBasemap("night")}>Night map</button>
+          <button className={basemap === "day" ? "on" : ""} onClick={() => setBasemap("day")}>Day map</button>
+        </div>
         {props.follow ? (
           <button className="chip following" onClick={() => props.onFollow(null)}>
             Following · stop
           </button>
         ) : null}
       </div>
+
+      {photo && diorama ? <div className="credits" title={diorama.attribution}>{diorama.attribution}</div> : null}
 
       <Legend
         mode={props.legend}
@@ -299,6 +408,12 @@ export function MapView(props: MapViewProps) {
     </div>
   );
 }
+
+/** Only the camera fields (deck transition props must not leak into MapLibre or the viewport math). */
+function plainCamera(camera: Camera) {
+  return { longitude: camera.longitude, latitude: camera.latitude, zoom: camera.zoom, pitch: camera.pitch, bearing: camera.bearing };
+}
+
 
 const STATUS_LABEL: Record<HouseholdStatus, string> = {
   unknown: "Needs unknown",
