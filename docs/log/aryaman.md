@@ -208,3 +208,9 @@ Run: cd residents && RESET_ON_START=1 PHOTON_ENABLED=0 uv run uvicorn residents.
 Interfaces: none. Soham: run `uv sync` (or any `uv run`) in residents/ after pulling; it re-locks to pick up the engine's new `daytona` dependency; please commit that residents/uv.lock refresh. Not covered here (no keys on this laptop): real Photon delivery and the LLM extraction; run the same script on the machine with residents/.env.
 Status: done.
 Next: re-run e2e.py on the merged web-street-level branch; real-phone run on the keyed machine; re-measure DEMO.md.
+
+## 2026-10-17 07:50 · DEMO/QA numbers re-measured + HANDOFF rewritten · branch aryaman/demo-numbers · commit (this PR)
+What: re-measured every demo beat on main against the live backend (Daytona on): v1 78/9/0 m³/51 km; judge → Van 3 pickup 130 vs 165, gen ETA 14 → 25; comparison after the judge 89 vs 52.6 (+36.4), 0 vs 5,244 m³, +27 km; hospital beat outage 13 min, overflow 0 → 9,600 m³; optimize c02 over c00 (worst-20% 16.8 vs 29), 8 sandboxes ~10 s. Updated DEMO.md, QA.md (QA 0.1 now runs e2e.py), snapshot name. HANDOFF.md rewritten for the evening state and open items.
+Files: docs/DEMO.md, docs/QA.md, docs/HANDOFF.md, docs/log/aryaman.md
+Status: done.
+Next: merge the 2.5D website when its session pushes it; real-phone run on the keyed machine.
