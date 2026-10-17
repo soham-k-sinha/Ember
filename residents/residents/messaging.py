@@ -52,6 +52,7 @@ class Messenger:
         self.inbound_hooks: list[InboundHook] = []
         self.lobby_hooks: list[LobbyHook] = []
         self.taps: list[Tap] = []
+        self.voice = None  # voice.Voice: while a call is live, texts to that phone are said on the call (D61)
         self._registration_lock = asyncio.Lock()
         # Freeze the old role-only registrations to the existing scenario before a reset.
         for phone in self.store.phones():
@@ -242,7 +243,9 @@ class Messenger:
         (drill prefix, opt-in); kept in the lobby log. Returns delivery."""
         phone = self.store.phone(handle=handle)
         text = with_drill_prefix(text)
-        if self.photon is None:
+        if self.voice is not None and self.voice.capture(handle, text):
+            delivery = "sent"  # said on the live call
+        elif self.photon is None:
             delivery = "dev"
         elif phone is None:
             delivery = "no_phone"
@@ -257,7 +260,8 @@ class Messenger:
                 log.error("lobby send to %s failed: %s", handle, e)
                 delivery = "failed"
         self._lobby_append(handle, {"direction": "out", "text": text, "t_s": self._t_s(), "delivery": delivery})
-        self._tap({"direction": "out", "who": handle, "text": text, "delivery": delivery})
+        self._tap({"direction": "out", "who": handle, "text": text,
+                   "delivery": "voice" if self.voice is not None and self.voice.live(handle) else delivery})
         return delivery
 
     def move_lobby_to_thread(self, handle: str, thread: dict) -> None:
@@ -313,7 +317,10 @@ class Messenger:
         msg = {"id": new_message_id(), "thread": thread, "direction": "out", "text": with_drill_prefix(text),
                "t_s": self._t_s(), "plan_version": plan_version, "assignment_id": assignment_id, "report_id": None}
         phone = phone_for_thread(self.store, thread)
-        if self.photon is None:
+        spoken = self.voice is not None and phone is not None and self.voice.capture(phone["handle"], msg["text"])
+        if spoken:
+            delivery = "sent"  # said on the live call (D61); counts as delivered everywhere a text would
+        elif self.photon is None:
             delivery = "dev"
         elif phone is None:
             delivery = "no_phone"
@@ -326,7 +333,7 @@ class Messenger:
         if delivery != "pending":
             if delivery == "not_opted_in":
                 log.warning("%s phone hasn't texted the line yet; message %s not sent", thread_key(thread), msg["id"])
-            self._tap({"direction": "out", "who": thread, "text": msg["text"], "delivery": delivery})
+            self._tap({"direction": "out", "who": thread, "text": msg["text"], "delivery": "voice" if spoken else delivery})
             return msg, delivery
         try:
             res = await self.photon.send_text(phone["space_id"], phone["agent_user_id"], msg["text"],  # type: ignore[union-attr]

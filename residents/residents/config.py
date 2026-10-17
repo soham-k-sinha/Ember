@@ -51,3 +51,11 @@ class Settings:
     # person anyone waited on moves the sim clock to the next step.
     drill_solo: bool = field(default_factory=lambda: _flag("DRILL_SOLO", False))
     auto_clock: bool = field(default_factory=lambda: _flag("AUTO_CLOCK", False))
+    # Phone calls (D61): ElevenLabs runs the call on the Photon SMS number; our backend is its Custom LLM.
+    photon_voice_number: str = field(default_factory=lambda: os.environ.get("PHOTON_VOICE_NUMBER", ""))
+    elevenlabs_api_key: str = field(default_factory=lambda: os.environ.get("ELEVENLABS_API_KEY", ""))
+    elevenlabs_agent_id: str = field(default_factory=lambda: os.environ.get("ELEVENLABS_AGENT_ID", ""))
+    elevenlabs_phone_number_id: str = field(default_factory=lambda: os.environ.get("ELEVENLABS_PHONE_NUMBER_ID", ""))
+    voice_port: int = field(default_factory=lambda: int(os.environ.get("VOICE_PORT", "8100")))
+    # someone who calls the number but isn't registered becomes a resident to be located (judges can call in)
+    voice_admit_callers: bool = field(default_factory=lambda: _flag("VOICE_ADMIT_CALLERS", True))

@@ -58,6 +58,26 @@ and <cross street>`, `plan`, `questions`, `tell r1 <text>` (reply as the coordin
 API for the same flow: `POST /phones {role: "resident", handle, locate: true}` registers a phone with no household;
 `POST /dev/inbound {role, handle, text}` texts as that phone (also before it's placed).
 
+## Calls: the same conversation by phone (D61)
+ElevenLabs runs the call on the Photon SMS number (speech, voice, turn-taking); **EMBER's backend is the agent's
+Custom LLM**, so the call says exactly what the thread would text (`residents/speech.py` makes it sound right:
+"Say yes", "Avenue", "9 1 1"). What the caller says goes through the same path as a text; the call and the texts are
+one thread.
+
+One-time: Photon number → ElevenLabs (inbound + outbound) as in Photon's voice guide, then in `residents/.env`:
+`PHOTON_VOICE_NUMBER`, `ELEVENLABS_API_KEY`, `ELEVENLABS_AGENT_ID`, `ELEVENLABS_PHONE_NUMBER_ID` (see `.env.example`).
+In ElevenLabs → the agent → Security, allow overriding the **first message** (outbound calls open with the plan).
+
+```bash
+uv run ember-drill --voice --caller +1617…="Putnam Ave and Western Ave"     # EMBER calls them if the flood reaches it
+uv run ember-drill --voice --resident +1617…                               # take calls on the Photon number
+uv run ember-drill --dry --caller 6175550101="Putnam Ave and Western Ave"   # pretend call: type what they say with @r1
+```
+`--voice` starts the voice app on `VOICE_PORT` (8100), a cloudflared quick tunnel to it (only that endpoint is
+public, behind a random path), and points the ElevenLabs agent at it (Custom LLM URL + the system prompt that names
+the caller). It prints what to paste if it can't. Give the new tunnel about a minute before the first call.
+Console: `call r1`, `calls`. API: `POST /calls {handle}`, `GET /calls`.
+
 ## API (so far)
 | | |
 |---|---|

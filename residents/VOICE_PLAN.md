@@ -1,6 +1,6 @@
 # Voice channel plan: EMBER calls residents in the flood zone
 
-Status: **plan only, nothing built yet.** Written 2026-10-17 after D60. The voice decision will be D61 (open
+Status: **superseded in part (D61):** built with **ElevenLabs** as the call runtime (Soham's choice) and EMBER as its Custom LLM, not LiveKit; see residents README "Calls" and `residents/voice.py`. The rest (parity rule, who gets called, failure modes) still holds. Originally: plan only. Written 2026-10-17 after D60. The voice decision will be D61 (open
 question on the D-list: "voice line"). Owner: Soham's lane (`residents/`). No engine, contract or web change is
 required. One optional contract ask is in §9.
 

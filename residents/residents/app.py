@@ -133,6 +133,10 @@ class AnswerIn(BaseModel):
     text: str = Field(min_length=1, max_length=1000, description="the coordinator's reply, texted as written")
 
 
+class CallIn(BaseModel):
+    handle: str = Field(min_length=3, description="a registered phone to call now (ElevenLabs via the Photon number)")
+
+
 class DevInboundIn(TargetIn):
     text: str = Field(min_length=1, max_length=1000)
     handle: str | None = Field(default=None, description="as this registered phone (also before it has a household)")
@@ -180,6 +184,8 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
                                         nominatim if settings.geocode_enabled else None, drill_tips=settings.auto_clock)
             app.state.messenger.lobby_hooks.append(app.state.locator.on_lobby)
             app.state.planner.plan_hooks.append(app.state.locator.on_plan)
+        from .voice import Voice
+        app.state.voice = Voice(app.state.store, app.state.messenger, app.state.outbound, settings)
         if app.state.planner is not None:  # after messenger + hooks exist: a fresh plan v1 texts its open questions
             await start_engine(settings, app.state.store, app.state.planner)
         app.state.listener = None
@@ -419,6 +425,22 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         if delivery in ("sent", "dev", "failed"):  # failed is retried; anything else wasn't delivered
             store().kv_set(f"question:{report_id}", json.dumps({**q, "answer": {"text": body.text, "message_id": msg["id"]}}))
         return {"message": msg, "delivery": delivery, **messenger().delivery_details(q["thread"], delivery)}
+
+    @app.get("/calls")
+    def get_calls() -> dict:
+        v = app.state.voice
+        return {"calls": v.calls, "live": [{"handle": h, "conversation_id": x.conversation_id, "turns": x.turns,
+                                            "unsaid": len(x.outbox)} for h, x in v.sessions.items()]}
+
+    @app.post("/calls")
+    async def post_call(body: CallIn) -> dict:
+        """Call a registered phone now (D61). The call opens with what the thread would say right now."""
+        try:
+            return await app.state.voice.call(body.handle, reason="api")
+        except ValueError as e:
+            raise HTTPException(404, str(e)) from e
+        except RuntimeError as e:
+            raise HTTPException(502, str(e)) from e
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket) -> None:

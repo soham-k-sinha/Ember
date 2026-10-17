@@ -34,6 +34,9 @@ HELP = """commands:
   @r1 <text>            text EMBER as r1 (any participant name; needed with --dry, works with phones too)
   close <street> and <cross street>   report that road closed at that corner (replans)
   plan                  the current plan's assignments for the participants
+  call r1               phone r1 now (ElevenLabs via the Photon number; with --dry: a pretend call, type
+                        what they say with @r1 …)
+  calls                 calls placed this run and the ones in progress
   questions             questions the plan couldn't answer (each already got the person's situation)
   tell r1 <text>        reply to r1 as the coordinator (texted as written, with the drill prefix)
   reset                 start over from scratch (everyone texts their location again)
@@ -50,10 +53,16 @@ def _fmt_t(t_s: float) -> str:
 
 class Drill:
     def __init__(self, args: argparse.Namespace):
+        for name, default in (("caller", []), ("voice", False)):  # options added later (D61)
+            if not hasattr(args, name):
+                setattr(args, name, default)
         self.args = args
         self.names: dict[str, str] = {}   # handle → r1 / op1
         self.app = None
         self.server = None
+        self.callers: dict[str, str | None] = {}   # handle → their address (None: the call asks where they are)
+        self.tunnel = None
+        self.voice_server = None
 
     # ---------- setup ----------
     def settings(self) -> Settings:
@@ -69,7 +78,11 @@ class Drill:
             problems.append("ANTHROPIC_API_KEY is not set in residents/.env: EMBER can't read texts without it.")
         if s.photon_enabled and not (s.photon_api_key and s.photon_project_id):
             problems.append("PHOTON_API_KEY / PHOTON_PROJECT_ID missing in residents/.env (or run with --dry).")
-        if not self.args.resident and not self.args.operator:
+        if (self.args.caller or self.args.voice) and not self.args.dry and not (
+                s.elevenlabs_api_key and s.elevenlabs_agent_id and s.elevenlabs_phone_number_id):
+            problems.append("Calls need ELEVENLABS_API_KEY, ELEVENLABS_AGENT_ID and ELEVENLABS_PHONE_NUMBER_ID in "
+                            "residents/.env (or run with --dry for pretend calls).")
+        if not self.args.resident and not self.args.operator and not self.args.caller:
             problems.append("No phones: pass --resident PHONE (repeatable) and/or --operator PHONE@facility_id, "
                             "or set DRILL_RESIDENTS / DRILL_OPERATORS in residents/.env.")
         return problems
@@ -100,11 +113,104 @@ class Drill:
             st.intake.escalation_hooks.append(self.on_question)
         await self.register()
         await st.locator.welcome()
+        if self.args.voice or self.args.caller:
+            await self.start_voice()
+        if self.callers:
+            await self.dial_callers()
+
+    # ---------- calls (D61) ----------
+    async def start_voice(self) -> None:
+        """The voice app (ElevenLabs' Custom LLM) on its own port, a cloudflared tunnel to it, and the agent
+        pointed at the tunnel. With --dry: only the local app (pretend calls need none of it)."""
+        import secrets
+
+        import uvicorn
+
+        from .voice import configure_agent, create_voice_app, start_tunnel
+        s = self.app.state.settings
+        self._voice_token = token = secrets.token_urlsafe(24)
+        vapp = create_voice_app(lambda: self.app.state.voice, token)
+        self.voice_server = uvicorn.Server(uvicorn.Config(vapp, host="127.0.0.1", port=s.voice_port, log_level="warning"))
+        self.voice_server.install_signal_handlers = lambda: None
+        self._voice_serve = asyncio.create_task(self.voice_server.serve())
+        while not self.voice_server.started:
+            if self._voice_serve.done():
+                raise SetupError(f"voice app didn't start (is port {s.voice_port} in use? set VOICE_PORT)")
+            await asyncio.sleep(0.1)
+        if self.args.dry:
+            print(f"\nvoice: pretend calls (--dry). `call r1` starts one; type what they say with @r1 …")
+            return
+        self.tunnel, public = await start_tunnel(s.voice_port)
+        server_url = f"{public}/{token}/v1"
+        ok, detail = await configure_agent(s, server_url)
+        print(f"\nvoice: tunnel {public} → :{s.voice_port} (only the voice endpoint is exposed)")
+        if ok:
+            print("voice: ElevenLabs agent now uses EMBER as its Custom LLM (calls in and out go through the plan)")
+        else:
+            print(f"voice: couldn't update the ElevenLabs agent automatically ({detail}). In ElevenLabs → Agents → "
+                  f"EMBER → LLM → Custom LLM, set:\n  Server URL: {server_url}\n  Model ID: ember\n"
+                  f"  and the system prompt to exactly:\n  EMBER-CALL caller={{{{system__caller_id}}}} "
+                  f"called={{{{system__called_number}}}} conv={{{{system__conversation_id}}}}\n  then Publish.")
+        if s.photon_voice_number:
+            print(f"voice: residents can call {s.photon_voice_number}")
+
+    async def dial_callers(self) -> None:
+        """Callers with an address are placed there; only the ones the forecast flood reaches are called
+        (the critical area). Callers without an address are called and asked where they are."""
+        st = self.app.state
+        for handle, address in self.callers.items():
+            name = self.names.get(handle, handle)
+            if address:
+                where, _, cross = address.partition(" and ")
+                found = await st.locator.places.locate(where.strip(), cross.strip() or None, st.locator.geocoder)
+                if not hasattr(found, "lon"):
+                    print(f"  {name}: couldn't place {address!r} in the drill area; not called")
+                    continue
+                st.voice.open(handle)  # what placing them would text goes into the call instead
+                thread = await st.locator.place(st.store.phone(handle=handle), found)
+                st.voice.sessions[handle].outbox.clear()
+                if thread is None:
+                    st.voice.end(handle, reason="not placed")
+                    print(f"  {name}: couldn't match {address!r} to a building; not called")
+                    continue
+                h = next((x for x in st.store.households() if x["household_id"] == thread["household_id"]), {})
+                if h.get("deadline_s") is None:
+                    st.voice.end(handle, reason="outside the flood")
+                    print(f"  {name} at {found.label}: outside the forecast flood, so not called")
+                    continue
+                await st.messenger.send_message(thread, f"We have you at {found.label}.", st.store.meta().get("plan_version"))
+                await st.voice.say_situation(handle)  # then what the plan says for them (the call opens with both)
+            await self.call(name)
+
+    async def call(self, name: str) -> None:
+        st = self.app.state
+        handle = next((h for h, n in self.names.items() if n == name), None)
+        if handle is None:
+            print(f"usage: call r1  (participants: {', '.join(self.names.values())})")
+            return
+        if self.args.dry:
+            st.voice.open(handle)
+            if not st.voice.sessions[handle].outbox:
+                await st.voice.say_situation(handle)
+            from .speech import render_all
+            from .voice import OPENER
+            print(f"\n[pretend call to {name}] EMBER: {OPENER} {render_all(st.voice.sessions[handle].outbox)}")
+            st.voice.sessions[handle].outbox.clear()
+            return
+        try:
+            rec = await st.voice.call(handle, reason="drill")
+            print(f"calling {name} … (conversation {rec.get('conversation_id')})")
+        except (RuntimeError, ValueError) as e:
+            print(f"call to {name} failed: {e}")
 
     def wanted(self) -> list[tuple[str, str, str | None]]:
         """(handle, role, facility_id) for every phone on the command line, in order."""
         from .threads import normalize_handle
         out = [(normalize_handle(raw), "resident", None) for raw in self.args.resident]
+        for spec in self.args.caller:
+            raw, _, address = spec.partition("=")
+            self.callers[normalize_handle(raw)] = address.strip() or None
+            out.append((normalize_handle(raw), "resident", None))
         for spec in self.args.operator:
             raw, _, fid = spec.partition("@")
             out.append((normalize_handle(raw), "operator", fid or None))
@@ -197,6 +303,10 @@ class Drill:
         text = ev["text"].removeprefix("[EMBER drill] ")
         if ev["direction"] == "in":
             print(f"\n[{t}] {name} → EMBER: {text}", flush=True)
+        elif ev["delivery"] == "voice":
+            if not self.args.dry:  # (pretend calls print the spoken reply as one line)
+                from .speech import render
+                print(f"\n[{t}] EMBER (call) → {name}: {render(text)}", flush=True)
         else:
             flag = "" if ev["delivery"] in ("sent", "dev", None) else f"   (delivery: {ev['delivery']})"
             print(f"\n[{t}] EMBER → {name}: {text}{flag}", flush=True)
@@ -306,6 +416,16 @@ class Drill:
                 await self.status()
             elif line == "plan":
                 await self.plan()
+            elif line.startswith("call "):
+                await self.call(line[5:].strip())
+            elif line == "calls":
+                v = st.voice
+                for c in v.calls:
+                    print(f"  {self.names.get(c['handle'], c['handle'])}: {c['reason']} · conversation {c['conversation_id']}")
+                for h, x in v.sessions.items():
+                    print(f"  live: {self.names.get(h, h)} · {x.turns} turn(s) · {len(x.outbox)} unsaid")
+                if not v.calls and not v.sessions:
+                    print("  no calls yet")
             elif line in ("questions", "qs"):
                 await self.questions()
             elif line.startswith("tell "):
@@ -321,6 +441,11 @@ class Drill:
                 handle = next((h for h, n in self.names.items() if n == name), None)
                 if handle is None or not text.strip():
                     print(f"usage: @r1 <text>  (participants: {', '.join(self.names.values())})")
+                elif st.voice is not None and st.voice.live(handle) is not None:
+                    from .speech import render_all
+                    said = await st.voice.turn(handle, None, text)  # what a call does with their words
+                    if self.args.dry:
+                        print(f"[call] EMBER → {name}: {render_all(said) or '(nothing)'}")
                 else:
                     await st.messenger.phone_inbound(handle, text)
             elif line.startswith("close "):
@@ -357,6 +482,10 @@ class Drill:
             await self.start()
             await self.repl()
         finally:
+            if self.tunnel is not None:
+                self.tunnel.terminate()
+            if self.voice_server is not None:
+                self.voice_server.should_exit = True
             if self.server is not None and not self._serve.done():
                 self.server.should_exit = True  # a clean shutdown (lifespan closes Photon + the DB)
                 await self._serve
@@ -401,6 +530,10 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--resident", action="append", default=[], metavar="PHONE", help="a resident's phone (repeatable)")
     ap.add_argument("--operator", action="append", default=[], metavar="PHONE@FACILITY",
                     help="a facility operator, e.g. 6175550103@mt-auburn (repeatable)")
+    ap.add_argument("--caller", action="append", default=[], metavar="PHONE[=ADDRESS]",
+                    help="a resident EMBER calls (repeatable). With an address (\"Putnam Ave and Western Ave\") they're "
+                         "placed there and called only if the forecast flood reaches it; without, the call asks where they are")
+    ap.add_argument("--voice", action="store_true", help="take calls: the voice app + a cloudflared tunnel for ElevenLabs")
     ap.add_argument("--dry", action="store_true", help="no Photon: nothing is texted; type texts with @r1 …")
     ap.add_argument("--crowded", action="store_true",
                     help="also the scenario's 40 synthetic households, competing for the same vehicles (default: only the drill's people)")
@@ -411,7 +544,7 @@ def main(argv: list[str] | None = None) -> None:
     args = ap.parse_args(argv)
     args.resident = args.resident or _phones("DRILL_RESIDENTS")
     args.operator = args.operator or _phones("DRILL_OPERATORS")
-    if args.dry and not args.resident and not args.operator:
+    if args.dry and not args.resident and not args.operator and not args.caller:
         args.resident = ["+16175550101"]  # a pretend phone; type its texts with @r1
     setup_logging(Path(args.db).with_suffix(".log"))
     try:
