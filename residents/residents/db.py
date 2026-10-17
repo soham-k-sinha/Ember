@@ -228,7 +228,9 @@ class Store:
             for t in ("meta", "closures", "households", "facilities", "resources", "reports", "plans", "assignments", "messages"):
                 db.execute(f"DELETE FROM {t}")
             db.execute("DELETE FROM sqlite_sequence WHERE name IN ('reports', 'messages')")
-            db.execute("DELETE FROM kv WHERE key LIKE 'pending:%'")  # half-answered questions belong to the old run
+            # per-run conversation memory: half-answered questions, last instruction texted, questions asked
+            for prefix in ("pending:", "instr:", "asked:"):
+                db.execute("DELETE FROM kv WHERE key LIKE ?", (prefix + "%",))
 
     def apply_snapshot(self, state: dict) -> None:
         """Replace the engine-derived part of the state (hazard, closures, households, facilities,
@@ -262,6 +264,29 @@ class Store:
             self._insert_plan(db, plan, reports_used)
             db.execute("INSERT INTO meta (key, value) VALUES ('plan_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                        (_dump(plan["version"]),))
+
+    def mark_offered(self, version: int, assignment_id: str) -> bool:
+        """proposed → offered once the instruction is texted (raw plan + the state's view). False if it was
+        already past `proposed` (offered / confirmed / en route ...)."""
+        with self._tx() as db:
+            row = db.execute("SELECT data FROM assignments WHERE plan_version = ? AND id = ?", (version, assignment_id)).fetchone()
+            if not row:
+                return False
+            a = json.loads(row["data"])
+            if a.get("status", "proposed") != "proposed":
+                return False
+            a["status"] = "offered"
+            db.execute("UPDATE assignments SET status = 'offered', data = ? WHERE plan_version = ? AND id = ?",
+                       (_dump(a), version, assignment_id))
+            row = db.execute("SELECT value FROM meta WHERE key = 'plan_view'").fetchone()
+            if row:
+                view = json.loads(row["value"])
+                if view and view.get("version") == version:
+                    for x in view["assignments"]:
+                        if x["id"] == assignment_id and x["status"] == "proposed":
+                            x["status"] = "offered"
+                    db.execute("UPDATE meta SET value = ? WHERE key = 'plan_view'", (_dump(view),))
+            return True
 
     def plan_reports_used(self, version: int) -> list[str]:
         rows = self._rows("SELECT reports_used FROM plans WHERE version = ?", (version,))

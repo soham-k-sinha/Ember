@@ -12,6 +12,7 @@ import logging
 from .db import Store, thread_key
 from .extract import LLM, Outcome, extract
 from .messaging import Messenger
+from .outbound import Outbound
 from .planner import Planner, ReportError
 
 log = logging.getLogger("residents.intake")
@@ -20,8 +21,9 @@ SORRY = "Sorry, we couldn't read that. Could you say it another way?"
 
 
 class Intake:
-    def __init__(self, store: Store, messenger: Messenger, planner: Planner, llm: LLM):
+    def __init__(self, store: Store, messenger: Messenger, planner: Planner, llm: LLM, outbound: Outbound | None = None):
         self.store, self.messenger, self.planner, self.llm = store, messenger, planner, llm
+        self.outbound = outbound
 
     def _record(self, thread: dict) -> dict:
         """What the model may know about the sender (no routes, no plan)."""
@@ -53,6 +55,7 @@ class Intake:
         elif out.clear_pending:
             self.store.kv_delete(f"pending:{key}")
 
+        replanned = False
         stored: list[dict] = []
         for r in out.reports:
             try:
@@ -67,6 +70,10 @@ class Intake:
             facts = [r for r in stored if r["kind"] in ("need", "closure_report", "facility_status")]
             if facts:
                 await self.planner.replan(trigger="; ".join(self.planner._trigger(r) for r in facts))
+                replanned = True  # the plan hook already texted any changed instruction
         if out.question:
             await self.messenger.send_message(thread, out.question, self.store.meta().get("plan_version"))
+        elif not replanned and self.outbound is not None and (view := self.store.plan_view()):
+            # nothing new from them (e.g. "hi" after opting in): ask what the plan still needs to know
+            await self.outbound.sync(view, only=key)
         return out

@@ -43,6 +43,8 @@ class Planner:
         self.lock = asyncio.Lock()
         self.plan_hooks: list[PlanHook] = []
         self._comparison: tuple[tuple, dict] | None = None
+        self._optimizing = False
+        self.last_optimize: dict | None = None
 
     # ---------- clock + state ----------
     def now(self) -> float:
@@ -124,22 +126,33 @@ class Planner:
         what = {"need": "needs", "closure_report": "road closed", "facility_status": "status"}[r["kind"]]
         return f"report {r['id']} ({r['source']}): {who} {what}"
 
+    def _known(self) -> tuple[float, dict | None, list[dict], list[dict]]:
+        """(clock, current raw plan, reports known by the clock, the ones the current plan already saw)."""
+        prev = self.store.current_plan()
+        t_now = self.now()
+        known = [r for r in self.store.reports() if r["observed_at_t_s"] <= t_now]
+        prev_used = set(self.store.plan_reports_used(prev["version"])) if prev else set()
+        return t_now, prev, known, [r for r in known if r["id"] in prev_used]
+
     async def replan(self, trigger: str = "manual replan") -> dict:
         """New plan version from the current one + every report known by the clock. Broadcasts `plan`
         and one `assignment` event per change, then runs plan hooks (outbound messages)."""
         t0 = time.time()
         async with self.lock:
-            prev = self.store.current_plan()
-            t_now = self.now()
-            known = [r for r in self.store.reports() if r["observed_at_t_s"] <= t_now]
-            prev_used = set(self.store.plan_reports_used(prev["version"])) if prev else set()
-            prev_reports = [r for r in known if r["id"] in prev_used]
+            t_now, prev, known, prev_reports = self._known()
             plan = await run_in_threadpool(self.bridge.plan, known, t_now, prev, prev_reports, trigger)
-            used = [r["id"] for r in known if r["kind"] in FACT_KINDS]
-            self.store.add_plan(plan, reports_used=used)
-            self.store.mark_reports_resolved(used)
-            self._comparison = None
-            state = await self._refresh(t_now)
+            state = await self._store_plan(plan, known, t_now)
+        return await self._publish(state, trigger, t0)
+
+    async def _store_plan(self, plan: dict, known: list[dict], t_now: float) -> dict:
+        """(lock held) Make `plan` the current version and recompute the state."""
+        used = [r["id"] for r in known if r["kind"] in FACT_KINDS]
+        self.store.add_plan(plan, reports_used=used)
+        self.store.mark_reports_resolved(used)
+        self._comparison = None
+        return await self._refresh(t_now)
+
+    async def _publish(self, state: dict, trigger: str, t0: float) -> dict:
         view = state["plan"]
         log.info("plan v%s (%s): %d changes in %.2fs", view["version"], trigger, len(view.get("changes", [])), time.time() - t0)
         await self.hub.broadcast("plan", view, state["t_s"])
@@ -150,12 +163,48 @@ class Planner:
                 "assignment": None if ch["change"] == "removed" else by_id.get(ch["assignment_id"]),
                 **({"note": ch["note"]} if ch.get("note") else {})}, state["t_s"])
         await self.hub.broadcast("metrics", state["metrics"], state["t_s"])
+        raw = self.store.current_plan()
         for hook in self.plan_hooks:
             try:
-                await hook(view, plan)
+                await hook(view, raw)
             except Exception:  # noqa: BLE001 - a messaging failure must not undo a plan
                 log.exception("plan hook failed for v%s", view["version"])
         return view
+
+    # ---------- robust optimization (Daytona / local pool) ----------
+    @property
+    def optimizing(self) -> bool:
+        return self._optimizing
+
+    async def optimize(self, seeds: int = 20, k: int = 4) -> dict:
+        """Top-k candidate plans × `seeds` perturbed worlds (+ the baseline), on Daytona when engine has a
+        key, else a local process pool. Every run is broadcast as a `scatter_point` as it lands; the
+        plan with the best worst-20% outcome becomes the next version."""
+        if self._optimizing:
+            raise RuntimeError("an optimization is already running")
+        self._optimizing = True
+        t0 = time.time()
+        loop = asyncio.get_running_loop()
+        sent: list[asyncio.Future] = []
+        try:
+            async with self.lock:
+                t_now, prev, known, prev_reports = self._known()
+
+                def on_point(p: dict) -> None:  # called on the engine's worker thread
+                    sent.append(asyncio.run_coroutine_threadsafe(self.hub.broadcast("scatter_point", p, t_now), loop))
+
+                plan = await run_in_threadpool(self.bridge.optimize, known, t_now, prev, on_point, seeds, k)
+                await asyncio.gather(*(asyncio.wrap_future(f) for f in sent))  # every point before the plan
+                state = await self._store_plan(plan, known, t_now)
+            view = await self._publish(state, "robust optimization", t0)
+            self.last_optimize = {"plan_version": view["version"], "points": len(sent), "wall_s": round(time.time() - t0, 2),
+                                  "robust": (view.get("search") or {}).get("robust"), "error": None}
+            return self.last_optimize
+        except Exception as e:
+            self.last_optimize = {"plan_version": None, "points": len(sent), "wall_s": round(time.time() - t0, 2), "error": str(e)}
+            raise
+        finally:
+            self._optimizing = False
 
     # ---------- disruption ----------
     async def close_road(self, edge_ids: list[int], source: str = "judge", note: str | None = None) -> tuple[dict, dict | None]:
