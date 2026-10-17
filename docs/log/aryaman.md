@@ -247,3 +247,9 @@ Files: engine/ember_engine/{traffic_bg (new),playback,cli,world}.py, engine/embe
 Run: uv run --project engine pytest -q; npm --prefix web run build
 Interfaces: scenario 0.2 adds optional `background_traffic`; playback 0.2 adds optional `traffic`. Soham: reseed (`POST /dev/reset`) for the new v1; a Daytona snapshot rebuild is needed for robust runs to include traffic. Residents 128/129 (the known wall-clock listener test).
 Status: done. Engine 100/100. Plan v1 reaches 78 with and without traffic; DEMO.md numbers should be re-measured anyway (routes changed).
+
+## 2026-10-17 09:40 · verified + merged the PixiJS website (#47); demo numbers re-measured · branch aryaman/demo-numbers-2 · commit (this PR)
+What: verified the web chat's #47 independently before merging (Aryaman OK'd the hard-rule-7 amendment, D71): CI pass, engine 100/100, smoke OK, e2e.py 62/62 with /optimize on Daytona (8 sandboxes, 11 s), judge replan 0.67 s, browser: Fixtures + Live, judge beat updates the stage without reload, Optimize "100 runs on daytona", ranking. Merged. Re-measured on merged main (background traffic D73 shifts ETAs): v1 78/9/0 m³/46 km, 18 shared pickups; judge pickup 122 vs 165 min; comparison after the judge 89 vs 51.6 (+37.4), 0 vs 5,244 m³, +33 km; hospital 13 min, 0 → 9,600 m³; optimize after the hospital beat chooses c02 over c00 (worst-20% 13.5 vs 14.5, baseline 53.5); at 5:00 it keeps c00. Updated DEMO.md, QA.md, devpost outline, HANDOFF (website status, playback gap, uv sync --extra dev gotcha, snapshot ember-engine-1b76fade79).
+Files: docs/DEMO.md, docs/QA.md, docs/devpost/README.md, docs/HANDOFF.md, docs/log/aryaman.md
+Interfaces: none. Soham: please add `GET /playback?planner=ember|baseline` → `EngineSession.playback(planner)` (contracts/playback.schema.json); the website's Live mode calls it.
+Status: done.

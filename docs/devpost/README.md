@@ -32,9 +32,9 @@ Tagline: *"Forecasts are wrong by minute 10; EMBER keeps the plan right once rea
 
 ## 4. Results (≈120 words), all from simulation of a synthetic drill
 - Plan v1: Generator 1 pre-positioned at Cottage Farm → **0 m³** overflow vs **2,317 m³** for the incident-by-incident baseline.
-- After the judge's text (5 seeds, paired worlds): **89 vs 52.6 people reached before their deadline (+36.4)**, overflow **0 vs 5,244 m³**. EMBER drives ≈ +27 vehicle-km more; we say so.
+- After the judge's text (5 seeds, paired worlds): **89 vs 51.6 people reached before their deadline (+37.4)**, overflow **0 vs 5,244 m³**. EMBER drives ≈ +33 vehicle-km more; we say so.
 - Hospital report at minute 15: generator re-targeted, outage **13 min** instead of 215; the 9,600 m³ cost is stated, not hidden. People first, always.
-- Daytona picks a different plan than the nominal best: worst-20% unreached **16.8 vs 29**.
+- Daytona picks a different plan than the nominal best after the hospital report: worst-20% unreached **13.5 vs 14.5** (baseline 53.5).
 
 ## 5. Sustainability (ASUS Save the Earth, D65)
 Untreated overflow (m³) is a term in the planner's objective and a row in every comparison, anchored to the real 2024 Cottage Farm event. Never at the expense of people: the objective is lexicographic.
