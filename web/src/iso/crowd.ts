@@ -17,6 +17,7 @@
 import { Container, Graphics, Sprite } from "pixi.js";
 import { LOOKS, POSES, RES, type Atlas, type Pose, type Shape } from "./atlas";
 import { KZ, type Projector } from "./project";
+import { figureScale, inCrowdView } from "./density";
 
 export type Agent = {
   id: string;
@@ -59,7 +60,6 @@ type Guest = {
   behind: boolean;
 };
 
-const MIN_FIGURE_PX = 9.5;
 const WALK: Pose[] = ["walkA", "stand", "walkB", "stand"];
 
 function hashStr(s: string): number {
@@ -127,8 +127,10 @@ export class Crowd {
       const cloth = new Sprite(cf.tex);
       cloth.anchor.set(cf.ax, cf.ay);
       const c = new Container();
+      c.eventMode = "none"; // household picking is handled explicitly by pick()
       c.addChild(person, cloth);
       const decal = new Sprite(df.tex);
+      decal.eventMode = "none";
       decal.anchor.set(df.ax, df.ay);
       this.objects.addChild(c);
       this.decals.addChild(decal);
@@ -148,9 +150,12 @@ export class Crowd {
 
   update(agents: Agent[], dtS: number, camS: number, view: View, peopleTint: number) {
     const stamp = ++this.stamp;
-    const k = Math.max(1, MIN_FIGURE_PX / (this.figureH * camS));
+    const k = figureScale(this.figureH, camS);
     const base = 1 / RES;
     for (const agent of agents) {
+      // Cull before allocating sprites, animation state or performing building-depth queries.
+      const [rawX, rawY] = this.p.iso(agent.a, agent.b);
+      if (!inCrowdView(rawX, rawY, view, this.figureH * k * 1.1, 0.5 * k)) continue;
       const g = this.guestFor(agent.id);
       g.stamp = stamp;
       g.household = agent.household;
@@ -192,7 +197,7 @@ export class Crowd {
       g.py = py;
       g.k = k;
       const hPlane = this.figureH * k * g.height;
-      const on = px > view.x0 - 2 && px < view.x1 + 2 && py > view.y0 && py - hPlane < view.y1;
+      const on = inCrowdView(px, py, view, hPlane, 0.5 * k);
       g.c.visible = on;
       g.decal.visible = on;
       if (!on) continue;

@@ -21,6 +21,7 @@ import { poseAt, type Playback, type Track } from "../playback";
 import type { Diorama } from "./data";
 import { FOOT, ROAD_W } from "./ground";
 import type { ScenarioKeyframe, StateHousehold, StateSnapshot } from "../types";
+import { inCrowdView, MAX_STROLLERS, type CrowdView } from "./density";
 
 type Leg = { rid: string; arrive: number; pickup: number; dropoff: number | null };
 
@@ -34,10 +35,13 @@ export type AgentWorld = {
   outside: Map<string, [number, number]>; // facility → a standing spot outside it (a, b)
   strolls: Stroll[]; // pavement and path routes for passers-by
   strollCum: number[];
+  strollers: Stroller[]; // stable route/phase choices, computed once instead of every frame
   flood: Array<{ t: number; rings: Array<Array<[number, number]>> }>; // flood keyframes in (a, b)
 };
 
 type Stroll = { pts: Array<[number, number]>; cum: number[]; len: number; w: number };
+type Stroller = { id: number; route: Stroll; speed: number; pause: number; phase: number; priority: number };
+const CLOTH = [0x8a94a6, 0x6f7f96, 0xb39b7d, 0x9a6b5a, 0x5d7a6a, 0xc9c2b4, 0x7b6f8f, 0x4f5d75, 0xa88a5c, 0x6a8caf];
 
 /** Pavement lines (both sides of each street, kerb + 1.8 m) and footpaths, in ground metres. */
 export function strollRoutes(data: Diorama, p: Projector, insideBuilding: (a: number, b: number) => boolean): Stroll[] {
@@ -109,6 +113,12 @@ export function setScene(w: AgentWorld, data: Diorama, keyframes: ScenarioKeyfra
     acc += r.w;
     return acc;
   });
+  w.strollers = w.strolls.length ? Array.from({ length: MAX_STROLLERS }, (_, i) => {
+    const h1 = ((i * 2654435761) >>> 0) / 4294967296;
+    const h2 = ((i * 40503 + 977) % 10007) / 10007;
+    const h3 = ((i * 69069 + 12345) % 9973) / 9973;
+    return { id: i, route: pickRoute(w, h2), speed: 1.05 + h3 * 0.5, pause: 4 + h1 * 10, phase: h3 * 997, priority: h1 };
+  }).sort((a, b) => a.priority - b.priority) : [];
   w.flood = keyframes.map((k) => {
     const list = k.geometry.type === "Polygon" ? [k.geometry.coordinates as [number, number][][]] : (k.geometry.coordinates as [number, number][][][]);
     return { t: k.t_s, rings: list.map((poly) => poly[0].map(([lon, lat]) => w.p.toAB(lon, lat))) };
@@ -136,7 +146,7 @@ export function agentWorld(p: Projector, insideBuilding: (a: number, b: number) 
       legs.set(e.household_id, { rid: arrive.rid, arrive: arrive.t, pickup: picked, dropoff: safe });
     }
   }
-  return { p, insideBuilding, onRoad, legs, tracks, spots: new Map(), outside: new Map(), strolls: [], strollCum: [], flood: [] };
+  return { p, insideBuilding, onRoad, legs, tracks, spots: new Map(), outside: new Map(), strolls: [], strollCum: [], strollers: [], flood: [] };
 }
 
 /** Nearest ground point outside any building: first along `toward`, then in widening rings. */
@@ -260,8 +270,11 @@ export function buildAgents(args: {
   walkers: WalkerPlan | null;
   showWalkers: boolean;
   now: number; // wall seconds (decorative idle motion only)
-  /** share of passers-by to show (fewer when zoomed out, where real-pace motion is invisible) */
-  strollShare?: number;
+  /** Stage-wide decorative population budget before flood and viewport filtering. */
+  strollCount?: number;
+  view?: CrowdView;
+  figureHeight?: number;
+  figureHalfWidth?: number;
 }): Agent[] {
   const { w, state, t, legend, now } = args;
   const { p } = w;
@@ -380,19 +393,12 @@ export function buildAgents(args: {
 
   // passers-by (illustrative): real walking pace on wall time, fewer as the flood rises, never on water
   if (args.showWalkers && w.strolls.length) {
-    const N = 700;
-    const share = (1 - 0.75 * clamp01((t - 2400) / 7200)) * (args.strollShare ?? 1);
-    const CLOTH = [0x8a94a6, 0x6f7f96, 0xb39b7d, 0x9a6b5a, 0x5d7a6a, 0xc9c2b4, 0x7b6f8f, 0x4f5d75, 0xa88a5c, 0x6a8caf];
-    for (let i = 0; i < N; i++) {
-      const h1 = ((i * 2654435761) >>> 0) / 4294967296;
-      if (h1 > share) continue;
-      const h2 = ((i * 40503 + 977) % 10007) / 10007;
-      const h3 = ((i * 69069 + 12345) % 9973) / 9973;
-      const route = pickRoute(w, h2);
-      const speed = 1.05 + h3 * 0.5;
-      const pause = 4 + h1 * 10;
+    const count = Math.min(w.strollers.length, Math.round((args.strollCount ?? 700) * (1 - 0.75 * clamp01((t - 2400) / 7200))));
+    for (let i = 0; i < count; i++) {
+      const stroller = w.strollers[i];
+      const { route, speed, pause } = stroller;
       const cycle = (route.len * 2) / speed + pause * 2;
-      const tt = (now + h3 * 997) % cycle;
+      const tt = (now + stroller.phase) % cycle;
       // there, pause, back, pause
       let d: number;
       let moving = true;
@@ -407,8 +413,12 @@ export function buildAgents(args: {
       const f = (d - s0) / (route.cum[k] - s0 || 1);
       const a = route.pts[k - 1][0] + (route.pts[k][0] - route.pts[k - 1][0]) * f;
       const b = route.pts[k - 1][1] + (route.pts[k][1] - route.pts[k - 1][1]) * f;
+      if (args.view) {
+        const [x, y] = p.iso(a, b);
+        if (!inCrowdView(x, y, args.view, args.figureHeight ?? 15, args.figureHalfWidth ?? 3)) continue;
+      }
       if (!p.inside(...p.fromAB(a, b)) || underWater(w, t, a, b)) continue;
-      out.push({ id: `p:${i}`, a, b, color: CLOTH[i % CLOTH.length], shape: "circle", moving, alpha: 0.95 });
+      out.push({ id: `p:${stroller.id}`, a, b, color: CLOTH[stroller.id % CLOTH.length], shape: "circle", moving, alpha: 0.95 });
     }
   }
 

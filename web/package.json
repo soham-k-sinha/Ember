@@ -7,7 +7,8 @@
     "dev": "vite --host 0.0.0.0 --port 43123",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0 --port 43123",
-    "check:closures": "node --experimental-strip-types scripts/check-closures.ts"
+    "check:closures": "node --experimental-strip-types scripts/check-closures.ts",
+    "check:crowd": "node --experimental-strip-types scripts/check-crowd.ts"
   },
   "dependencies": {
     "@deck.gl/core": "9.4.0",
