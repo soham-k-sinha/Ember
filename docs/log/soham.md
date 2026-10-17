@@ -149,3 +149,7 @@ Next (engine, Aryaman): (1) declines as constraints: the allocator re-proposes a
 ## 2026-10-17 · HANDOFF.md refreshed for the next agent · branch soham/drill
 What: rewrote residents/HANDOFF.md to the current state: open stacked PRs #38/#39 and how to merge them (#38 first, then rebase #39), every residents file incl. places/locate/guide/briefing/drill, how the planner decides and its engine-side limits, the drill flow and flood zone, live processes, decisions D55–D57, engine asks for Aryaman, gotchas.
 Status: in #39. No code change.
+
+## 2026-10-17 · HANDOFF §12: everything an agent needs to continue in a new chat · branch soham/drill
+What: added residents/HANDOFF.md §12: Soham's standing instructions, session history, verification commands (dry drill by piped console, mutation checks, live eval), tool quirks on this Mac, environment and local files, key scenario ids and the flood-zone corners, code conventions and test helpers, prioritized next steps. Drill settings added to residents/.env.example.
+Status: in #39. No code change.

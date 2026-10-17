@@ -347,3 +347,149 @@ can't beat the simulator-scored search.
 - `drill.db` keeps phones between runs. Two EMBER backends with Photon on would both answer every text; the drill's
   preflight blocks that.
 - Real phones are on the line whenever Photon is enabled. Automated checks use `--dry` / `PHOTON_ENABLED=0`.
+
+## 12. Keep working in a new chat: everything the agent needs
+### How Soham wants you to work (his standing instructions)
+- **Order of work.** Make a plan, then implement. Explain the code you write and every decision you make (why, and
+  the alternative you rejected). Ask when you genuinely need something, e.g. a phone number, a key, a merge, or a
+  decision that's his. Otherwise proceed.
+- **"Make no mistakes."** Test rigorously and prove the intended behaviour, not just green tests:
+  - write tests for every change
+  - **mutation-check** new guards: break the line and confirm a test fails; the pattern is in §12.3
+  - replay real transcripts
+  - run the live LLM eval when the extraction changes
+  - do a `--dry` drill with the real LLM before saying it works
+  - fix every mistake you find, including old ones (the tester-number scrub, D56)
+- **"Don't break anything."** Keep existing tests and public behaviour. When a behaviour must change, say so
+  explicitly, update the pinned test on purpose, and write a DECISIONS line (e.g. D57's second NO).
+- **Git.** Code only on `soham/*` branches, never `main` or anyone else's branch. Pull/rebase from `main` before every
+  push. Soham handed PR handling to the agent ("you can handle PRs from now on"), but merges must be done by Soham
+  (the classifier blocks `gh pr merge` for the agent).
+- **Phones.** Never send surprise texts to real phones; use `--dry` / `PHOTON_ENABLED=0`. Live sends are only for
+  what Soham is actively running. Never write his numbers into files that get committed.
+- **Realism.** He wants the drill realistic. Instructions must be genuine (go to this corner, wait inside, meet the
+  crew, board, ride, check in), and the plan must reflect other people, free vehicles and distances. He asked about
+  an LLM for planning; the agreed answer is **no LLM in planning** (hard rule 2). Make the reasoning visible
+  (briefing.py) and push the planning gaps to the engine (§10).
+- **Replies to him.** Plain language, what changed and why, exact commands to run, what's verified vs not, and
+  honesty about limits (e.g. "not yet tested on a real phone").
+
+### Session history (what was asked, in order)
+1. Understand the project and his brief → step-by-step plan with the git workflow.
+2. Implement tasks 1–8 with tests → merged PRs #10–#35 (§8).
+3. Fix the PR conflict on #10 and act on Aryaman's requests (review #11/#12, CORS 43123, engine wiring, delete the
+   residents copy of the WS schema, switch to `EngineSession`) → done.
+4. First handoff doc → #37.
+5. "We changed the Photon API a bit" (Codex's multi-household commit) → reviewed and PR'd as #38. Then the drill:
+   location by text, the plan's questions, YES, step-by-step directions with DONE, the clock moving one step at a
+   time, one process → #39 (D56).
+6. "Will this run on iMessage?" → yes; explained how to run it.
+7. Live crash `PhoneConflict` (a phone changed role between runs) → fixed in #39.
+8. Two-phone run felt "hardcoded" → diagnosis: the allocator does plan around everyone, but the texts hid it and the
+   decline handling was wrong → D57 in #39, engine asks in §10.
+9. This handoff, refreshed twice.
+
+### How to verify (commands that worked)
+```bash
+cd residents
+uv run pytest -q                                     # all; ~95 s. Single file: uv run pytest -q tests/test_drill.py
+uv run python scripts/eval_extract.py                # live extraction accuracy; add a sample to tests/samples.json (indent=1) for new phrasing
+# a scripted dry drill with the real LLM + geocoder (no texts sent): pipe console lines in
+printf '@r1 Putnam Ave and Western Ave\n@r1 2 of us\n@r1 yes\n@r1 done\n@r1 done\n@r1 done\nstatus\nquit\n' | \
+  uv run ember-drill --dry --db /tmp/x.db --port 8015 --resident 6175550101 2>&1 | sed -n '/^\[t=/,$p'
+# mutation check: replace one guard line with a no-op in a copy, run the one test that should catch it, restore.
+# The scripts used are deleted; re-create from this description (a list of (file, old, new, test) tuples, assert
+# old occurs once, write, run pytest -x on that test, restore in `finally`).
+```
+- **Tool quirks on this Mac:**
+  - `timeout` doesn't exist.
+  - Foreground `sleep` is blocked by the harness; run long jobs with `run_in_background`.
+  - zsh doesn't word-split `$var` lists (use `xargs -0`).
+  - BSD `sed -i ''`.
+  - The scratchpad dir from earlier sessions is gone; use `/tmp`.
+- **Live state checks:**
+  - `curl -s 127.0.0.1:8000/health`
+  - `lsof -nP -iTCP:8000 -sTCP:LISTEN`
+  - `sqlite3 residents/drill.db "select handle, role, thread_key, assigned_number, last_inbound_at is not null from phones"`
+    (this is also where Soham's tester numbers can be read; never copy them into the repo)
+  - `tail residents/drill.log`
+- **Ask Soham before:** killing a process he started; deleting his DBs; anything that texts real phones outside a
+  run he's doing.
+
+### Environment
+- **Machine:** macOS (Darwin 24), zsh, Python 3.13.7 (python.org build, so certifi is needed for SSL), `uv` at
+  `~/.local/bin/uv`, `gh` (Homebrew), `sqlite3`.
+- **Repo:** `/Users/soham/Documents/Coding/HackHarvard/Ember`.
+- **Local files (gitignored):**
+  - `residents/.env`: real keys (Photon key + project id, Anthropic key).
+  - `residents/ember.db`: the demo backend.
+  - `residents/drill.db` + `drill.log`: the drill.
+  - `data/town.json`: unpacked from `engine/data/town.json.gz` on first use.
+- **Ports:** backend / drill on `:8000`; web dev on `:5173` (or `:43123`).
+- **Photon:** shared lines are assigned per phone (`POST /phones` → `assigned_number`, e.g. +1 628-998-…). The opt-in
+  (space id, agent user id) is learned from the phone's first text and survives runs and resets.
+- **Models:** extraction uses `claude-opus-5-5`, effort low, `beta.messages.parse` with
+  `betas=["server-side-fallback-2026-07-01"]`, `fallbacks="default"`. Before touching the call, use the claude-api
+  skill and don't guess SDK shapes.
+
+### Key data (allston_flood_v1)
+- **Fleet** (all start at `ems14`, Boston EMS Station 14 on Western Ave by Stadium Rd):
+
+  | Id | Kind | Seats | Notes |
+  |---|---|---|---|
+  | `van-1` | van | 6 | usually the reserve |
+  | `van-2` | van | 6 | |
+  | `van-3` | accessible_van | 6 | **the only wheelchair-accessible vehicle** |
+  | `truck-1` | Generator truck | 2 | also used for rescues |
+  | `crew-1` | road crew | – | clears roads |
+  | `gen-1` | generator | – | 500 kW, camlock |
+  | `gen-2` | generator | – | 150 kW, twist-lock |
+
+  Reserve rule: 1 van and 1 generator.
+- **Facilities:**
+  - `mt-auburn`: hospital, **critical**; the operator thread defaults here
+  - `cottage-farm`: pumping station / CSO, drives the overflow m³
+  - `putnam-ave-sub`: substation
+  - `outfall-mwr201`
+  - `ems14`: response base; **every rescue drops off here**
+  - `treehouse-shelter`: capacity 200, unused as a drop-off
+- **Timing:** `t_end_s` 14400 (4 h), tick 60 s, deadline margin 900 s: a household's deadline is the first flood
+  keyframe at its node minus 15 min.
+- **Households:** 40 synthetic ones (judge **#10296**, needs unknown); solo mode removes them. The town has 17,810
+  buildings; texted-in households are the nearest free building to the point they gave.
+- **Flood zone** (pickups needed): Flagg St & Memorial Dr (by 75 min); Akron St & Banks St, Ballord Pl & Putnam Ave,
+  Banks St & Elmer St, Putnam Ave & Western Ave, Callender St & Putnam Ave (by 135 min); Memorial Dr & River St, etc.
+  (by 165 min). Western Ave near Stadium Rd (123/125 Western Ave) is **outside** it.
+
+### Code conventions in this lane
+- Module docstrings explain the why. Comments are short and say what the code can't. Lines up to about 120
+  characters. Type hints. `from __future__ import annotations`.
+- Messages are f-string templates over computed fields. Every outbound text goes through
+  `Messenger.send_message(thread, text, plan_version, assignment_id)`, or `send_to_phone` before a household exists.
+- Per-run memory lives in `kv` with a prefix, and **every new prefix must be added to `Store.clear_scenario()`**.
+- New settings: a `Settings` field in config.py with an env name, mirrored in `.env.example` and HANDOFF §6.
+- **Test helpers** (tests/test_drill.py): fixtures `drill` (solo bridge, auto clock, fake LLM) and `pair` (two
+  wheelchair neighbours). Helpers:
+  - `Tap(c).outs(handle)`: texts EMBER sent that phone
+  - `register(c, handle, locate=True)`
+  - `text(c, handle, msg, role=)`: through `/dev/inbound` by handle
+  - `place(c, tap, handle, where)`
+  - `thread_of`, `clock`, `outcome`
+  - `SCRIPT` / `NEIGHBORS`: the fake LLM's answers per exact text
+- Engine fixtures: `bridge` (moves=10, full scenario, session-scoped), `solo_bridge`.
+- The extraction schema change pattern: add the Field to `Fact`; add it to `NONE` in `tests/test_extract.py` and to
+  the two explicit `Fact(...)` calls in `tests/test_conversation.py`; update `SYSTEM`; add live samples; run the eval.
+
+### Next steps (in priority order)
+1. Soham merges #38, then the rebased #39. Then re-run the DEMO.md dry run (`RESET_ON_START=1`, Photon off,
+   `/dev/inbound`) and send Aryaman the new numbers.
+2. Soham re-tests the drill on both phones with the D57 code (restart `ember-drill`) from flood-zone corners. Watch
+   for: the "why" line in offers, answers to questions, the second-NO check, the steps, and the clock.
+3. Hand Aryaman the §10 engine list (declines as constraints, multi-household trips, shelter drop-off, unthreatened
+   policy). When he ships any of them, update `briefing.others_text` / `why()` (they currently say "one household per
+   trip") and the guide's drop-off wording.
+4. Possible residents-side work if asked:
+   - read iMessage location pins, if Photon exposes them (`parse_inbound` drops non-text content today)
+   - questions about a specific road ("is River St open?" → `closures` in the state)
+   - a web panel for drill participants (Aryaman's lane: ask)
+   - Task 9 voice only if green-lit
