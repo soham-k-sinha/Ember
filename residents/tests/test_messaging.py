@@ -54,10 +54,10 @@ def test_register_phones_creates_assignments_and_resolves_threads(app_client, fp
     assert [x["role"] for x in app_client.get("/phones").json()] == ["operator", "resident"]
 
 
-def test_reregistering_a_role_replaces_the_phone(app_client):
+def test_occupied_default_household_does_not_replace_the_phone(app_client):
     app_client.post("/phones", json={"role": "resident", "handle": "4133620520"})
-    app_client.post("/phones", json={"role": "resident", "handle": "4135550199"})
-    assert [p["handle"] for p in app_client.get("/phones").json()] == ["+14135550199"]
+    assert app_client.post("/phones", json={"role": "resident", "handle": "4135550199"}).status_code == 409
+    assert [p["handle"] for p in app_client.get("/phones").json()] == [JUDGE_PHONE]
 
 
 def test_bad_phone_and_role_rejected(app_client):

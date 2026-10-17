@@ -1,10 +1,4 @@
-"""Which conversation thread a tester phone stands for, resolved against the current state.
-
-Phones are registered by role, not by household/facility id, because ids differ between the state
-fixture (judge #492, `mt_auburn`) and allston_flood_v1 (judge #10296, `mt-auburn`).
-- resident → the judge's household (fallback: the first household with phone_role "resident")
-- operator → OPERATOR_FACILITY_ID if set, else the critical hospital (fallback: any hospital)
-"""
+"""Phone-to-household/facility bindings. Role defaults exist only for the original single-phone demo."""
 
 from __future__ import annotations
 
@@ -15,7 +9,21 @@ from .db import Store, thread_key
 ROLES = ("resident", "operator")
 
 
-def resolve_thread(store: Store, role: str) -> dict | None:
+def resolve_thread(store: Store, role: str, household_id: int | None = None,
+                   facility_id: str | None = None) -> dict | None:
+    """Validate an explicit target, or resolve the original demo default for registration."""
+    if role not in ROLES:
+        raise ValueError(f"unknown role {role!r}")
+    if (role == "resident" and facility_id is not None) or (role == "operator" and household_id is not None):
+        raise ValueError("Residents use household_id; operators use facility_id.")
+    if household_id is not None:
+        if not any(h["household_id"] == household_id for h in store.households()):
+            raise ValueError(f"Household {household_id} is not in the current scenario; choose an ID from GET /state.")
+        return {"household_id": household_id}
+    if facility_id is not None:
+        if not any(f["id"] == facility_id for f in store.facilities()):
+            raise ValueError(f"Facility {facility_id!r} is not in the current scenario.")
+        return {"facility_id": facility_id}
     if role == "resident":
         hh = store.households()
         pick = next((h for h in hh if h.get("judge")), None) or next((h for h in hh if h.get("phone_role") == "resident"), None)
@@ -30,14 +38,45 @@ def resolve_thread(store: Store, role: str) -> dict | None:
     raise ValueError(f"unknown role {role!r}")
 
 
-def role_for_thread(store: Store, thread: dict) -> str | None:
-    """Inverse: which role (if any) has a phone on this thread."""
+def phone_thread(store: Store, phone: dict) -> dict | None:
+    """Bind legacy role-only rows once; never retarget an explicit binding after a scenario switch."""
+    key = phone.get("thread_key")
+    if key is None:
+        thread = resolve_thread(store, phone["role"])
+        if thread is None:
+            return None
+        store.upsert_phone(phone["handle"], phone["role"], thread_key=thread_key(thread),
+                           scenario_id=store.meta().get("scenario_id"))
+        return thread
+    if phone.get("scenario_id") != store.meta().get("scenario_id"):
+        return None
+    kind, value = key.split(":", 1)
+    try:
+        return resolve_thread(store, phone["role"],
+                              household_id=int(value) if kind == "household" else None,
+                              facility_id=value if kind == "facility" else None)
+    except ValueError:
+        return None
+
+
+def phone_for_thread(store: Store, thread: dict) -> dict | None:
     key = thread_key(thread)
-    for role in ROLES:
-        t = resolve_thread(store, role)
-        if t is not None and thread_key(t) == key and store.phone(role=role):
-            return role
+    for phone in store.phones():
+        target = phone_thread(store, phone)
+        if target and thread_key(target) == key:
+            return store.phone(handle=phone["handle"])
     return None
+
+
+def select_thread(store: Store, role: str, household_id: int | None = None,
+                  facility_id: str | None = None) -> dict | None:
+    """HTTP selection: a role alone is usable only when it cannot pick the wrong person's chat."""
+    if household_id is not None or facility_id is not None:
+        return resolve_thread(store, role, household_id, facility_id)
+    matches = [t for p in store.phones() if p["role"] == role if (t := phone_thread(store, p))]
+    if len(matches) > 1:
+        raise ValueError(f"Several {role} phones are registered; specify household_id or facility_id.")
+    return matches[0] if matches else resolve_thread(store, role)
 
 
 def normalize_handle(raw: str) -> str:

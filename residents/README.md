@@ -23,14 +23,14 @@ uv run pytest -q
 | `POST /replan` | replan now (no new fact) |
 | `POST /optimize?seeds=20&k=4` → 202 | robust fan-out (top-k candidates × perturbed worlds + baseline; Daytona if engine/.env has a key, else local processes). Streams WS `scatter_point`, then `plan`. Runs outside the planner lock on its own engine session + World (clock / texts / replans keep flowing); if a replan lands meanwhile the result is discarded as superseded. 409 while running; `GET /optimize` = `{running, last}` |
 | `POST /simulate {planner: ember\|baseline}` | projected metrics over the horizon for the current plan or the incident-by-incident baseline, with every report known by the clock |
-| `POST /ask {role, question?}` | scripted prompt to the resident/operator thread (operator console); default = the plan's open question for that thread, else a role default. The reply comes back through extraction (e.g. → `facility_status` → replan) |
+| `POST /ask {role, household_id?, facility_id?, question?}` | prompt a specific household/facility. A role alone works with at most one active registration of that role; multiple matches → 422. Returns delivery status, assigned_number and action_needed; blocked sends do not consume the plan's question. |
 | `POST /clock {t_s}` | move the sim clock (play / scrub); broadcasts `state` |
 | `GET /comparison?seeds=5` | baseline vs EMBER on paired perturbations (`comparison.schema.json`), cached per plan version (~3 s first call) |
 | `POST /assignments/{id}/confirm`, `/reject` `{plan_version?}` | the person accepts / declines an offer (texts "yes"/"no" take the same path). Reject → replan; that vehicle is never re-offered to them. 409 if `plan_version` is older and the assignment changed since (stale) |
-| `GET /phones`, `POST /phones {role, handle}` | tester phones by role (`resident` → the judge's household, `operator` → the critical hospital); POST creates the Photon shared-line assignment and returns `assigned_number` |
+| `GET /phones`, `POST /phones {role, handle, household_id?, facility_id?}` | one phone per household/facility, many residents/operators. Residents specify household_id, operators facility_id. Omission uses the original judge/hospital default. Occupied target or a phone bound elsewhere → 409; never silently replaces a registration. Returns thread, assigned_number, opted_in and action_needed. |
 | `POST /messages {thread, text, plan_version?, assignment_id?}` | send on a thread (gets the `[EMBER drill]` prefix); returns `delivery`: `sent` / `failed` / `not_opted_in` / `no_phone` / `dev` |
 | `POST /dev/reset` | reseed from `SEED_STATE` and broadcast `state` (rehearsals; `DEV_ENDPOINTS=0` hides it) |
-| `POST /dev/inbound {role, text}` | pretend a tester texted (same path as a real Photon message); stage fallback |
+| `POST /dev/inbound {role, text, household_id?, facility_id?}` | inject a message into a specific thread; role-only is rejected if ambiguous. Does not opt a real phone in. With Photon enabled, replies can still go to real phones. |
 
 ## Photon (2.0 Beta)
 1. `.env`: `PHOTON_ENABLED=1`, `PHOTON_API_KEY`, `PHOTON_PROJECT_ID` (key needs project:read/write, platforms:read/write).
@@ -39,6 +39,77 @@ uv run pytest -q
 4. `GET /health` → `photon_listener.socket` should be `subscribed`; if the socket is down for 5 s, the backend polls `GET /messages` every 2 s instead.
 
 Inbound texts are deduped by Photon message id; the event cursor is saved after each handled event and survives restarts and `/dev/reset`.
+
+## Multiple residents: setup and test
+
+Restart the backend after updating this code. The automatic SQLite migration preserves existing
+registrations and their Photon chat/opt-in credentials, binds legacy resident/operator rows to the
+current judge/hospital, and removes the old one-phone-per-role constraint. No reset is needed.
+Bindings are preserved across resets and restarts; bindings from another scenario are inactive
+rather than silently attached to a different household. Previously replaced registrations cannot
+be recovered by the migration: register those phones again against an unused household.
+
+From the repository root, load the request helpers (bash/zsh):
+
+```bash
+source residents/scripts/requests.sh
+ember_get /health
+ember_get /phones
+curl -sS "$EMBER_API/state" | python3 -c 'import json,sys; s=json.load(sys.stdin); print(json.dumps([{ "household_id": h["household_id"], "label": h.get("label"), "needs": h["needs"] } for h in s["households"]], indent=2))'
+```
+
+Choose **existing household IDs** from that response. Use a different real tester phone for each ID.
+The example 555 numbers below are placeholders; do not register them for live testing.
+
+```bash
+ember_post /phones '{"role":"resident","handle":"+16175550101","household_id":10296}'
+ember_post /phones '{"role":"resident","handle":"+16175550102","household_id":516}'
+```
+
+Each tester must text **HI to their own returned `assigned_number`**. Registration alone does not
+authorize replies: `space_id` and `agent_user_id` are learned from that first received message.
+`opted_in` is computed from these details; it cannot be set with a request field. Check `/phones`
+until each tester shows `opted_in: true`. Re-registering the same phone/target preserves opt-in
+when Photon returns the same line. A different line requires a fresh first text.
+
+```bash
+ember_get /phones
+ember_post /ask '{"role":"resident","household_id":10296}'
+ember_post /ask '{"role":"resident","household_id":516,"question":"How many people need pickup?"}'
+```
+
+`delivery: sent` means Photon accepted the request, not proof of delivery to the handset.
+`not_opted_in` means nothing was sent: follow `action_needed`, then retry. `dev` means Photon is
+disabled. `failed` means sending failed and the background retry loop will try again for up to
+10 minutes. A failed message keeps the original recipient and idempotency key.
+
+For a clean two-person rehearsal:
+
+1. `ember_post /dev/reset` (clears run history and sends current questions/offers to opted-in phones).
+2. `ember_post /clock '{"t_s":300}'`; leave dashboard playback paused.
+3. Tester A texts **“2 of us, one uses a wheelchair”**; tester B texts **“3 of us need pickup”**.
+4. Inspect `ember_get /state`: each inbound message and need report must carry the correct household ID.
+5. Each tester replies **YES** to their own offer. Inspect `/state` for the confirmation reports and
+   `/plan/{version}` for the stored `confirmed` assignments. `/plan/current` shows simulation progress,
+   so an accepted assignment can appear `en_route` there. Confirmations must target their respective
+   households. A repeated fact should not create another plan; a new fact should.
+6. An unrelated household can also receive a changed instruction, because everyone shares one plan.
+
+To inject sample texts instead of receiving them through Photon:
+
+```bash
+ember_post /dev/inbound '{"role":"resident","household_id":10296,"text":"2 of us, one uses a wheelchair"}'
+ember_post /dev/inbound '{"role":"resident","household_id":516,"text":"3 of us need pickup"}'
+```
+
+For a test with no real phone sends, start the backend with `PHOTON_ENABLED=0`. Injections still use
+the real extraction API if enabled. For automated tests with fake Photon and fake extraction:
+
+```bash
+cd residents
+uv run pytest -q tests/test_multi_household.py
+uv run pytest -q
+```
 
 **Engine mode (default):** `SCENARIO` (default `scenarios/allston_flood_v1/scenario.json`) → plan v1 by the
 allocator at startup (~2 s), state = `simulate(plan, reports).state_at(clock)`. The DB is kept across

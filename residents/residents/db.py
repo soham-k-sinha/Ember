@@ -17,6 +17,26 @@ import time
 from pathlib import Path
 from typing import Any
 
+PHONE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS phones (
+    handle TEXT PRIMARY KEY,
+    role TEXT NOT NULL,
+    thread_key TEXT UNIQUE,
+    scenario_id TEXT,
+    assignment_id TEXT,
+    assigned_number TEXT,
+    peer_user_id TEXT,
+    agent_user_id TEXT,
+    space_id TEXT,
+    last_inbound_at TEXT
+);
+"""
+
+
+class PhoneConflict(ValueError):
+    """Registration would replace another household's phone or move an existing phone."""
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
@@ -82,19 +102,8 @@ CREATE TABLE IF NOT EXISTS messages (
     data         TEXT NOT NULL               -- the state.messages[] object, verbatim
 );
 CREATE INDEX IF NOT EXISTS messages_thread ON messages (thread_key, seq);
--- Tester phones. Not scenario state: kept across reseeds. The thread is resolved from `role` against
--- the current state (resident → the judge's household, operator → the critical hospital), so the
--- same phones work for the fixture and for allston_flood_v1.
-CREATE TABLE IF NOT EXISTS phones (
-    handle          TEXT PRIMARY KEY,        -- E.164, e.g. +14135550100
-    role            TEXT NOT NULL UNIQUE,    -- resident | operator
-    assignment_id   TEXT,                    -- Photon shared-line assignment
-    assigned_number TEXT,                    -- the shared line this tester texts
-    peer_user_id    TEXT,                    -- Photon user id of the tester    } learned from their
-    agent_user_id   TEXT,                    -- Photon user id of our line      } first inbound message;
-    space_id        TEXT,                    -- the direct chat                 } needed to send
-    last_inbound_at TEXT                     -- opt-in: a shared line may only reply after this is set
-);
+-- One phone per household/facility. Registrations and opt-in survive reseeds.
+""" + PHONE_SCHEMA + """
 -- Photon message ids already handled. Survives reseeds: after /dev/reset the messages table is empty,
 -- and without this a redelivered or polled old text would be treated as new and answered again.
 CREATE TABLE IF NOT EXISTS inbound_seen (
@@ -108,7 +117,8 @@ CREATE TABLE IF NOT EXISTS kv (
 );
 """
 
-PHONE_FIELDS = ("handle", "role", "assignment_id", "assigned_number", "peer_user_id", "agent_user_id", "space_id", "last_inbound_at")
+PHONE_FIELDS = ("handle", "role", "thread_key", "scenario_id", "assignment_id", "assigned_number",
+                "peer_user_id", "agent_user_id", "space_id", "last_inbound_at")
 
 # Snapshot keys that live in `meta` (everything that isn't a row in its own table).
 META_KEYS = ("version", "scenario_id", "t_s", "plan_version", "source", "synthetic", "hazard", "metrics")
@@ -152,6 +162,18 @@ class Store:
         cols = {r["name"] for r in self._db.execute("PRAGMA table_info(messages)")}
         if "created_wall" not in cols:
             self._db.execute("ALTER TABLE messages ADD COLUMN created_wall REAL")
+        if "recipient_handle" not in cols:
+            self._db.execute("ALTER TABLE messages ADD COLUMN recipient_handle TEXT")
+        cols = {r["name"] for r in self._db.execute("PRAGMA table_info(phones)")}
+        if "thread_key" not in cols:
+            # SQLite cannot drop the old UNIQUE(role) constraint in place. Keep every
+            # registration and its Photon opt-in credentials in one atomic migration.
+            with self._tx() as db:
+                db.execute("ALTER TABLE phones RENAME TO phones_legacy")
+                db.execute(PHONE_SCHEMA)
+                old_fields = ", ".join(k for k in PHONE_FIELDS if k in cols)
+                db.execute(f"INSERT INTO phones ({old_fields}) SELECT {old_fields} FROM phones_legacy")
+                db.execute("DROP TABLE phones_legacy")
 
     def close(self) -> None:
         with self._lock:
@@ -333,13 +355,16 @@ class Store:
             db.execute("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                        (key, _dump(value)))
 
-    def add_message(self, m: dict, external_id: str | None = None, delivery: str | None = None) -> bool:
+    def add_message(self, m: dict, external_id: str | None = None, delivery: str | None = None,
+                    recipient_handle: str | None = None) -> bool:
         """Store one state.messages[] object. False (and nothing written) if `external_id` was already
         stored: Photon redelivers events after reconnects, and the poller can see the same message."""
         with self._tx() as db:
             if external_id and db.execute("SELECT 1 FROM messages WHERE external_id = ?", (external_id,)).fetchone():
                 return False
             self._insert_message(db, m, external_id, delivery)
+            if recipient_handle:
+                db.execute("UPDATE messages SET recipient_handle = ? WHERE id = ?", (recipient_handle, m["id"]))
             return True
 
     def set_delivery(self, message_id: str, delivery: str, external_id: str | None = None) -> None:
@@ -354,9 +379,9 @@ class Store:
     def failed_outbound(self, max_age_s: float) -> list[dict]:
         """Outbound messages whose delivery failed within the last `max_age_s` wall seconds, oldest first
         (an instruction from long ago is no longer worth sending)."""
-        rows = self._rows("SELECT data FROM messages WHERE direction = 'out' AND delivery = 'failed' "
+        rows = self._rows("SELECT data, recipient_handle FROM messages WHERE direction = 'out' AND delivery = 'failed' "
                           "AND created_wall >= ? ORDER BY seq", (time.time() - max_age_s,))
-        return [json.loads(r["data"]) for r in rows]
+        return [{**json.loads(r["data"]), "recipient_handle": r["recipient_handle"]} for r in rows]
 
     def inbound_seen(self, external_id: str) -> bool:
         return bool(self._rows("SELECT 1 FROM inbound_seen WHERE external_id = ?", (external_id,)))
@@ -373,17 +398,32 @@ class Store:
 
     def last_outbound_plan_version(self, key: str) -> int | None:
         """The plan version of the last message we sent on a thread = what an inbound reply answers."""
-        rows = self._rows("SELECT plan_version FROM messages WHERE thread_key = ? AND direction = 'out' ORDER BY seq DESC LIMIT 1", (key,))
+        rows = self._rows("SELECT plan_version FROM messages WHERE thread_key = ? AND direction = 'out' "
+                          "AND delivery IN ('sent', 'dev') ORDER BY seq DESC LIMIT 1", (key,))
         return rows[0]["plan_version"] if rows else None
 
+    def delivered_outbound(self, key: str) -> list[dict]:
+        return [json.loads(r["data"]) for r in self._rows(
+            "SELECT data FROM messages WHERE thread_key = ? AND direction = 'out' "
+            "AND delivery IN ('sent', 'dev') ORDER BY seq", (key,))]
+
     # ---------- phones + kv (survive reseeds) ----------
+    def clear_phone_opt_in(self, handle: str) -> None:
+        with self._tx() as db:
+            db.execute("UPDATE phones SET peer_user_id = NULL, agent_user_id = NULL, space_id = NULL, "
+                       "last_inbound_at = NULL WHERE handle = ?", (handle,))
+
     def upsert_phone(self, handle: str, role: str, **fields: str | None) -> dict:
         bad = set(fields) - set(PHONE_FIELDS)
         if bad:
             raise ValueError(f"unknown phone fields {bad}")
         with self._tx() as db:
-            # one phone per role: re-registering a role with a new number replaces the old one
-            db.execute("DELETE FROM phones WHERE role = ? AND handle != ?", (role, handle))
+            key = fields.get("thread_key")
+            previous = db.execute("SELECT * FROM phones WHERE handle = ?", (handle,)).fetchone()
+            if previous and (previous["role"] != role or (key and previous["thread_key"] not in (None, key))):
+                raise PhoneConflict("This phone is already registered to a different household/facility.")
+            if key and db.execute("SELECT 1 FROM phones WHERE thread_key = ? AND handle != ?", (key, handle)).fetchone():
+                raise PhoneConflict(f"{key} already has a registered phone. Choose a different household/facility ID.")
             db.execute("INSERT INTO phones (handle, role) VALUES (?, ?) ON CONFLICT(handle) DO UPDATE SET role = excluded.role",
                        (handle, role))
             for k, v in fields.items():
@@ -391,13 +431,15 @@ class Store:
                     db.execute(f"UPDATE phones SET {k} = ? WHERE handle = ?", (v, handle))
         return self.phone(handle=handle)  # type: ignore[return-value]
 
-    def phone(self, *, handle: str | None = None, role: str | None = None) -> dict | None:
-        col, val = ("handle", handle) if handle is not None else ("role", role)
+    def phone(self, *, handle: str | None = None, role: str | None = None, key: str | None = None) -> dict | None:
+        col, val = ("handle", handle) if handle is not None else (("thread_key", key) if key is not None else ("role", role))
         rows = self._rows(f"SELECT * FROM phones WHERE {col} = ?", (val,))
+        if len(rows) > 1:
+            raise ValueError("Several phones have this role; specify a household_id or facility_id.")
         return dict(rows[0]) if rows else None
 
     def phones(self) -> list[dict]:
-        return [dict(r) for r in self._rows("SELECT * FROM phones ORDER BY role")]
+        return [dict(r) for r in self._rows("SELECT * FROM phones ORDER BY role, thread_key, handle")]
 
     def kv_get(self, key: str, default: str | None = None) -> str | None:
         rows = self._rows("SELECT value FROM kv WHERE key = ?", (key,))
