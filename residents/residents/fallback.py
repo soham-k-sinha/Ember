@@ -22,8 +22,8 @@ DONE = re.compile(r"\b(done|ready|we'?re here|i'?m here|we are here|i am here|at
                   r"aboard|on board|arrived|checked in|it'?s connected|connected)\b")
 COUNT = re.compile(r"\b" + _N + r"\s+(of us|people|persons|adults|in total|total)\b")
 ALONE = re.compile(r"\b(just me|only me|myself|i'?m alone|i am alone|just one)\b")
-PAIR = re.compile(r"\b(me and my|my \w+ and (i|me))\b")
-CHAIR = re.compile(r"\b(wheel ?chair|walker|can'?t walk|cannot walk|bed ?ridden|mobility|crutches)\b")
+PAIR = re.compile(r"\b(me and my|my (?!house|home|place|apartment|room)\w+ and (i|me))\b")
+CHAIR = re.compile(r"\b(wheel ?chair|walker|can'?t walk|cannot walk|bed ?ridden|mobility|crutches|accessible|stuck|can'?t get out)\b")
 MEDICAL = re.compile(r"\b(oxygen|dialysis|insulin|medical|injur\w*|medication)\b")
 STREET = re.compile(r"\b([a-z]+(?: [a-z]+)? (?:st|street|ave|avenue|rd|road|dr|drive|pl|place|sq|square|bridge))\b")
 BLOCKED = re.compile(r"\b(flooded|blocked|closed|under water|impassable)\b")
@@ -91,7 +91,7 @@ def parse(text: str, role: str = "resident") -> Extraction | None:
     people, chair, med = _people(t), bool(CHAIR.search(t)), bool(MEDICAL.search(t))
     if role != "operator" and (people or chair or med):
         facts.append(_fact("need", people=people, mobility=True if chair else None,
-                           accessible_vehicle=True if "wheel" in t else None, medical=True if med else None))
+                           accessible_vehicle=True if re.search("wheel|accessible", t) else None, medical=True if med else None))
     if (street := _street(t)) and BLOCKED.search(t) and not QUESTION.search(t):
         facts.append(_fact("closure_report", road_hint=street))
     if not facts:

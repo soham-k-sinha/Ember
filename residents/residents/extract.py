@@ -92,14 +92,26 @@ Rules:
 LLM = Callable[[str, str], Awaitable[Extraction]]  # (system, user) → Extraction
 
 
-def make_llm(api_key: str, model: str = MODEL, effort: str = EFFORT, timeout_s: float = 30.0) -> LLM:
+CHALK_ROUTER = "https://api.chalk.ai/v1/router"
+
+
+def anthropic_client(api_key: str, **kw):
+    """(client, model prefix): Anthropic directly, or Chalk's AI Router (its Anthropic Messages endpoint, D83) when
+    CHALK_ROUTER_KEY and CHALK_ENV_ID are set. The calls are the same either way."""
     import anthropic
 
-    client = anthropic.AsyncAnthropic(api_key=api_key, timeout=timeout_s, max_retries=2)
+    key, env = os.environ.get("CHALK_ROUTER_KEY"), os.environ.get("CHALK_ENV_ID")
+    if key and env:
+        return anthropic.AsyncAnthropic(api_key=key, base_url=CHALK_ROUTER, default_headers={"X-Chalk-Env-Id": env}, **kw), "anthropic/"
+    return anthropic.AsyncAnthropic(api_key=api_key, **kw), ""
+
+
+def make_llm(api_key: str, model: str = MODEL, effort: str = EFFORT, timeout_s: float = 30.0) -> LLM:
+    client, prefix = anthropic_client(api_key, timeout=timeout_s, max_retries=2)
 
     async def call(system: str, user: str) -> Extraction:
         resp = await client.beta.messages.parse(
-            model=model, max_tokens=4000, system=system,
+            model=prefix + model, max_tokens=4000, system=system,
             messages=[{"role": "user", "content": user}],
             output_format=Extraction, output_config={"effort": effort},
             betas=["server-side-fallback-2026-07-01"], fallbacks="default",

@@ -253,3 +253,10 @@ What: verified the web chat's #47 independently before merging (Aryaman OK'd the
 Files: docs/DEMO.md, docs/QA.md, docs/devpost/README.md, docs/HANDOFF.md, docs/log/aryaman.md
 Interfaces: none. Soham: please add `GET /playback?planner=ember|baseline` → `EngineSession.playback(planner)` (contracts/playback.schema.json); the website's Live mode calls it.
 Status: done.
+
+## 2026-10-17 · residents: simulator-graded eval of the text → fact step, Chalk router seam (D83) · branch aryaman/sim-eval
+What: `residents/scripts/eval_sim.py` plans and simulates the gold and the extracted reading of every samples.json message from one seeded plan. It scores each one on reached-before-deadline with an eligible vehicle, regret (unreached / hospital outage / overflow) and asked-instead-of-guessing, and prints a table and a pass rate (`--extractor fallback` by default, `--extractor llm` not run). The eval found two D75 parser bugs ("my house and I" read as 2 people with no mobility need; "accessible vehicle" dropped); both are fixed with test cases. The Chalk AI Router is an opt-in seam (`anthropic_client` in extract.py, used by both model calls) with a fake-transport test. samples.json: `gold` for #32.
+Files: residents/scripts/eval_sim.py (new), residents/tests/test_eval_sim.py (new), residents/residents/{extract,reply,fallback}.py, residents/tests/{test_extract,test_fallback}.py, residents/tests/samples.json, docs/eval.md (new), docs/DECISIONS.md
+Run: cd residents && uv run python scripts/eval_sim.py; uv run pytest -q
+Interfaces: env CHALK_ROUTER_KEY + CHALK_ENV_ID (optional). No contract change.
+Status: done. Fallback parser 46/51 pass, 4 ask, 1 fail (#32 "Welch's"), 98 % safe. The live Chalk router hasn't been called.
