@@ -99,3 +99,10 @@ Run: uv run --project engine pytest -q engine/tests/test_demo_beats.py ; uv run 
 Interfaces: scenario values changed (no contract change, D46). Anshuman: your scenario was edited; please review the 6 changed values + assumptions rows, and put "judge replies within the first ~8 sim-minutes" in DEMO.md. Soham: reseed (`POST /dev/reset`) to pick up the new seed; 92 residents tests pass on it. "River St" near the judge → `EngineSession.edges_by_name("River Street", near_household=10296, radius_m=150)` = [523, 833, 952].
 Status: done. 81 engine tests. 5-seed compare: +50.6 people before deadline, −44 min critical-service outage, −2,165 m³ overflow, +75 vehicle-km.
 Next: perf/edge cases; help with the 5 PM integration.
+
+## 2026-10-17 15:50 · Daytona: no implicit snapshot builds · branch aryaman/scenario-tuning · commit (same PR)
+What: a missing snapshot now means "run locally and say so", not "build for minutes"; snapshot name hashes exactly the modules sandbox jobs import (16 files + town). Rebuilt the snapshot for the current code. Tests for both.
+Files: engine/ember_engine/daytona/{pool,robust}.py, engine/ember_engine/cli.py, engine/tests/test_daytona.py
+Run: uv run --project engine ember daytona-snapshot   # after any change to sim/models/allocator search/world/scenario
+Interfaces: D47. Soham: set `EMBER_LOCAL_POOL=1` in residents' tests (conftest) — otherwise `test_optimize_streams_points_then_plan` starts 8 real Daytona sandboxes on every run (or, before this fix, built a snapshot and hung). 101 residents tests pass with it.
+Status: done.
