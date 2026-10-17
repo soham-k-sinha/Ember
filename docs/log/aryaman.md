@@ -152,3 +152,11 @@ Run: uv run --project engine pytest -q engine/tests/test_models_sim.py
 Interfaces: none. Daytona snapshot rebuilt → `ember-engine-34d49a132c` (facilities.py is in the hash); live check: `ember robust --pool daytona` 100 runs on 8 sandboxes, 10.4 s fan-out, chose c03 over c00. Seed state unchanged.
 Status: done. 85 engine tests; smoke OK.
 Next: docs/DEMO.md (infra beat timing: operator must text before ~minute 30; see DEMO.md).
+
+## 2026-10-17 02:50 · docs/DEMO.md + operator-beat test · branch aryaman/demo-md · commit (this PR)
+What: HANDOFF issue 3. DEMO.md: who holds which phone, the judge-timing rule (clock paused at 5:00 until the judge's plan lands; operator at 15:00, never after 25:00), pre-stage checklist (one machine needs both engine/.env and residents/.env), six beats with timings and live-measured numbers, sponsor lines, fallbacks, a curl replay of every beat, "if asked" answers. Measured order matters: the comparison beat goes before the operator beat (after the judge: overflow EMBER 0 vs baseline 5,244 m³, 5 seeds; after the operator both overflow 8,769 m³ and EMBER's win is hospital outage 19 vs 28 min). Infrastructure beat re-checked on allston: works at 15–25 min (gen-1 → Mount Auburn, outage 16 min, overflow 0 → 9,600 m³ shown); from 30 min the plan keeps gen-1 at Cottage Farm (people outrank the hospital; the truck also carries people) and lists the hospital as unresolved. /optimize after the operator beat chooses c03 over c00 (worst-20% unreached 31 vs 42; forecast 14 vs 9). New test pins the operator beat.
+Files: docs/DEMO.md, engine/tests/test_demo_beats.py, docs/log/aryaman.md
+Run: uv run --project engine pytest -q engine/tests/test_demo_beats.py ; DEMO.md § Replay against a running backend
+Interfaces: none. Soham: please confirm (a) the operator text extracts to facility_status mt-auburn {state: backup, backup_endurance_s: 600}, (b) the resident phone gets q-10296 on startup without a /replan; both are on the QA list.
+Status: done. 86 engine tests.
+Next: docs/QA.md.
