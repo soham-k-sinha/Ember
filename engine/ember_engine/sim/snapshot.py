@@ -6,6 +6,8 @@ import numpy as np
 
 
 def _assignment_status(o: dict, t: float, planned: str) -> str:
+    if planned == "cancelled":
+        return "cancelled"
     if o["start_t"] is None or t < o["start_t"]:
         return planned
     if o["status"] == "infeasible" and (o["arrive_t"] is None or t >= o["arrive_t"]):
@@ -125,10 +127,11 @@ def snapshot(res, t_s: float) -> dict:
                          "task": a["task"], "target": a["target"], "dropoff_facility_id": a.get("dropoff_facility_id"),
                          "eta_s": float(eta), "deadline_s": d, "slack_s": None if d is None else round(d - eta, 1),
                          "status": _assignment_status(o, t, a.get("status", "proposed")), "rationale": a.get("rationale", ""),
+                         "not_before_t_s": a.get("not_before_t_s"), "cancelled_at_t_s": a.get("cancelled_at_t_s"),
                          "route_edges": route_edges, "route": route})
     plan_out = None
     if plan:
-        plan_out = {"version": plan.get("version", 1), "parent_version": plan.get("parent_version"),
+        plan_out = {"version": plan.get("version", 1), "parent_version": plan.get("parent_version"), "reserved": sorted(reserved),
                     "created_at_t_s": float(plan.get("created_at_t_s", 0.0)), "trigger": plan.get("trigger", ""),
                     "planner": plan.get("planner", "ember"), "assignments": p_assign, "changes": plan.get("changes", []),
                     "unresolved": plan.get("unresolved", []), "info_requests": plan.get("info_requests", []),
@@ -174,7 +177,7 @@ def snapshot(res, t_s: float) -> dict:
                "infeasible_assignments": sum(1 for o in res.outcomes if o["status"] == "infeasible" and o["arrive_t"] is not None and o["arrive_t"] <= t),
                "reserve_remaining": int(res.metrics["reserve_remaining"]), "replan_latency_s": None}
 
-    return {"version": "0.1", "scenario_id": scn["scenario_id"], "t_s": float(t), "plan_version": plan.get("version") if plan else None,
+    return {"version": "0.2", "scenario_id": scn["scenario_id"], "t_s": float(t), "plan_version": plan.get("version") if plan else None,
             "source": "simulator", "synthetic": list(scn.get("synthetic", [])),
             "hazard": {"keyframe_t_s": cur[-1]["t_s"] if cur else None, "geometry": cur[-1]["geometry"] if cur else None,
                        "next_keyframe_t_s": nxt[0]["t_s"] if nxt else None, "keyframe_times_s": [k["t_s"] for k in kfs]},
