@@ -271,6 +271,22 @@ class Guide:
                                           self.store.meta().get("plan_version"), a["id"] if a else None)
         return True
 
+    async def current_text(self, thread: dict) -> str | None:
+        """The step they're on now, re-computed so its times are current: part of the answer to "what do I
+        do?" (D60). None: no guide, or it's finished (the status says they're checked in / powered)."""
+        key = thread_key(thread)
+        st = self.state(key)
+        a = self._assignment(st["assignment_id"]) if st else None
+        if not st or st.get("finished") or a is None:
+            return None
+        if st["sent"] in st["done"]:
+            nxt = await self.next_step(key)
+            when = f" {_mins(nxt.due_t - self._now())}" if nxt and math.isfinite(nxt.due_t) else ""
+            return f"You've done step {st['sent'] + 1} of {st['steps']}; we'll text you the next step{when}."
+        steps = self.steps(a, thread, (await self._outcomes()).get(a["id"]))
+        text = steps[min(st["sent"], len(steps) - 1)].text
+        return text[text.index("Step "):] if "Step " in text else text  # without step 1's "Confirmed: …" lead
+
     def _advanced(self, key: str, before: dict) -> bool:
         now = self.state(key)
         return now is None or now["sent"] > before["sent"] or now["assignment_id"] != before["assignment_id"]

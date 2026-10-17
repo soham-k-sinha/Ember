@@ -129,6 +129,10 @@ class MessageIn(BaseModel):
     assignment_id: str | None = None
 
 
+class AnswerIn(BaseModel):
+    text: str = Field(min_length=1, max_length=1000, description="the coordinator's reply, texted as written")
+
+
 class DevInboundIn(TargetIn):
     text: str = Field(min_length=1, max_length=1000)
     handle: str | None = Field(default=None, description="as this registered phone (also before it has a household)")
@@ -162,6 +166,7 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
             app.state.guide = Guide(app.state.store, app.state.messenger, app.state.planner, settings.auto_clock)
             app.state.planner.plan_hooks.append(app.state.guide.on_plan)
             app.state.planner.clock_hooks.append(app.state.guide.tick)
+            app.state.outbound.guide = app.state.guide  # "what do I do?" includes the step they're on
         app.state.intake = None
         model = None
         if app.state.planner is not None and settings.extract_enabled and (llm is not None or settings.anthropic_api_key):
@@ -389,6 +394,31 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         """Send a message on a thread (operator console / scripted prompts). Text gets the drill prefix."""
         msg, delivery = await messenger().send_message(body.thread.as_thread(), body.text, body.plan_version, body.assignment_id)
         return {"message": msg, "delivery": delivery, **messenger().delivery_details(msg["thread"], delivery)}
+
+    def question_queue() -> list[dict]:
+        from .threads import phone_for_thread
+        items = sorted((json.loads(v) for v in store().kv_prefix("question:").values()), key=lambda q: q["t_s"])
+        for q in items:
+            phone = phone_for_thread(store(), q["thread"])
+            q["handle"] = phone["handle"] if phone else None
+        return items
+
+    @app.get("/questions")
+    def get_questions(open_only: bool = False) -> list[dict]:
+        """Questions the plan couldn't answer (D60): each already got the person's situation; a coordinator
+        can reply with POST /questions/{report_id}/answer."""
+        return [q for q in question_queue() if not (open_only and q["answer"])]
+
+    @app.post("/questions/{report_id}/answer")
+    async def answer_question(report_id: str, body: AnswerIn) -> dict:
+        raw = store().kv_get(f"question:{report_id}")
+        if raw is None:
+            raise HTTPException(404, f"no question {report_id} in this run")
+        q = json.loads(raw)
+        msg, delivery = await messenger().send_message(q["thread"], body.text, store().meta().get("plan_version"))
+        if delivery in ("sent", "dev", "failed"):  # failed is retried; anything else wasn't delivered
+            store().kv_set(f"question:{report_id}", json.dumps({**q, "answer": {"text": body.text, "message_id": msg["id"]}}))
+        return {"message": msg, "delivery": delivery, **messenger().delivery_details(q["thread"], delivery)}
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket) -> None:

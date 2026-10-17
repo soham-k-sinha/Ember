@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from .briefing import Briefing
 from .db import Store, thread_key
@@ -24,6 +25,7 @@ from .threads import phone_thread
 log = logging.getLogger("residents.outbound")
 
 MATERIAL_ETA_S = 600.0
+VERSION_TAG = re.compile(r"\s*\(plan v\d+\)\s*$")
 
 
 def _mins(eta_s: float, now: float) -> str:
@@ -36,6 +38,7 @@ class Outbound:
         self.store, self.messenger = store, messenger
         self.bridge = bridge  # for the pickup corner's name (engine_bridge.EngineBridge); optional
         self.briefing = Briefing(store, bridge) if bridge is not None else None
+        self.guide = None  # guide.Guide, set by the app: the current step is part of situation()
 
     def _names(self) -> tuple[dict, dict]:
         res = {r["id"]: r for r in self.store.snapshot()["resources"]}
@@ -233,6 +236,13 @@ class Outbound:
             need = self.describe_need(h["needs"]) if h else ""
             if not need:
                 return None
+            fits = self.briefing.fits(thread) if self.briefing is not None else None
+            declined = [r for r in fits or [] if r["id"] in self.rejected(key)]
+            if fits and len(declined) == len(fits):  # before `blocked`: since D58 the engine lists them as unresolved
+                names = " and ".join(r["name"] for r in declined)
+                return (f"You declined {names}, the only {'vehicle' if len(declined) == 1 else 'vehicles'} that can "
+                        f"take {need}, so no pickup is scheduled. Reply YES if you want {declined[0]['name']} "
+                        f"after all. (plan v{v})")
             if blocked and h.get("deadline_s") is None:
                 return (f"We have your details ({need}). Your street is outside the forecast flood area, so no "
                         f"pickup is planned: stay where you are, above the ground floor if you can. We'll text you "
@@ -244,16 +254,8 @@ class Outbound:
                 return (f"We have your details ({need}). No suitable vehicle is free yet: {blocked['blocked_by']}. "
                         + (f"Until one is: {' or '.join(alts)}. " if alts else "")
                         + f"We'll text you as soon as one is assigned. (plan v{v})")
-            if self.briefing is not None:
-                fits = self.briefing.fits(thread)
-                declined = [r for r in fits if r["id"] in self.rejected(key)]
-                if fits and len(declined) == len(fits):
-                    names = " and ".join(r["name"] for r in declined)
-                    return (f"You declined {names}, the only {'vehicle' if len(declined) == 1 else 'vehicles'} that can "
-                            f"take {need}, so no pickup is scheduled. Reply YES if you want {declined[0]['name']} "
-                            f"after all. (plan v{v})")
-                if not fits:
-                    return f"We have your details ({need}). No vehicle in the fleet fits that; a coordinator has been told. (plan v{v})"
+            if fits is not None and not fits:
+                return f"We have your details ({need}). No vehicle in the fleet fits that; a coordinator has been told. (plan v{v})"
             return (f"We have your details ({need}). No vehicle is scheduled for you in the current plan yet; "
                     f"we'll text you as soon as one is. (plan v{v})")
         if blocked:
@@ -266,6 +268,42 @@ class Outbound:
         return (f"Noted. No generator is assigned to your site right now"
                 + (f"; our plan has {f.get('name', 'your site')} {power}" if power else "")
                 + f". Text us if that changes, e.g. 'on backup, about 40 minutes of fuel left'. (plan v{v})")
+
+    async def situation(self, thread: dict) -> str | None:
+        """Everything the plan says about this person right now, in one text (D60): where they stand, the
+        step they're on, and what we still need from them. It answers "what's the plan?" / "what do I do?"
+        and any question the plan has nothing more specific for, so no question is left without an answer.
+        Computed fields only; None only before there is a plan."""
+        view = self.store.plan_view()
+        if not view:
+            return None
+        parts = []
+        status = self.status_text(view, thread)
+        if status is not None:
+            parts.append(VERSION_TAG.sub("", status))
+        elif "household_id" in thread:  # placed, details not known yet: say what the flood means for them
+            h = next((x for x in self.store.households() if x["household_id"] == thread["household_id"]), {})
+            now = float(self.store.meta().get("t_s", 0.0))
+            if h.get("deadline_s") is None:
+                parts.append("Your street is outside this drill's forecast flood area, so no pickup is planned: stay "
+                             "where you are, above the ground floor if you can.")
+            elif (water := h["deadline_s"] + (self.bridge.margin_s if self.bridge else 0)) > now:
+                parts.append(f"In this drill's flood forecast, water reaches your street in about "
+                             f"{round((water - now) / 60)} min, so we're planning to pick you up; we need a few "
+                             f"details to send the right vehicle.")
+            else:
+                parts.append("Your street is flooding now; we need a few details to send the right vehicle.")
+        if self.guide is not None:
+            step = await self.guide.current_text(thread)
+            if step:
+                parts.append(f"Right now: {step}")
+        q = next((x for x in view.get("info_requests", []) if x["to"] == thread), None)
+        if q is not None:
+            parts.append(f"Please tell us: {q['question']}")
+            self.store.kv_set(f"asked:{q['id']}", str(view["version"]))
+        if not parts:
+            return None
+        return " ".join(parts) + f" (plan v{view['version']})"
 
     def next_info_request(self, view: dict, thread: dict) -> dict | None:
         return next((q for q in view.get("info_requests", []) if q["to"] == thread and not self.store.kv_get(f"asked:{q['id']}")), None)

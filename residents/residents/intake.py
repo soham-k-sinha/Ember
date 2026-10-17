@@ -2,6 +2,11 @@
 
 Runs as a Messenger inbound hook. The Photon worker calls hooks one message at a time, so two texts
 in a row are handled in order, each against the plan the previous one produced.
+
+Every question gets an answer computed from the plan (D60): the topic's own answer (briefing.py), else
+the person's whole situation (Outbound.situation). A question the plan can't cover also goes to the
+coordinators' queue (kv `question:<report id>`, GET /questions, answered with POST /questions/{id}/answer
+or the drill console's `tell`), but the person is never left with only "passed to the coordinators".
 """
 
 from __future__ import annotations
@@ -9,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from typing import Any, Callable
 
 from .db import Store, thread_key
 from .extract import LLM, Outcome, extract
@@ -21,6 +27,8 @@ log = logging.getLogger("residents.intake")
 
 SORRY = "Sorry, we couldn't read that. Could you say it another way?"
 PLANNER_DOWN = "Got your message. Our planner hit a problem; a coordinator is looking at it and will text you."
+ESCALATED = "Our plan doesn't cover that, so we've passed your question to a coordinator, who will reply here."
+NO_PLAN = "Got your question. We're still building the plan; we'll text you as soon as we have something for you."
 
 
 class Intake:
@@ -29,6 +37,7 @@ class Intake:
         self.store, self.messenger, self.planner, self.llm = store, messenger, planner, llm
         self.outbound = outbound
         self.guide = guide  # step-by-step directions after a YES (guide.Guide), optional
+        self.escalation_hooks: list[Callable[[dict], Any]] = []  # a question went to the coordinators (drill console)
         # one message at a time, end to end: the next text must see what the previous one changed
         # (known needs, pending questions, the new plan). Photon's worker is serial; HTTP isn't.
         self._lock = asyncio.Lock()
@@ -94,17 +103,41 @@ class Intake:
         self.store.set_assignment_status(self.store.meta()["plan_version"], a["id"], "offered", ("rejected",))
         log.info("%s took back their decline of %s", key, a["resource_id"])
 
-    async def _answer(self, thread: dict, topics: list[str]) -> list[str]:
-        """Questions answered from the plan (briefing.py). Returns the topics nobody could answer."""
+    async def _answer(self, thread: dict, topics: list[str], road: dict | None = None,
+                      question: dict | None = None, situation: bool = True) -> None:
+        """Answer every question topic (D60): the topic's own answer from the plan, else the person's whole
+        situation (sent once per message, however many topics fall back to it). `other` (nothing in the plan
+        covers it) also goes to the coordinators' queue. situation=False: only topic answers (we're about
+        to ask for missing details, which is what their situation would say)."""
         briefing = self.outbound.briefing if self.outbound is not None else None
-        left = []
+        version = self.store.meta().get("plan_version")
+        situation_sent = False
         for t in dict.fromkeys(topics):
-            text = await briefing.answer(t, thread) if briefing is not None else None
-            if text:
-                await self.messenger.send_message(thread, text, self.store.meta().get("plan_version"))
-            else:
-                left.append(t)
-        return left
+            text = await briefing.answer(t, thread, road) if briefing is not None else None  # plan / other: None
+            if text is None:
+                if t == "other":
+                    self._escalate(thread, question)
+                if situation_sent or not situation:
+                    continue
+                situation_sent = True
+                sit = await self.outbound.situation(thread) if self.outbound is not None else None
+                text = (f"{ESCALATED} Meanwhile, here's where you stand: {sit}" if sit else ESCALATED) if t == "other" \
+                    else (sit or NO_PLAN)
+            await self.messenger.send_message(thread, text, version)
+
+    def _escalate(self, thread: dict, question: dict | None) -> None:
+        """Put a question the plan can't answer on the coordinators' queue (GET /questions)."""
+        if question is None:
+            return
+        item = {"report_id": question["id"], "thread": thread, "text": question.get("text", ""),
+                "t_s": question.get("observed_at_t_s", 0.0), "answer": None}
+        self.store.kv_set(f"question:{question['id']}", json.dumps(item))
+        log.info("question %s from %s → coordinators", question["id"], thread_key(thread))
+        for hook in self.escalation_hooks:
+            try:
+                hook(item)
+            except Exception:  # noqa: BLE001 - a console printer must not break the reply
+                log.exception("escalation hook")
 
     def _record(self, thread: dict) -> dict:
         """What the model may know about the sender (no routes, no plan)."""
@@ -154,9 +187,9 @@ class Intake:
             except ReportError as e:
                 log.warning("extracted report rejected (%s): %s", e, r)
         decisions = [r for r in stored if r["kind"] in ("confirm", "reject")]
-        unanswered = out.topics
+        question = next((r for r in stored if r["kind"] == "question"), None)
         if decisions and out.topics:  # "no, is anyone near me?": the answer, then the decision's reply
-            unanswered = await self._answer(thread, out.topics)
+            await self._answer(thread, out.topics, out.road, question)
             out.topics = []
         for rep in decisions:
             await self._respond(rep, thread)
@@ -179,6 +212,9 @@ class Intake:
         texted = sum(1 for m in self.store.thread_messages(key) if m["direction"] == "out") > outs_before
         version = self.store.meta().get("plan_version")
         if out.question and out.question_is_missing_info:
+            topics = [t for t in out.topics if t != "plan"]  # answer what they asked, then what we still need
+            if topics:
+                await self._answer(thread, topics, out.road, question, situation=False)
             await self.messenger.send_message(thread, out.question, version)  # finish the fact first
         elif replanned:
             if not texted and self.outbound is not None:  # never leave a fact unanswered
@@ -186,9 +222,11 @@ class Intake:
                     await self.messenger.send_message(thread, "Got it, thanks.", version)
             if out.follow_up:
                 await self.messenger.send_message(thread, out.follow_up, version)
+            topics = [t for t in out.topics if t != "plan"]  # "2 of us, what should we bring?": the instruction is the plan
+            if topics:
+                await self._answer(thread, topics, out.road, question)
         elif answered:
-            if unanswered:
-                await self.messenger.send_message(thread, "We've passed your question to the coordinators.", version)
+            pass  # the ack / latest instruction is the reply; questions were answered above
         elif self.outbound is not None:
             await self._reply_without_facts(thread, out, stored)
         elif out.question:
@@ -196,22 +234,20 @@ class Intake:
         return out
 
     async def _reply_without_facts(self, thread: dict, out: Outcome, stored: list[dict]) -> None:
-        """Chatter or a question: the plan's open question first, else where they stand, else the model's
-        own prompt. Questions are answered from the plan by topic (briefing.py, never generated); a topic we
-        can't answer goes to the coordinators."""
+        """Chatter or a question. A question is answered from the plan by topic (briefing.py, never
+        generated), falling back to their whole situation (D60). Chatter gets the plan's open question
+        first, else where they stand, else the model's own prompt."""
         view = self.store.plan_view()
-        asked_q = any(r["kind"] == "question" for r in stored)
-        if asked_q and out.topics and not await self._answer(thread, out.topics):
-            return  # every question answered from the plan
-        if view and not asked_q:
+        question = next((r for r in stored if r["kind"] == "question"), None)
+        if out.topics:
+            await self._answer(thread, out.topics, out.road, question)
+            return
+        if view:
             # A newly opted-in phone may already have a computed assignment. Send the
             # actual offer (with assignment_id) so its next YES can confirm that offer.
             if await self.outbound.sync(view, only=thread_key(thread)):
                 return
-        prefix = "We've passed your question to the coordinators. " if asked_q else ""
-        if await self.outbound.send_status(thread, prefix=prefix):
+        if await self.outbound.send_status(thread):
             return
         if out.question:
-            await self.messenger.send_message(thread, prefix + out.question, self.store.meta().get("plan_version"))
-        elif prefix:
-            await self.messenger.send_message(thread, prefix.strip(), self.store.meta().get("plan_version"))
+            await self.messenger.send_message(thread, out.question, self.store.meta().get("plan_version"))

@@ -8,13 +8,15 @@ it affects:
   vehicle; it picks up 1 other household at your corner first");
 - `fits(thread)`: which vehicles could take this household at all, and what each is doing;
 - `answer(topic, thread)`: a resident's question by topic (the LLM only labels the topic):
-  eta / pickup_place / destination / others / vehicles / bring.
+  eta / pickup_place / destination / others / vehicles / bring / flood / roads / safety. `plan` and anything
+  these can't answer get the person's whole situation instead (Outbound.situation, D60): never a dead end.
 """
 
 from __future__ import annotations
 
 import json
 import math
+import re
 
 from starlette.concurrency import run_in_threadpool
 
@@ -27,9 +29,14 @@ WALK_MPS = 1.2          # an adult walking with a bag
 WALK_DETOUR = 1.3       # street distance ≈ straight line × 1.3
 OUTSIDE_M = 40.0        # pickup corner this close = "right outside"
 LIVE = ("proposed", "offered", "confirmed", "en_route", "working")
-TOPICS = ("eta", "pickup_place", "destination", "others", "vehicles", "bring", "other")
+SHARES = re.compile(r"shares the trip with household #(\d+)")  # the engine's rationale for a shared trip (D59)
+TOPICS = ("plan", "eta", "pickup_place", "destination", "others", "vehicles", "bring", "flood", "roads", "safety", "other")
 BRING = ("Bring medications (and prescriptions), ID, your phone and charger, glasses, and anything the person who "
          "needs help uses (walker, oxygen). One small bag each; leave everything else.")
+# Fixed, vetted wording (Ready.gov flood guidance), never generated: the one answer that must be right every time.
+SAFETY = ("In a real emergency, call 911. Don't walk or drive through floodwater: 6 inches of moving water can knock "
+          "you down and 1 foot can sweep a car away. If water comes inside, go to a higher floor (not a closed attic), "
+          "and stay away from downed power lines.")
 
 
 def mins(dt_s: float) -> str:
@@ -129,6 +136,29 @@ class Briefing:
              and a["task"] == "rescue" and a["status"] in LIVE]
         return sorted(q, key=lambda a: a["eta_s"])
 
+    def trip_mates(self, a: dict) -> set[int]:
+        """Households on the same trip as rescue `a` (engine D59: a van collects a nearby household on its list
+        before the drop-off). The engine's rationale names the household a chained pickup shares the trip with;
+        read it both ways and follow the chain (A ← B ← C is one trip)."""
+        q = self.queue(a["resource_id"])
+        links: dict[int, set[int]] = {}
+        for x in q:
+            hid = x["target"].get("household_id")
+            for other in map(int, SHARES.findall(x.get("rationale") or "")):
+                links.setdefault(hid, set()).add(other)
+                links.setdefault(other, set()).add(hid)
+        me = a["target"].get("household_id")
+        seen, todo = {me}, [me]
+        while todo:
+            for n in links.get(todo.pop(), set()) - seen:
+                seen.add(n)
+                todo.append(n)
+        return seen - {me}
+
+    def people(self, hid: int) -> int:
+        n = next((h.get("needs") for h in self.store.households() if h["household_id"] == hid), None)
+        return (n.get("people") if isinstance(n, dict) else None) or 1
+
     def node(self, hid: int) -> int | None:
         try:
             return self.bridge.household_node(hid)
@@ -172,6 +202,10 @@ class Briefing:
             parts.append(f"it picks up {plural(len(ahead), 'other household')} first"
                          + (f" ({'it is' if here == 1 else 'they are'} at your corner)" if here and here == len(ahead) else
                             f" ({here} at your corner)" if here else ""))
+        mates = self.trip_mates(a)
+        if mates:
+            parts.append(f"you share the trip with {plural(len(mates), 'other household')}: it collects "
+                         f"{'you both' if len(mates) == 1 else 'you all'} before the drop-off")
         if not parts:
             return ""
         s = "; ".join(parts)
@@ -226,20 +260,78 @@ class Briefing:
             who = res.get(mine["resource_id"], {}).get("name", mine["resource_id"])
             near_ids = {x["household_id"] for x in near}
             shared = [x for x in self.queue(mine["resource_id"]) if x["target"].get("household_id") in near_ids]
+            mates = self.trip_mates(mine)
+            together = [x for x in shared if x["target"].get("household_id") in mates]
             if shared:
                 before = sum(1 for x in shared if x["eta_s"] < mine["eta_s"])
                 s += (f" {who} also picks up {plural(len(shared), 'of them', 'of them')}"
-                      f" ({before} before you, {len(shared) - before} after).")
-            s += (" Each vehicle takes one household per trip in this plan, so you'd ride separately; "
-                  "a coordinator can see the request.")
+                      f" ({before} before you, {len(shared) - before} after)")
+                if together:
+                    s += (f", and you share the trip with {'it' if len(together) == 1 else len(together)}: {who} "
+                          f"collects {'you both' if len(together) == 1 else 'you all'} before the drop-off.")
+                else:
+                    seats = res.get(mine["resource_id"], {}).get("capacity_people") or 0
+                    total = self.people(mine["target"]["household_id"]) + min(
+                        self.people(x["target"]["household_id"]) for x in shared)
+                    s += (f", on separate trips: together you'd be {total} people and it has {seats} seats."
+                          if seats and total > seats else ", on separate trips in this plan.")
+            if not together and texted:
+                s += " A coordinator can see the request to travel together."
         elif texted:
             s += " A coordinator can see the request to travel together."
         return s
 
-    async def answer(self, topic: str, thread: dict) -> str | None:
-        """A question by topic, from the plan. None: not a topic we can answer (→ coordinators)."""
+    def flood_text(self, thread: dict) -> str:
+        """Where the forecast water is and when it reaches them (the scenario's flood keyframes, D60)."""
+        now, margin = self._now(), self.bridge.margin_s
+        h = self.household(thread)
+        if not h:
+            own = ""
+        elif h.get("deadline_s") is None:
+            own = "Your street is outside this drill's forecast flood area. "
+        elif (water := h["deadline_s"] + margin) <= now:
+            own = "Your street is flooding now. "
+        else:
+            own = f"In this drill's flood forecast, water reaches your street in about {round((water - now) / 60)} min. "
+        first = []
+        for d, label in self.bridge.flood_corners(3):
+            water = d + margin
+            first.append(f"{label} ({'flooding now' if water <= now else 'in about ' + str(round((water - now) / 60)) + ' min'})")
+        return own + ("The river flood reaches these corners first: " + "; ".join(first) + "." if first else "")
+
+    def roads_text(self, road: dict | None) -> str:
+        """Is <street> open? From the closures in the current picture (flood + reports), whole street by name."""
+        now = self._now()
+        closed = {c["edge_id"] for c in self.store.snapshot()["closures"] if c.get("closed_from_t_s", 0) <= now}
+        names = sorted({self.bridge.edge_name(e) for e in closed if not self.bridge.edge_name(e).startswith("edge ")})
+        summary = (f"Closed right now: {', '.join(names[:5])}{' and others' if len(names) > 5 else ''}." if names
+                   else "No roads are closed in the current picture.")
+        if not road or not road.get("road_hint"):
+            return summary + " Vehicles are routed around closed roads."
+        edges = self.bridge.named_edges(road["road_hint"], road.get("cross_street"))
+        if not edges:
+            return f"We couldn't find \"{road['road_hint']}\" on our map. {summary}"
+        name = self.bridge.edge_name(edges[0]["id"])
+        shut = [e for e in edges if e["id"] in closed]
+        if not shut:
+            return (f"{name}{' at ' + road['cross_street'] if road.get('cross_street') else ''} is open right now. Roads "
+                    f"close as the water rises; if it closes on your route, we re-route and text you.")
+        at = sorted({self.bridge.places.corner_label(n) for e in shut for n in (e["u"], e["v"])
+                     if len(self.bridge.places.streets.get(n, set())) >= 2})
+        return (f"{name} is closed" + (f" near {' and near '.join(at[:2])}" if at else "")
+                + ": flooded or reported blocked. Vehicles are routed around it.")
+
+    async def answer(self, topic: str, thread: dict, road: dict | None = None) -> str | None:
+        """A question by topic, from the plan. None: this topic has nothing specific for them (no live
+        assignment, or not a topic we know) → the caller answers with their whole situation."""
         if topic == "bring":
             return BRING
+        if topic == "safety":
+            return SAFETY
+        if topic == "flood":
+            return self.flood_text(thread)
+        if topic == "roads":
+            return self.roads_text(road)
         if topic == "others":
             return self.others_text(thread)
         if topic == "vehicles":

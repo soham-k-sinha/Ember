@@ -37,17 +37,24 @@ class Fact(BaseModel):
     mobility: bool | None = Field(description="need: someone can't walk far / uses a wheelchair, walker, is bedridden")
     accessible_vehicle: bool | None = Field(description="need: they need a wheelchair-accessible vehicle")
     medical: bool | None = Field(description="need: a medical condition needing care (oxygen, dialysis, insulin, injury)")
-    road_hint: str | None = Field(description="closure_report: the blocked street's name as written, e.g. 'River St'; null if not named")
-    cross_street: str | None = Field(description="closure_report / location: a cross street or landmark that locates it")
+    road_hint: str | None = Field(description="closure_report: the blocked street's name as written, e.g. 'River St'; "
+                                              "question (topic roads): the street or bridge they ask about; null if not named")
+    cross_street: str | None = Field(description="closure_report / location / question (roads): a cross street or landmark that locates it")
     address: str | None = Field(description="location: where the sender is, as written: a street address ('125 Western Ave'), "
                                             "one street of an intersection ('Western Ave'), a landmark, or coordinates")
     endurance_min: float | None = Field(description="facility_status: MINUTES of backup power/fuel left, e.g. '10 minutes' = 10, '6 hours' = 360")
     facility_state: Literal["ok", "backup", "down"] | None = Field(
         description="facility_status: ok = on grid power, backup = running on backup/generator, down = no power / not operating")
-    question_topic: Literal["eta", "pickup_place", "destination", "others", "vehicles", "bring", "other"] | None = Field(
-        description="question: eta = when / how long; pickup_place = where to go or wait; destination = where they'll be "
-                    "taken; others = other people near them / travelling together / neighbours; vehicles = which vehicles "
-                    "are free, why this one, other options; bring = what to pack; other = anything else")
+    question_topic: Literal["plan", "eta", "pickup_place", "destination", "others", "vehicles", "bring", "flood", "roads",
+                            "safety", "other"] | None = Field(
+        description="question: plan = what's the plan / what should I do / what happens now / is anyone coming for me / "
+                    "what's my status; eta = when / how long; pickup_place = where to go or wait; destination = where "
+                    "they'll be taken; others = other people near them / travelling together / neighbours; vehicles = "
+                    "which vehicles are free, why this one, other options; bring = what to pack (asking whether a specific "
+                    "item or a pet is allowed is other); flood = where the water "
+                    "is, when it reaches them, whether their street floods; roads = whether a road or bridge is open or "
+                    "blocked (name it in road_hint); safety = is it safe to walk / drive / stay, what to do if water comes "
+                    "in, an emergency; other = anything else")
 
 
 class Extraction(BaseModel):
@@ -66,7 +73,7 @@ Fact kinds:
 - location: where the sender is right now (an address, an intersection, a landmark, coordinates). Copy it as written into address; for an intersection put one street in address and the other in cross_street.
 - done: they report finishing the step we last asked them to do ("done", "we're at the corner", "on the van", "we've arrived", "it's connected").
 - confirm: yes / accepting the instruction we last sent. reject: no / can't do it / declining it.
-- question: they ask something; set question_topic. other: anything else (greetings, thanks, chatter).
+- question: they ask something; set question_topic (a vague "what's the plan?" / "what do I do?" / "what now?" is plan). For a question about a road or bridge, put its name in road_hint. other: anything else (greetings, thanks, chatter).
 
 Rules:
 - Leave a field null unless the message states it or makes it unambiguous ("me and my mom" = 2 people; "she uses a wheelchair" = mobility and accessible_vehicle true).
@@ -124,6 +131,7 @@ class Outcome:
     clear_pending: bool = False
     location: dict | None = None                       # {"address", "cross_street"}: where they say they are
     topics: list[str] = field(default_factory=list)    # question topics, answered from the plan (briefing.py)
+    road: dict | None = None                           # {"road_hint", "cross_street"}: the road a `roads` question names
     follow_up: str | None = None                       # the model's own question next to a need ("Did you mean…?")
     step_done: bool = False                            # they finished the step we last asked for
 
@@ -197,6 +205,8 @@ def to_outcome(ex: Extraction, *, role: str, thread: dict, text: str, pending: d
             out.step_done = True
         elif f.kind == "question":
             out.topics.append(f.question_topic or "other")
+            if f.question_topic == "roads" and f.road_hint and out.road is None:
+                out.road = {"road_hint": f.road_hint, "cross_street": f.cross_street}
             out.reports.append({"source": source, "kind": "question", "confidence": ex.confidence, "text": text,
                                 **({"household_id": hid} if hid is not None else {}),
                                 **({"facility_id": fid} if fid is not None else {})})

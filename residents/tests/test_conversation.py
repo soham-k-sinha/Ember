@@ -100,8 +100,10 @@ def test_question_goes_to_coordinators_with_status(settings, bridge):  # noqa: F
     with TestClient(create_app(s, bridge=bridge, llm=llm)) as c:
         c.post("/phones", json={"role": "resident", "handle": "6175550120"})
         say(c, "2 of us, my mom uses a wheelchair")
-        [r] = say(c, "is the western ave bridge open?")
-        assert r.startswith("[EMBER drill] We've passed your question to the coordinators.")
+        [r] = say(c, "is the western ave bridge open?")  # no topic → `other`: queued, and never only that (D60)
+        assert r.startswith("[EMBER drill] Our plan doesn't cover that, so we've passed your question to a "
+                            "coordinator, who will reply here. Meanwhile, here's where you stand: "), r
+        assert c.get("/questions").json()[0]["text"] == "is the western ave bridge open?"
 
 
 def test_tuned_demo_beat_through_the_text_pipeline(settings, full_bridge):  # noqa: F811

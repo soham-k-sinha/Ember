@@ -596,8 +596,10 @@ def test_questions_are_answered_from_the_plan(pair):
     assert tap.outs(R1)[-1].startswith("Stay inside at Stadium Road and Western Avenue: the crew comes to your door")
     text(c, R1, "what should we bring?")
     assert tap.outs(R1)[-1].startswith("Bring medications")
-    text(c, R1, "is the bridge open?")  # not something the plan knows: a coordinator
-    assert tap.outs(R1)[-1].startswith("We've passed your question to the coordinators.")
+    text(c, R1, "is the bridge open?")  # labelled `other`: a coordinator, and where they stand meanwhile (D60)
+    assert tap.outs(R1)[-1].startswith("Our plan doesn't cover that, so we've passed your question to a coordinator, "
+                                       "who will reply here. Meanwhile, here's where you stand: Accessible Van 3 is "
+                                       "assigned to pick you up"), tap.outs(R1)[-1]
 
 
 def test_no_to_the_only_vehicle_is_checked_and_the_question_answered(pair):
@@ -607,7 +609,8 @@ def test_no_to_the_only_vehicle_is_checked_and_the_question_answered(pair):
     new = tap.outs(R1)[n:]
     assert new[0].startswith("1 other household in this drill is within 300 m of you (1 at your pickup corner).")
     assert "Accessible Van 3 also picks up 1 of them (1 before you, 0 after)" in new[0]
-    assert "one household per trip" in new[0]
+    # engine D59 shares trips, but 4 + 3 people don't fit the van's 6 seats: say so, not "one household per trip"
+    assert "on separate trips: together you'd be 7 people and it has 6 seats." in new[0], new[0]
     assert new[1].startswith("Accessible Van 3 is the only wheelchair-accessible vehicle that can take 3 people with a wheelchair.")
     assert c.app.state.store.kv_get(f"rejected:household:{t1['household_id']}") is None  # not banned
     text(c, R1, "yes")  # keep it

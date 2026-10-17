@@ -270,7 +270,8 @@ class Store:
             db.execute("DELETE FROM kv WHERE key = 'extra_households'")
             # per-run conversation memory: half-answered questions, last instruction texted, questions asked,
             # step-by-step directions, where located phones were placed, pre-placement chat
-            for prefix in ("pending:", "instr:", "asked:", "rejected:", "guide:", "located:", "lobby:", "welcomed:", "keep:"):
+            for prefix in ("pending:", "instr:", "asked:", "rejected:", "guide:", "located:", "lobby:", "welcomed:", "keep:",
+                           "question:"):
                 db.execute("DELETE FROM kv WHERE key LIKE ?", (prefix + "%",))
 
     def apply_snapshot(self, state: dict) -> None:
