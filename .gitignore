@@ -30,3 +30,6 @@ dist/
 *.pkl
 *.npz
 *.parquet
+
+# osmnx HTTP cache + pickled OSM layers (rebuilt by `ember build`)
+engine/cache/

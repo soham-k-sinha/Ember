@@ -125,6 +125,19 @@ class World:
         w._uv_edges = uv
         return w
 
+    def edge_lines(self) -> np.ndarray:
+        """Shapely LineStrings per edge in local meters (cached)."""
+        if "_lines" not in self.__dict__:
+            import shapely
+            pts = np.c_[self.geom_x, self.geom_y]
+            idx = np.repeat(np.arange(self.n_edges), self.geom_count)
+            self.__dict__["_lines"] = shapely.linestrings(pts, indices=idx)
+        return self.__dict__["_lines"]
+
+    def exit_in_edges(self) -> list[np.ndarray]:
+        """Per exit (same order as self.exits): indices of edges entering it."""
+        return [np.where(self.edge_v == x)[0] for x in self.exits]
+
     @property
     def n_nodes(self) -> int:
         return len(self.node_id)
@@ -134,19 +147,25 @@ class World:
         return len(self.edge_id)
 
     # ---------- routing ----------
-    def routing_table(self, closed: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+    def routing_table(self, closed: np.ndarray | None = None, weight: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
         """next_edge[node] toward the nearest exit avoiding closed edges (-1 if unreachable),
-        plus dist_to_exit[node] in seconds."""
+        plus dist_to_exit[node] in seconds. `weight` overrides free-flow edge times (e.g. congested)."""
         N, E = self.n_nodes, self.n_edges
-        w = self.edge_tt.copy()
+        w = (self.edge_tt if weight is None else np.asarray(weight, dtype=np.float64)).copy()
         if closed is not None and closed.any():
             w = np.where(closed, np.inf, w)
-        ok = np.isfinite(w)
-        # reversed graph: v -> u with weight tt; dijkstra from exits gives dist(node → exit)
-        rev = csr_matrix((w[ok], (self.edge_v[ok], self.edge_u[ok])), shape=(N, N))
+        ok = np.isfinite(w) & (self.edge_u != self.edge_v)
+        # reversed graph: v -> u with weight tt; dijkstra from exits gives dist(node → exit).
+        # csr_matrix sums duplicate (row, col) entries, so collapse parallel edges to their minimum first.
+        ei = np.where(ok)[0]
+        ei = ei[np.lexsort((w[ei], self.edge_u[ei], self.edge_v[ei]))]
+        pair = self.edge_v[ei] * N + self.edge_u[ei]
+        first = np.ones(len(ei), dtype=bool); first[1:] = pair[1:] != pair[:-1]
+        ei = ei[first]
+        rev = csr_matrix((w[ei], (self.edge_v[ei], self.edge_u[ei])), shape=(N, N))
         if len(self.exits) == 0:
             return np.full(N, -1, dtype=np.int64), np.full(N, np.inf)
-        dist, pred = dijkstra(rev, directed=True, indices=self.exits, min_only=True, return_predecessors=True)
+        dist, pred, _src = dijkstra(rev, directed=True, indices=self.exits, min_only=True, return_predecessors=True)
         next_edge = np.full(N, -1, dtype=np.int64)
         for n in range(N):
             p = pred[n]
@@ -183,6 +202,12 @@ class World:
     def xy_to_lonlat(self, x, y):
         _, to_ll = local_projector(*self.center)
         return to_ll(x, y)
+
+    def exit_label(self, osm_node: int) -> str:
+        """Street name(s) entering an exit node, for logs: 'Memorial Drive@61317667'."""
+        k = int(np.where(self.node_id == osm_node)[0][0])
+        names = sorted({self.edge_name[e] or self.edge_highway[e] for e in np.where(self.edge_v == k)[0]})
+        return f"{'/'.join(names)}@{osm_node}"
 
     def edge_label(self, e: int) -> str:
         return f"{self.edge_name[e] or self.edge_highway[e]}#{int(self.edge_id[e])}"

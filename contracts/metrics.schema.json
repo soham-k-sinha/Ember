@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ember/metrics.schema.json",
+  "title": "Ember run metrics",
+  "description": "Return value of run_job. Times in seconds since simulation start; counts are vehicles.",
+  "type": "object",
+  "required": ["vehicles", "departed", "exited", "exposed_vehicles", "stuck", "still_moving_or_queued", "clearance_s_95", "max_queue_veh",
+               "vulnerable_delay_s_mean", "vehicle_hours", "first_closure_s", "closure_order", "exit_closure_order", "closed_edges", "t_s", "ticks", "wall_s", "plan_id", "scenario_id"],
+  "properties": {
+    "vehicles": {"type": "integer"},
+    "departed": {"type": "integer"},
+    "exited": {"type": "integer"},
+    "exposed_vehicles": {"type": "integer", "description": "On an edge when the hazard closed it."},
+    "stuck": {"type": "integer", "description": "No route to any exit when they tried to leave."},
+    "still_moving_or_queued": {"type": "integer"},
+    "clearance_s_95": {"type": ["number", "null"], "description": "Time by which 95% of departed vehicles exited; null if never reached."},
+    "max_queue_veh": {"type": "integer"},
+    "vulnerable_delay_s_mean": {"type": ["number", "null"]},
+    "vehicle_hours": {"type": "number"},
+    "first_closure_s": {"type": ["number", "null"]},
+    "closure_order": {
+      "type": "array", "description": "First 25 closures: [edge id, t_s, label].",
+      "items": {"type": "array", "prefixItems": [{"type": "integer"}, {"type": "number"}, {"type": "string"}], "minItems": 3, "maxItems": 3}
+    },
+    "exit_closure_order": {
+      "type": "array", "description": "Exits whose every incoming edge closed: [exit OSM node id, t_s], by time.",
+      "items": {"type": "array", "prefixItems": [{"type": "integer"}, {"type": "number"}], "minItems": 2, "maxItems": 2}
+    },
+    "closed_edges": {"type": "integer"},
+    "t_s": {"type": "number"},
+    "ticks": {"type": "integer"},
+    "wall_s": {"type": "number"},
+    "plan_id": {"type": ["string", "null"]},
+    "scenario_id": {"type": ["string", "null"]}
+  }
+}

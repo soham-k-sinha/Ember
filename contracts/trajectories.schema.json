@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ember/trajectories.schema.json",
+  "title": "Ember trajectories",
+  "description": "Sampled vehicle paths for deck.gl TripsLayer. t = seconds since sim start (float32-safe). path[i] is [lon, lat] at t[i].",
+  "type": "object",
+  "required": ["version", "trips"],
+  "properties": {
+    "version": {"const": "0.1"},
+    "t0_label": {"type": "string"},
+    "trips": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["id", "path", "t", "final"],
+        "properties": {
+          "id": {"type": "integer", "description": "Household id"},
+          "path": {"type": "array", "items": {"type": "array", "prefixItems": [{"type": "number"}, {"type": "number"}], "minItems": 2, "maxItems": 2}},
+          "t": {"type": "array", "items": {"type": "number"}},
+          "final": {"type": "integer", "description": "Final state: 0 waiting, 1 moving, 2 queued, 3 exited, 4 exposed, 5 stuck."}
+        }
+      }
+    }
+  }
+}

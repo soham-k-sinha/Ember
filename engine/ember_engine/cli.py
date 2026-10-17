@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
-TOWN = DATA / "town.json"
+TOWN = Path(__import__("os").environ.get("EMBER_TOWN", DATA / "town.json"))
 
 
 def _load_world():
@@ -68,16 +68,28 @@ def cmd_render(a):
 
 
 def cmd_gate_a(a):
-    """Rotate the hazard heading; closure order must change."""
+    """Rotate the hazard heading by 90°: the first exit to close and the closure order must change.
+
+    Edges closed at ignition (t = start) are identical for every heading by construction, so the
+    closure comparison starts after the ignition tick."""
     from .run_job import default_job, run_job
     w = _load_world()
-    results = {}
+    res = {}
     for h in (a.heading, (a.heading + 90) % 360):
         m = run_job(w, default_job(w, heading_deg=h, speed_mps=a.speed, T_s=a.T))
-        results[h] = [c[2] for c in m["closure_order"][:6]]
-        print(f"heading {h:>3}: exposed={m['exposed_vehicles']:>5} exited={m['exited']:>5} clearance95={m['clearance_s_95']} first closures={results[h][:4]}")
-    same = results[a.heading][:3] == results[(a.heading + 90) % 360][:3]
-    print("GATE A:", "FAIL (same first closures)" if same else "PASS (closure order changes with heading)")
+        t_ign = m["closure_order"][0][1] if m["closure_order"] else 0.0
+        later = [c[2] for c in m["closure_order"] if c[1] > t_ign]
+        exits = m["exit_closure_order"]
+        res[h] = (later[:6], [x[0] for x in exits[:3]])
+        print(f"heading {h:>5.0f}: exposed={m['exposed_vehicles']:>5} exited={m['exited']:>5} clearance95={m['clearance_s_95']}"
+              f"\n    first exits closed={[f'{w.exit_label(x[0])} t={x[1]:.0f}s' for x in exits[:3]]}\n    first closures after ignition={later[:4]}")
+    (c1, x1), (c2, x2) = res.values()
+    exit_diff = bool(x1 and x2 and x1[0] != x2[0])
+    order_diff = c1[:3] != c2[:3]
+    ok = exit_diff and order_diff
+    print(f"GATE A: {'PASS' if ok else 'FAIL'} (first exit differs: {exit_diff}; closure order differs: {order_diff})")
+    if not ok:
+        sys.exit(1)
 
 
 def cmd_fixtures(a):
@@ -85,13 +97,12 @@ def cmd_fixtures(a):
     import copy
     fx = ROOT / "contracts" / "fixtures"; fx.mkdir(parents=True, exist_ok=True)
     town = json.loads(TOWN.read_text())
+    # full road network (so trajectories line up) + every 12th household + a slice of footways; < 1 MB
     small = copy.deepcopy(town)
-    small["edges"] = town["edges"][:150]; small["paths"] = town["paths"][:100]
-    keep_nodes = {e["u"] for e in small["edges"]} | {e["v"] for e in small["edges"]}
-    small["nodes"] = [n for n in town["nodes"] if n["id"] in keep_nodes]
-    small["households"] = [h for h in town["households"] if h["node"] in keep_nodes][:300]
-    small["exits"] = [x for x in town["exits"] if x in keep_nodes]
+    small["households"] = town["households"][::12]
+    small["paths"] = town["paths"][:300]
     small["meta"]["counts"] = {k: len(small[k]) for k in ("nodes", "edges", "paths", "households", "assets", "exits", "zones")}
+    small["meta"]["fixture"] = f"households sampled 1 in 12 from {len(town['households'])}; paths truncated to 300"
     (fx / "town.fixture.json").write_text(json.dumps(small, separators=(",", ":")))
     if (DATA / "trajectories.json").exists():
         tr = json.loads((DATA / "trajectories.json").read_text()); tr["trips"] = tr["trips"][:200]

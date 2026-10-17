@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ember/plan.schema.json",
+  "title": "Ember evacuation plan",
+  "description": "What the planner controls. Times in seconds since simulation start.",
+  "type": "object",
+  "required": ["plan_id", "mode", "order_t_s", "zone_offsets_s", "closed_edges"],
+  "properties": {
+    "plan_id": {"type": "string"},
+    "mode": {"enum": ["immediate", "staged"]},
+    "order_t_s": {"type": "number", "minimum": 0, "description": "When the evacuation order goes out."},
+    "zone_offsets_s": {
+      "type": "object",
+      "description": "Zone id (as string) → extra delay after order_t_s for households that comply.",
+      "patternProperties": {"^[0-9]+$": {"type": "number", "minimum": 0}},
+      "additionalProperties": false
+    },
+    "closed_edges": {"type": "array", "items": {"type": "integer"}, "description": "Edge ids closed by the plan (contraflow / blocks), in addition to the hazard."}
+  }
+}

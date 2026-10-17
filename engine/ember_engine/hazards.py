@@ -30,9 +30,9 @@ class Hazard(Protocol):
 def _edges_touching(polygon, world) -> np.ndarray:
     if polygon is None or polygon.is_empty:
         return np.zeros(world.n_edges, dtype=bool)
-    inside = shapely.contains_xy(polygon, world.geom_x, world.geom_y)
-    # any vertex of the edge inside → edge closed
-    return np.logical_or.reduceat(inside, world.geom_start)
+    # edge closed when its geometry touches the polygon (catches long edges with no vertex inside)
+    shapely.prepare(polygon)
+    return shapely.intersects(polygon, world.edge_lines())
 
 
 class _Cached:
@@ -73,7 +73,7 @@ class GrowingEllipseHazard(_Cached):
         dx, dy = heading_to_unit(self.heading)
         # drift downwind: the ignition point stays near the upwind end
         cx, cy = self.cx + dx * (a - self.min_r) * 0.6, self.cy + dy * (a - self.min_r) * 0.6
-        ell = Point(0, 0).buffer(1.0, resolution=24)
+        ell = Point(0, 0).buffer(1.0, quad_segs=24)
         ell = affinity.scale(ell, xfact=b, yfact=a, origin=(0, 0))      # major axis along +y (north)
         ell = affinity.rotate(ell, -self.heading, origin=(0, 0))        # compass → math rotation
         return affinity.translate(ell, cx, cy)

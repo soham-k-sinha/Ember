@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ember/job.schema.json",
+  "title": "Ember job",
+  "description": "Input to run_job(world, job) → metrics. One job = one plan under one scenario; the Daytona pool runs many.",
+  "type": "object",
+  "required": ["plan", "scenario"],
+  "properties": {
+    "plan": {"$ref": "plan.schema.json"},
+    "scenario": {
+      "type": "object",
+      "required": ["scenario_id", "hazard"],
+      "properties": {
+        "scenario_id": {"type": "string"},
+        "seed": {"type": "integer"},
+        "T_s": {"type": "number", "description": "Simulated horizon, s (default 10800)."},
+        "dt_s": {"type": "number", "description": "Tick length, s (default 10)."},
+        "snapshot_every": {"type": "integer", "description": "Ticks between snapshots / trajectory samples (default 6)."},
+        "n_traj": {"type": "integer", "description": "Sampled vehicles for trajectories (0 in batch runs)."},
+        "compliance": {"type": "number", "minimum": 0, "maximum": 1, "description": "Share of households that follow their zone offset (synthetic)."},
+        "mobilization_median_s": {"type": "number", "description": "Lognormal median delay before leaving (synthetic)."},
+        "mobilization_sigma": {"type": "number"},
+        "hazard": {
+          "oneOf": [
+            {"type": "object", "required": ["type"], "properties": {"type": {"const": "none"}}},
+            {
+              "type": "object", "required": ["type", "center", "heading_deg", "speed_mps"],
+              "description": "Growing wind-driven ellipse (fire-like front).",
+              "properties": {
+                "type": {"const": "ellipse"},
+                "center": {"type": "array", "prefixItems": [{"type": "number"}, {"type": "number"}], "minItems": 2, "maxItems": 2},
+                "start_t_s": {"type": "number"},
+                "speed_mps": {"type": "number", "description": "Growth of the semi-major axis."},
+                "heading_deg": {"type": "number", "description": "Compass direction the front moves toward (0 = N, 90 = E)."},
+                "ratio": {"type": "number", "description": "Length / breadth."}
+              }
+            },
+            {
+              "type": "object", "required": ["type", "keyframes"],
+              "description": "Stepwise polygons (e.g. flood extents); the latest keyframe ≤ t applies.",
+              "properties": {
+                "type": {"const": "keyframes"},
+                "keyframes": {
+                  "type": "array",
+                  "items": {"type": "array", "prefixItems": [{"type": "number"}, {"type": "array", "items": {"type": "array"}}], "minItems": 2, "maxItems": 2}
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "plan": {
+    "plan_id": "staged",
+    "mode": "staged",
+    "order_t_s": 0.0,
+    "zone_offsets_s": {
+      "0": 0.0,
+      "1": 300.0,
+      "2": 600.0,
+      "3": 900.0,
+      "4": 0.0,
+      "5": 300.0,
+      "6": 600.0,
+      "7": 900.0,
+      "8": 0.0,
+      "9": 300.0
+    },
+    "closed_edges": []
+  },
+  "scenario": {
+    "scenario_id": "ellipse_h90",
+    "seed": 1,
+    "T_s": 10800.0,
+    "dt_s": 10.0,
+    "compliance": 1.0,
+    "mobilization_median_s": 900.0,
+    "mobilization_sigma": 0.6,
+    "hazard": {
+      "type": "ellipse",
+      "center": [
+        -71.12076,
+        42.3636
+      ],
+      "start_t_s": 0.0,
+      "speed_mps": 0.6,
+      "heading_deg": 90.0,
+      "ratio": 2.5
+    }
+  }
+}

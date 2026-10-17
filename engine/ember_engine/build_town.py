@@ -15,13 +15,11 @@ from pathlib import Path
 
 import numpy as np
 
-VENUE_QUERIES = [
-    "David Rubenstein Treehouse, Boston, MA",
-    "150 Western Avenue, Boston, MA 02134",
-    "Western Avenue & North Harvard Street, Boston, MA",
-]
-# Harvard Enterprise Research Campus, Allston (approximate; used only if geocoding fails).
-VENUE_FALLBACK_LATLON = (42.3645, -71.1232)
+# The Treehouse is 20 Western Ave, Allston (rubensteintreehouse.harvard.edu). Nominatim does not know
+# it by name and "20 Western Avenue, Boston" lands ~1.1 km west, so the venue is pinned to the
+# centroid of its OSM footprint (way 1338781017, building=university, addr 20 Western Avenue).
+VENUE_LATLON = (42.36360, -71.12076)
+VENUE_SOURCE = "OSM way/1338781017 (20 Western Ave) centroid"
 
 LANES_BY_HIGHWAY = {
     "motorway": 3, "motorway_link": 1, "trunk": 2, "trunk_link": 1,
@@ -72,16 +70,49 @@ def _is_nan(v) -> bool:
     return v is None or (isinstance(v, float) and math.isnan(v))
 
 
-def geocode_venue():
+OVERPASS_MIRRORS = [
+    "https://overpass-api.de/api",
+    "https://overpass.private.coffee/api",
+    "https://overpass.kumi.systems/api",
+]
+
+
+LAYER_CACHE = Path(__file__).resolve().parents[1] / "cache" / "layers"
+
+
+def _osm(name: str, key: tuple, fn, *args, rounds: int = 3, **kwargs):
+    """Fetch one OSM layer, pickled under cache/layers/ once it succeeds.
+
+    osmnx's own HTTP cache is keyed by the Overpass URL, so it misses as soon as we fall over to a
+    mirror; this cache is keyed by (layer, center, dist) only. Rotates mirrors with backoff."""
+    import pickle
+
     import osmnx as ox
 
-    for q in VENUE_QUERIES:
-        try:
-            lat, lon = ox.geocode(q)
-            return q, float(lat), float(lon)
-        except Exception:  # noqa: BLE001 — geocoder misses are expected; fall through
-            continue
-    return "fallback", *VENUE_FALLBACK_LATLON
+    f = LAYER_CACHE / f"{name}_{'_'.join(str(k) for k in key)}.pkl"
+    if f.exists():
+        return pickle.loads(f.read_bytes())
+    last = None
+    for rnd in range(rounds):
+        for url in OVERPASS_MIRRORS:
+            ox.settings.overpass_url = url
+            try:
+                out = fn(*args, **kwargs)
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_bytes(pickle.dumps(out))
+                return out
+            except Exception as ex:  # noqa: BLE001 — network errors vary by mirror
+                if type(ex).__name__ == "InsufficientResponseError":
+                    raise  # a real empty answer, not a mirror problem
+                print(f"[build] {name}: {url} failed ({type(ex).__name__}); trying next")
+                last = ex
+        if rnd < rounds - 1:
+            time.sleep(20 * (rnd + 1))
+    raise last
+
+
+def geocode_venue():
+    return VENUE_SOURCE, *VENUE_LATLON
 
 
 def kmeans(xy: np.ndarray, k: int, rng: np.random.Generator, iters: int = 25) -> np.ndarray:
@@ -104,6 +135,8 @@ def build(center_latlon: tuple[float, float] | None = None, dist_m: int = 1200,
 
     ox.settings.use_cache = True
     ox.settings.log_console = False
+    ox.settings.requests_timeout = 300
+    ox.settings.overpass_rate_limit = False   # /api/status polling fails on overloaded servers
     t0 = time.time()
     rng = np.random.default_rng(seed)
 
@@ -111,10 +144,11 @@ def build(center_latlon: tuple[float, float] | None = None, dist_m: int = 1200,
     if center_latlon is None:
         center_latlon = (vlat, vlon)
     clat, clon = center_latlon
+    layer_key = (round(clat, 5), round(clon, 5), dist_m)
     print(f"[build] venue via {venue_src!r} at lat={vlat:.5f} lon={vlon:.5f}; center=({clat:.5f},{clon:.5f}) dist={dist_m} m")
 
     # ---------- drive network ----------
-    G = ox.graph_from_point((clat, clon), dist=dist_m, network_type="drive", simplify=True)
+    G = _osm("drive", layer_key, ox.graph_from_point, (clat, clon), dist=dist_m, network_type="drive", simplify=True)
     G = ox.routing.add_edge_speeds(G)
     G = ox.routing.add_edge_travel_times(G)
     nodes_gdf, edges_gdf = ox.convert.graph_to_gdfs(G, nodes=True, edges=True, fill_edge_geometry=True)
@@ -154,20 +188,36 @@ def build(center_latlon: tuple[float, float] | None = None, dist_m: int = 1200,
     from .geo import local_projector
     to_xy, _ = local_projector(clon, clat)
     nx_, ny_ = to_xy(nodes_gdf.x.values, nodes_gdf.y.values)
-    ndist = np.hypot(nx_, ny_)
+    # graph_from_point(dist=...) fetches a square box, so "on the boundary" is box (Chebyshev) distance
+    ndist = np.maximum(np.abs(nx_), np.abs(ny_))
     deg = dict(G.degree())
-    exits = [int(nid) for nid, d in zip(node_ids, ndist) if d > 0.9 * dist_m and deg.get(nid, 0) <= 2]
+    exits = [int(nid) for nid, d in zip(node_ids, ndist) if d > 0.95 * dist_m and deg.get(nid, 0) <= 2]
     # keep nodes that actually have an incoming edge (reachable)
     has_in = {e["v"] for e in edges}
     exits = [n for n in exits if n in has_in]
     print(f"[build] exits (boundary nodes): {len(exits)}")
 
+    # snap targets: only nodes with a directed path to some exit (no dead-end islands / one-way traps)
+    import networkx as nx
+    from scipy.spatial import cKDTree
+    can_exit = set(exits)
+    for x in exits:
+        can_exit |= nx.ancestors(G, x)
+    snap_ids = np.array([nid for nid in node_ids if nid in can_exit], dtype=np.int64)
+    snap_xy = np.c_[to_xy(nodes_gdf.loc[snap_ids].x.values, nodes_gdf.loc[snap_ids].y.values)]
+    snap_tree = cKDTree(snap_xy)
+    print(f"[build] snap nodes (can reach an exit): {len(snap_ids)} of {len(node_ids)}")
+
+    def snap(lon, lat) -> np.ndarray:
+        x, y = to_xy(np.atleast_1d(lon), np.atleast_1d(lat))
+        return snap_ids[snap_tree.query(np.c_[x, y])[1]]
+
     # ---------- walk network (optional) ----------
     paths = []
     if with_walk:
         try:
-            Gw = ox.graph_from_point((clat, clon), dist=dist_m, network_type="walk", simplify=True)
-            _, wedges = ox.convert.graph_to_gdfs(Gw, nodes=False, edges=True, fill_edge_geometry=True)
+            Gw = _osm("walk", layer_key, ox.graph_from_point, (clat, clon), dist=dist_m, network_type="walk", simplify=True)
+            wedges = ox.convert.graph_to_gdfs(Gw, nodes=False, edges=True, fill_edge_geometry=True)
             for pid, ((u, v, key), r) in enumerate(wedges.iterrows()):
                 if not bool(r.get("oneway")) and u > v:
                     continue  # one record per undirected footway
@@ -179,7 +229,7 @@ def build(center_latlon: tuple[float, float] | None = None, dist_m: int = 1200,
             print(f"[build] walk network skipped: {ex}")
 
     # ---------- buildings → households ----------
-    bld = ox.features_from_point((clat, clon), tags={"building": True}, dist=dist_m)
+    bld = _osm("buildings", layer_key, ox.features_from_point, (clat, clon), tags={"building": True}, dist=dist_m)
     bld = bld[bld.geometry.geom_type.isin(["Polygon", "MultiPolygon"])].copy()
     bld_p = ox.projection.project_gdf(bld)
     bld["area_m2"] = bld_p.geometry.area.values
@@ -246,13 +296,9 @@ def build(center_latlon: tuple[float, float] | None = None, dist_m: int = 1200,
     hh_xy = np.array(hh_xy) if hh_xy else np.zeros((0, 2))
     print(f"[build] households: {len(households)} ({time.time()-t0:.1f}s)")
 
-    # nearest drive node per household (projected cKDTree)
+    # nearest exit-reachable drive node per household
     if len(households):
-        Gp = ox.projection.project_graph(G)
-        import geopandas as gpd
-        from shapely.geometry import Point
-        pts = gpd.GeoDataFrame(geometry=[Point(x, y) for x, y in hh_xy], crs="EPSG:4326").to_crs(Gp.graph["crs"])
-        nn = ox.distance.nearest_nodes(Gp, pts.geometry.x.values, pts.geometry.y.values)
+        nn = snap(hh_xy[:, 0], hh_xy[:, 1])
         for h, n in zip(households, nn):
             h["node"] = int(n)
         # zones
@@ -274,12 +320,10 @@ def build(center_latlon: tuple[float, float] | None = None, dist_m: int = 1200,
     # ---------- assets ----------
     assets = []
     try:
-        af = ox.features_from_point((clat, clon), tags=ASSET_TAGS, dist=dist_m)
+        af = _osm("assets", layer_key, ox.features_from_point, (clat, clon), tags=ASSET_TAGS, dist=dist_m, rounds=1)
         afp = ox.projection.project_gdf(af)
         c = afp.geometry.centroid.to_crs(epsg=4326)
-        Gp = ox.projection.project_graph(G)
-        cp = afp.geometry.centroid
-        nn = ox.distance.nearest_nodes(Gp, cp.x.values, cp.y.values)
+        nn = snap(c.x.values, c.y.values)
         aid = 0
         for (idx, r), lon, lat, n in zip(af.iterrows(), c.x.values, c.y.values, nn):
             typ = None
@@ -299,12 +343,7 @@ def build(center_latlon: tuple[float, float] | None = None, dist_m: int = 1200,
         print(f"[build] assets skipped: {ex}")
     print(f"[build] assets: {len(assets)}  types={sorted({a['type'] for a in assets})}")
 
-    # venue node
-    Gp = ox.projection.project_graph(G)
-    import geopandas as gpd
-    from shapely.geometry import Point
-    vp = gpd.GeoSeries([Point(vlon, vlat)], crs="EPSG:4326").to_crs(Gp.graph["crs"]).iloc[0]
-    vnode = int(ox.distance.nearest_nodes(Gp, vp.x, vp.y))
+    vnode = int(snap(vlon, vlat)[0])
 
     town = {
         "meta": {

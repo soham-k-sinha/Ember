@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ember/town.schema.json",
+  "title": "Ember town",
+  "description": "World built from OpenStreetMap around the venue by `ember build`. Coordinates are [lon, lat] (GeoJSON order). Distances in meters. Fields listed in meta.synthetic are generated, not observed.",
+  "type": "object",
+  "required": ["meta", "venue", "nodes", "edges", "paths", "households", "assets", "exits", "zones"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["version", "center", "dist_m", "counts", "synthetic"],
+      "properties": {
+        "version": {"const": "0.1"},
+        "center": {"$ref": "#/$defs/lonlat"},
+        "dist_m": {"type": "integer", "description": "Half-width of the OSM query box around center, m."},
+        "built_at": {"type": "string"},
+        "seed": {"type": "integer"},
+        "synthetic": {"type": "array", "items": {"type": "string"}, "description": "What is generated rather than observed. Show this in the UI."},
+        "counts": {
+          "type": "object",
+          "properties": {
+            "nodes": {"type": "integer"}, "edges": {"type": "integer"}, "paths": {"type": "integer"},
+            "households": {"type": "integer"}, "assets": {"type": "integer"}, "exits": {"type": "integer"}, "zones": {"type": "integer"}
+          }
+        }
+      }
+    },
+    "venue": {
+      "type": "object",
+      "required": ["name", "lon", "lat", "node"],
+      "properties": {
+        "name": {"type": "string"}, "source": {"type": "string"},
+        "lon": {"type": "number"}, "lat": {"type": "number"},
+        "node": {"type": "integer", "description": "Nearest drive node (OSM id)."}
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["id", "lon", "lat"],
+        "properties": {"id": {"type": "integer", "description": "OSM node id"}, "lon": {"type": "number"}, "lat": {"type": "number"}}
+      }
+    },
+    "edges": {
+      "type": "array",
+      "description": "Directed drive edges. A two-way street appears twice (u→v and v→u).",
+      "items": {
+        "type": "object",
+        "required": ["id", "u", "v", "length_m", "lanes", "speed_kph", "travel_time_s", "capacity_vph", "storage_veh", "oneway", "highway", "geom"],
+        "properties": {
+          "id": {"type": "integer", "description": "Dense 0..E-1; referenced by closures and plan.closed_edges."},
+          "u": {"type": "integer", "description": "From node (OSM id)"},
+          "v": {"type": "integer", "description": "To node (OSM id)"},
+          "key": {"type": "integer"},
+          "length_m": {"type": "number"},
+          "lanes": {"type": "integer", "minimum": 1, "description": "Per direction; imputed from highway class where untagged."},
+          "speed_kph": {"type": "number"},
+          "travel_time_s": {"type": "number"},
+          "capacity_vph": {"type": "integer", "description": "lanes × 1800 (synthetic)"},
+          "storage_veh": {"type": "integer", "description": "lanes × length_km × 150 (synthetic)"},
+          "oneway": {"type": "boolean"},
+          "highway": {"type": "string"},
+          "name": {"type": ["string", "null"]},
+          "geom": {"$ref": "#/$defs/line"}
+        }
+      }
+    },
+    "paths": {
+      "type": "array",
+      "description": "Walk network, one record per undirected segment. May be empty.",
+      "items": {
+        "type": "object", "required": ["id", "u", "v", "length_m", "geom"],
+        "properties": {
+          "id": {"type": "integer"}, "u": {"type": "integer"}, "v": {"type": "integer"},
+          "length_m": {"type": "number"}, "highway": {"type": ["string", "null"]}, "geom": {"$ref": "#/$defs/line"}
+        }
+      }
+    },
+    "households": {
+      "type": "array",
+      "description": "Synthetic: one or more per residential footprint.",
+      "items": {
+        "type": "object",
+        "required": ["id", "lon", "lat", "node", "zone", "size", "vehicles", "flags"],
+        "properties": {
+          "id": {"type": "integer"}, "lon": {"type": "number"}, "lat": {"type": "number"},
+          "building_id": {"type": "string"}, "building": {"type": "string"},
+          "node": {"type": "integer", "description": "Nearest drive node (OSM id)"},
+          "zone": {"type": "integer"},
+          "size": {"type": "integer", "minimum": 1},
+          "vehicles": {"type": "integer", "minimum": 0},
+          "flags": {
+            "type": "object", "required": ["elderly", "mobility", "medical", "no_car"],
+            "properties": {"elderly": {"type": "boolean"}, "mobility": {"type": "boolean"}, "medical": {"type": "boolean"}, "no_car": {"type": "boolean"}}
+          }
+        }
+      }
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["id", "type", "lon", "lat", "node"],
+        "properties": {
+          "id": {"type": "integer"},
+          "type": {"enum": ["hospital", "clinic", "fire_station", "police", "substation", "plant", "pumping_station", "water_works", "wastewater_plant", "water_tower", "storage_tank", "ambulance_station"]},
+          "name": {"type": ["string", "null"]}, "lon": {"type": "number"}, "lat": {"type": "number"},
+          "node": {"type": "integer"}, "osm": {"type": "string", "description": "element_type/osm_id"}
+        }
+      }
+    },
+    "exits": {"type": "array", "items": {"type": "integer"}, "description": "OSM node ids where vehicles leave the map."},
+    "zones": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["id", "centroid", "n_households"],
+        "properties": {"id": {"type": "integer"}, "centroid": {"$ref": "#/$defs/lonlat"}, "n_households": {"type": "integer"}}
+      }
+    }
+  },
+  "$defs": {
+    "lonlat": {"type": "array", "prefixItems": [{"type": "number"}, {"type": "number"}], "minItems": 2, "maxItems": 2},
+    "line": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/lonlat"}}
+  }
+}

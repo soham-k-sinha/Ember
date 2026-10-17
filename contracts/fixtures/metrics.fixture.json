@@ -1,0 +1,168 @@
+{
+  "vehicles": 10187,
+  "departed": 10080,
+  "exited": 7312,
+  "exposed_vehicles": 915,
+  "stuck": 1817,
+  "still_moving_or_queued": 36,
+  "clearance_s_95": null,
+  "max_queue_veh": 1231,
+  "vulnerable_delay_s_mean": 751.3283974857836,
+  "vehicle_hours": 2123.18630630859,
+  "first_closure_s": 0.0,
+  "closure_order": [
+    [
+      973,
+      0.0,
+      "Trotting Avenue#973"
+    ],
+    [
+      1171,
+      0.0,
+      "Trotting Avenue#1171"
+    ],
+    [
+      602,
+      120.0,
+      "Western Avenue#602"
+    ],
+    [
+      970,
+      120.0,
+      "Kresge Way#970"
+    ],
+    [
+      971,
+      120.0,
+      "Western Avenue#971"
+    ],
+    [
+      972,
+      120.0,
+      "Western Avenue#972"
+    ],
+    [
+      1031,
+      120.0,
+      "Western Avenue#1031"
+    ],
+    [
+      599,
+      180.0,
+      "Soldiers Field Frontage Road Eastbound#599"
+    ],
+    [
+      612,
+      180.0,
+      "Soldiers Field Frontage Road Eastbound#612"
+    ],
+    [
+      613,
+      180.0,
+      "Western Avenue#613"
+    ],
+    [
+      862,
+      180.0,
+      "Soldiers Field Road#862"
+    ],
+    [
+      1011,
+      180.0,
+      "Soldiers Field Road#1011"
+    ],
+    [
+      1030,
+      180.0,
+      "Western Avenue#1030"
+    ],
+    [
+      740,
+      240.0,
+      "Western Avenue#740"
+    ],
+    [
+      950,
+      240.0,
+      "Soldiers Field Frontage Road Westbound#950"
+    ],
+    [
+      1012,
+      240.0,
+      "motorway_link#1012"
+    ],
+    [
+      739,
+      300.0,
+      "motorway_link#739"
+    ],
+    [
+      980,
+      300.0,
+      "Western Avenue#980"
+    ],
+    [
+      524,
+      360.0,
+      "Memorial Drive#524"
+    ],
+    [
+      981,
+      360.0,
+      "Memorial Drive#981"
+    ],
+    [
+      534,
+      420.0,
+      "Memorial Drive#534"
+    ],
+    [
+      979,
+      420.0,
+      "Memorial Drive#979"
+    ],
+    [
+      1132,
+      420.0,
+      "Western Avenue#1132"
+    ],
+    [
+      105,
+      480.0,
+      "Blackstone Street#105"
+    ],
+    [
+      149,
+      480.0,
+      "Blackstone Street#149"
+    ]
+  ],
+  "exit_closure_order": [
+    [
+      13073528062,
+      1200.0
+    ],
+    [
+      61317667,
+      1320.0
+    ],
+    [
+      61322880,
+      1500.0
+    ],
+    [
+      61327341,
+      1740.0
+    ],
+    [
+      61328119,
+      2100.0
+    ]
+  ],
+  "closed_edges": 674,
+  "t_s": 3600.0,
+  "ticks": 360,
+  "wall_s": 0.326,
+  "plan_id": "immediate",
+  "scenario_id": "ellipse_h90"
+}

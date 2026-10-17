@@ -4,8 +4,12 @@ Vehicles: one per household with >= 1 vehicle. States:
     0 waiting (at home)  1 moving  2 queued (at edge end, blocked)  3 exited  4 exposed  5 stuck (no route)
 
 Routing is a single reverse Dijkstra from all exits (world.routing_table), recomputed when
-the closed set changes. Vehicles follow next_edge[node] dynamically, so closures re-route
-everyone without per-vehicle pathfinding.
+the closed set changes and every `reroute_every_s` with congested weights
+(free-flow time + time to discharge the queue already on the edge). Vehicles follow
+next_edge[node] dynamically, so closures re-route everyone without per-vehicle pathfinding.
+
+Effective storage is floored at 2 ticks of capacity (synthetic): with jam-density storage alone a
+13 m edge holds 2 vehicles and throttles a 1,800 veh/h road to a few hundred veh/h.
 """
 
 from __future__ import annotations
@@ -16,8 +20,9 @@ WAITING, MOVING, QUEUED, EXITED, EXPOSED, STUCK = 0, 1, 2, 3, 4, 5
 
 
 class QueueTrafficEngine:
-    def __init__(self, n_traj: int = 1500):
+    def __init__(self, n_traj: int = 1500, reroute_every_s: float = 60.0):
         self.n_traj = n_traj
+        self.reroute_every_s = reroute_every_s
 
     # ---------- setup ----------
     def reset(self, world, plan: dict, scenario: dict, rng: np.random.Generator):
@@ -45,8 +50,13 @@ class QueueTrafficEngine:
         self.count = np.zeros(world.n_edges)
         self.credit = np.zeros(world.n_edges)
         self.cap_tick = None
+        self._dt = None
+        self.exit_in = world.exit_in_edges()
+        self.exit_closed_t = np.full(len(world.exits), np.nan)
         self.closed = np.zeros(world.n_edges, dtype=bool)
         self.next_edge, _ = world.routing_table(self.closed)
+        self.storage = world.edge_storage.astype(np.float64)
+        self._last_reroute = 0.0
         self.max_queue = 0
         self.first_closure_s = None
         self.closure_order: list = []
@@ -60,9 +70,10 @@ class QueueTrafficEngine:
     # ---------- tick ----------
     def step(self, world, t_s, dt_s, closed, newly_closed):
         self._t = t_s
-        if self.cap_tick is None or self._dt != dt_s if hasattr(self, "_dt") else True:
+        if self.cap_tick is None or self._dt != dt_s:
             self._dt = dt_s
             self.cap_tick = world.edge_cap_vph * dt_s / 3600.0
+            self.storage = np.maximum(world.edge_storage, np.ceil(2.0 * self.cap_tick))
         closed_all = closed | self.extra_closed
         if not np.array_equal(closed_all, self.closed):
             new = closed_all & ~self.closed
@@ -71,6 +82,10 @@ class QueueTrafficEngine:
                     self.first_closure_s = t_s
                 for e in np.where(new)[0]:
                     self.closure_order.append([int(world.edge_id[e]), float(t_s), world.edge_label(int(e))])
+                # an exit closes when every edge into it is closed
+                for k, ins in enumerate(self.exit_in):
+                    if np.isnan(self.exit_closed_t[k]) and len(ins) and closed_all[ins].all():
+                        self.exit_closed_t[k] = t_s
                 # vehicles on newly closed edges are exposed
                 on = (self.state == MOVING) | (self.state == QUEUED)
                 hit = on & new[np.maximum(self.edge, 0)] & (self.edge >= 0)
@@ -79,7 +94,9 @@ class QueueTrafficEngine:
                     self.state[hit] = EXPOSED
                     self.exit_t[hit] = t_s
             self.closed = closed_all.copy()
-            self.next_edge, _ = world.routing_table(self.closed)
+            self._reroute(world, t_s)
+        elif t_s - self._last_reroute >= self.reroute_every_s:
+            self._reroute(world, t_s)
 
         self.credit = np.minimum(self.credit + self.cap_tick, 2.0 * self.cap_tick)
 
@@ -93,7 +110,7 @@ class QueueTrafficEngine:
                     self.state[i] = EXITED; self.exit_t[i] = t_s
                 elif e < 0:
                     self.state[i] = STUCK
-                elif self.count[e] < world.edge_storage[e]:
+                elif self.count[e] < self.storage[e]:
                     self.state[i] = MOVING; self.edge[i] = e; self.pos[i] = 0.0; self.count[e] += 1
                 # else wait at home (driveway) until storage frees
 
@@ -101,7 +118,7 @@ class QueueTrafficEngine:
         mv = self.state == MOVING
         if mv.any():
             e = self.edge[mv]
-            occ = self.count[e] / world.edge_storage[e]
+            occ = self.count[e] / self.storage[e]
             v = world.edge_speed[e] * np.clip(1.0 - 0.8 * occ, 0.2, 1.0)
             self.pos[mv] = np.minimum(self.pos[mv] + v * dt_s, world.edge_len[e])
             at_end = np.where(mv)[0][self.pos[mv] >= world.edge_len[e] - 1e-6]
@@ -119,19 +136,24 @@ class QueueTrafficEngine:
                 ne = self.next_edge[node]
                 if ne == -2:                                  # reached an exit node
                     self.credit[e] -= 1.0; self.count[e] -= 1
-                    self.state[i] = EXITED; self.exit_t[i] = t_s; self.edge[i] = -1
+                    self.state[i] = EXITED; self.exit_t[i] = t_s   # keep edge: trajectory ends at the exit
                 elif ne < 0:
                     continue                                   # no route right now; wait
-                elif self.count[ne] < world.edge_storage[ne]:
+                elif self.count[ne] < self.storage[ne]:
                     self.credit[e] -= 1.0; self.count[e] -= 1; self.count[ne] += 1
                     self.edge[i] = ne; self.pos[i] = 0.0; self.state[i] = MOVING
         self.max_queue = max(self.max_queue, int((self.state == QUEUED).sum()))
+
+    def _reroute(self, world, t_s):
+        queue_delay = self.count / np.maximum(world.edge_cap_vph / 3600.0, 1e-6)
+        self.next_edge, _ = world.routing_table(self.closed, weight=world.edge_tt + queue_delay)
+        self._last_reroute = t_s
 
     # ---------- outputs ----------
     def snapshot(self, world, t_s):
         if len(self.traj_idx):
             self.traj.append((float(t_s), self.edge[self.traj_idx].copy(), self.pos[self.traj_idx].copy(), self.state[self.traj_idx].copy()))
-        occ = self.count / np.maximum(world.edge_storage, 1.0)
+        occ = self.count / np.maximum(self.storage, 1.0)
         return {
             "t_s": float(t_s),
             "counts": {"waiting": int((self.state == WAITING).sum()), "moving": int((self.state == MOVING).sum()),
@@ -166,9 +188,16 @@ class QueueTrafficEngine:
             "vehicle_hours": float(travel.sum() / 3600.0),
             "first_closure_s": self.first_closure_s,
             "closure_order": self.closure_order[:25],
+            "exit_closure_order": self._exit_closure_order(world),
             "closed_edges": int(self.closed.sum()),
             "t_s": float(t_s),
         }
+
+    def _exit_closure_order(self, world) -> list:
+        """[[exit osm node id, t_s], ...] sorted by closing time (closed exits only)."""
+        k = np.where(~np.isnan(self.exit_closed_t))[0]
+        k = k[np.argsort(self.exit_closed_t[k], kind="stable")]
+        return [[int(world.node_id[world.exits[i]]), float(self.exit_closed_t[i])] for i in k]
 
     def done(self):
         return bool(np.all((self.state == EXITED) | (self.state == EXPOSED) | (self.state == STUCK))) and self.N > 0
@@ -196,9 +225,10 @@ class QueueTrafficEngine:
                 last = int(np.argmax(ended))
                 x[last:], y[last:] = x[last], y[last]
             lon, lat = world.xy_to_lonlat(x, y)
+            # keep both ends of every stationary run so TripsLayer doesn't interpolate a slow creep
+            chg = (np.abs(np.diff(lon)) > 1e-7) | (np.abs(np.diff(lat)) > 1e-7) | (np.diff(s) != 0)
             keep = np.ones(len(ts), dtype=bool)
-            keep[1:] = (np.abs(np.diff(lon)) > 1e-7) | (np.abs(np.diff(lat)) > 1e-7) | (np.diff(s) != 0)
-            keep[-1] = True
+            keep[1:-1] = chg[:-1] | chg[1:]
             out.append({"id": int(world.hh_id[self.hh[vi]]),
                         "path": [[round(float(a), 6), round(float(b), 6)] for a, b in zip(lon[keep], lat[keep])],
                         "t": [round(float(t), 1) for t in ts[keep]],
