@@ -85,3 +85,12 @@ Status: done. Found while building it: tests had patched the global asyncio.slee
 Notes: Aryaman — closing both directions adds 951 (reverse of 833) to your [523, 833, 952]; I re-ran your beat with it: judge still gets van-3 at 121 min (deadline 165) and the generator still changes. Anshuman — the judge's text in DEMO.md can be "2 of us, my mom's in a wheelchair, River St is blocked" at minute ~5; that exact flow is a residents test now.
 Next: Task 6 (operator prompt from the web), Task 7 (POST /simulate), live phone re-run.
 Follow-up (same PR): adopted EngineSession's new `moves=` (Aryaman, b9b1613): `ENGINE_MOVES` env (unset = engine default in production); tests run the bridge at moves=10 and the demo-beat test at the default search. 119 tests in 27 s (was 62 s).
+
+## 2026-10-17 11:50 · operator prompts, /simulate, non-blocking /optimize · branch soham/operator-simulate · commit (this PR)
+What: Task 6: `POST /ask {role, question?}` (default = the plan's open question for that thread; marks it asked; the reply flows through extraction → facility_status → replan). Task 7: `POST /simulate {planner}`. /optimize no longer holds the planner lock during the fan-out (own EngineSession + World); a replan meanwhile → result discarded as superseded.
+Files: residents/residents/{planner,engine_bridge,app,contracts}.py, residents/tests/{test_operator_simulate,test_api}.py, residents/README.md
+Run: cd residents && uv run pytest -q (124 pass)
+Interfaces: new endpoints POST /ask, POST /simulate. D52.
+Status: done. Tasks 1–8 complete; Task 9 (voice) only if green-lit.
+Notes for Aryaman (web): during playback the web POSTs /clock every 1.2 s — each broadcasts a full `state` event, so the WS client gets the state twice (event + its own GET /state refetch); either is enough. /ask is there for the operator console ("Ask the hospital").
+Found while building it: World's route caches can be cleared by one thread while another reads them (KeyError), so the optimize session loads its own World instead of sharing one across threads.

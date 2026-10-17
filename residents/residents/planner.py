@@ -243,14 +243,21 @@ class Planner:
         loop = asyncio.get_running_loop()
         sent: list[asyncio.Future] = []
         try:
-            async with self.lock:
+            async with self.lock:  # only to read a consistent starting point
                 t_now, prev, known, prev_reports = self._known()
+            start_version = prev["version"] if prev else None
 
-                def on_point(p: dict) -> None:  # called on the engine's worker thread
-                    sent.append(asyncio.run_coroutine_threadsafe(self.hub.broadcast("scatter_point", p, t_now), loop))
+            def on_point(p: dict) -> None:  # called on the engine's worker thread
+                sent.append(asyncio.run_coroutine_threadsafe(self.hub.broadcast("scatter_point", p, t_now), loop))
 
-                plan = await run_in_threadpool(self.bridge.optimize, known, t_now, prev, on_point, seeds, k)
-                await asyncio.gather(*(asyncio.wrap_future(f) for f in sent))  # every point before the plan
+            # the fan-out (seconds locally, 30 s+ on Daytona) runs WITHOUT the planner lock, so the web's
+            # clock ticks, texts and replans keep flowing meanwhile
+            plan = await run_in_threadpool(self.bridge.optimize, known, t_now, prev, on_point, seeds, k)
+            await asyncio.gather(*(asyncio.wrap_future(f) for f in sent))  # every point before the plan
+            async with self.lock:
+                now_version = self.store.meta().get("plan_version")
+                if now_version != start_version:  # a report replanned meanwhile: don't overwrite newer facts
+                    raise RuntimeError(f"superseded: plan moved v{start_version} → v{now_version} during the optimization")
                 state = await self._store_plan(plan, known, t_now)
             view = await self._publish(state, "robust optimization", t0)
             self.last_optimize = {"plan_version": view["version"], "points": len(sent), "wall_s": round(time.time() - t0, 2),
@@ -261,6 +268,17 @@ class Planner:
             raise
         finally:
             self._optimizing = False
+
+    # ---------- simulate (Task 7) ----------
+    async def simulate(self, planner: str) -> dict:
+        """Projected metrics over the whole horizon for the current plan ("ember") or the incident-by-
+        incident baseline ("baseline"), both with every report known by the clock."""
+        if planner not in ("ember", "baseline"):
+            raise ValueError("planner must be ember or baseline")
+        async with self.lock:
+            t_now, current, known, _ = self._known()
+            metrics = await run_in_threadpool(self.bridge.simulate, planner, current, known)
+        return {"planner": planner, "plan_version": current["version"] if current else None, "t_s": t_now, "metrics": metrics}
 
     # ---------- disruption ----------
     async def close_road(self, edge_ids: list[int], source: str = "judge", note: str | None = None) -> tuple[dict, dict | None]:

@@ -120,6 +120,6 @@ def test_every_json_endpoint_declares_its_body():
     from residents.config import Settings
     spec = create_app(Settings(scenario=None)).openapi()["paths"]
     want_body = ["/reports", "/disruption", "/clock", "/phones", "/messages", "/dev/inbound",
-                 "/assignments/{assignment_id}/confirm", "/assignments/{assignment_id}/reject"]
+                 "/assignments/{assignment_id}/confirm", "/assignments/{assignment_id}/reject", "/ask", "/simulate"]
     for path in want_body:
         assert "requestBody" in spec[path]["post"], path

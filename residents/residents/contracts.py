@@ -32,3 +32,9 @@ def errors(name: str, obj: object) -> list[str]:
 
 def validate_report(r: dict) -> list[str]:
     return errors("report", r)
+
+
+def def_errors(name: str, definition: str, obj: object) -> list[str]:
+    """Validate against one $defs entry, e.g. def_errors("state", "plan_metrics", metrics)."""
+    v = jsonschema.Draft202012Validator({"$ref": f"ember/{name}.schema.json#/$defs/{definition}"}, registry=_registry())
+    return [f"{'/'.join(map(str, e.absolute_path)) or '(root)'}: {e.message[:200]}" for e in v.iter_errors(obj)]
