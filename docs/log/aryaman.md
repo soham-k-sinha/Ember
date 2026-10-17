@@ -128,3 +128,11 @@ What: docs/HANDOFF.md now reflects Saturday afternoon: what's on main per part, 
 Files: docs/HANDOFF.md, docs/log/aryaman.md
 Status: done.
 Next: HANDOFF "Open issues / next steps" 1–5 (state broadcast check, EngineSession moves=, DEMO.md, QA.md, Devpost).
+
+## 2026-10-17 01:40 · web: refetch state after every plan · branch aryaman/web-refetch-state · commit (this PR)
+What: HANDOFF issue 1. The backend's `_publish()` still broadcasts `plan`/`assignment`/`metrics` but no `state` after a replan, so closed roads and ETAs stayed stale until reload. The web client now refetches `GET /state` 300 ms after each `plan` event (cancelled if a `state` event lands first), so it works with or without Soham's one-line fix.
+Files: web/src/App.tsx, docs/log/aryaman.md
+Run: backend + web per HANDOFF, press Live, run the three judge-beat curls → "Roads closed" goes to 4 (edges 523, 833, 951, 952) on plan v3 without reload (verified).
+Interfaces: none. Soham: the `state` broadcast at the end of `planner._publish()` is still worth adding (one fewer round trip); the web handles both.
+Status: done.
+Next: EngineSession(..., moves=).

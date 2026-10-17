@@ -322,12 +322,30 @@ export function App() {
         }
       }
       if (cancelled) return;
-      stop = openSocket(
+      // The backend broadcasts `plan` after a replan but not always a fresh `state`, so closed roads and
+      // vehicle ETAs would stay stale; refetch GET /state shortly after a plan unless a `state` event lands.
+      let refetch: number | undefined;
+      const refetchState = async () => {
+        refetch = undefined;
+        try {
+          const snapshot = asState(await getJson(`${model.apiBase.replace(/\/$/, "")}/state`));
+          if (!cancelled && snapshot) dispatch({ type: "state", state: snapshot });
+        } catch {
+          // keep the last good picture; the socket status already reports connectivity
+        }
+      };
+      const closeSocket = openSocket(
         model.apiBase,
         (event) => {
-          if (event.type === "state") dispatch({ type: "state", state: event.state });
-          else if (event.type === "plan") dispatch({ type: "plan", plan: event.plan });
-          else if (event.type === "scatter_point") dispatch({ type: "scatter", point: event.point });
+          if (event.type === "state") {
+            window.clearTimeout(refetch);
+            refetch = undefined;
+            dispatch({ type: "state", state: event.state });
+          } else if (event.type === "plan") {
+            dispatch({ type: "plan", plan: event.plan });
+            window.clearTimeout(refetch);
+            refetch = window.setTimeout(() => void refetchState(), 300);
+          } else if (event.type === "scatter_point") dispatch({ type: "scatter", point: event.point });
           else if (event.type === "assignment") dispatch({ type: "assignment", event: event.event });
           else if (event.type === "message") dispatch({ type: "message", message: event.message });
           else if (event.type === "report") dispatch({ type: "report", report: event.report });
@@ -341,6 +359,10 @@ export function App() {
           else throw new Error("GET /state did not return a state snapshot.");
         },
       );
+      stop = () => {
+        window.clearTimeout(refetch);
+        closeSocket();
+      };
     };
     void run();
     return () => {
