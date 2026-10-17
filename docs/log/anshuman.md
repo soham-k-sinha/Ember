@@ -12,3 +12,11 @@ Interfaces: consumes scenario v0.1 (D28), town ids. No contract changes.
   - Generator story: overflow ≈ 9,600 m³ with no generator, 0 if gen-1 is connected by t=9000, ≈100 at t=10800, ≈4,850 at t=12600 (my stand-in integration of the §3.3 formula, not the engine's).
 Status: partial. Validated against the fixture town, not yet against data/town.json. Not merged.
 Next: Sat 09–12 re-validate on the real town.json and tune keyframes with Aryaman's deadlines → I1 @12:00. DEMO.md v1 after I2 (needs Soham's message copy and Arnav's controls), QA.md at I2/I3, Devpost Sat night.
+
+## 2026-10-16 23:40 · allston_flood_v1 validated on the shared town · branch anshuman/scenario-v1 · commit (this PR)
+What: rebased on main (shared town D29, state contracts D30); `validate-scenario` against `engine/data/town.json.gz` gives OK with the same result as the fixture check (40/40 deadlines 75/135/165 min, 136/1196 edges under water at crest). Ids are valid against the team's town.
+Files: docs/log/anshuman.md
+Run: uv run --project engine ember validate-scenario scenarios/allston_flood_v1/scenario.json --deadlines
+Interfaces: consumes scenario v0.1 (D28) + shared town (D29). No changes.
+Status: done for Fri night. PR #4 waits on #6 (OWNERS login fix) for the ownership check. The `keyframes_file` validator bug is still open for Aryaman (keyframes are inline meanwhile).
+Next: Sat 09–12, tune keyframes against the engine's deadlines/simulator once task 3–5 land → I1 @12:00.
