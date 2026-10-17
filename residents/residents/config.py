@@ -28,8 +28,10 @@ class Settings:
     reset_on_start: bool = field(default_factory=lambda: _flag("RESET_ON_START", False))
     dev_endpoints: bool = field(default_factory=lambda: _flag("DEV_ENDPOINTS", True))
     cors_origins: tuple[str, ...] = field(default_factory=lambda: tuple(
-        o.strip() for o in os.environ.get("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if o.strip()))
+        o.strip() for o in os.environ.get("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173,http://localhost:43123,http://127.0.0.1:43123").split(",") if o.strip()))
     photon_enabled: bool = field(default_factory=lambda: _flag("PHOTON_ENABLED", False))
+    # The socket listener; off in tests that inject a client and drive inbound by hand.
+    photon_listen: bool = field(default_factory=lambda: _flag("PHOTON_LISTEN", True))
     photon_api_key: str = field(default_factory=lambda: os.environ.get("PHOTON_API_KEY", ""))
     photon_project_id: str = field(default_factory=lambda: os.environ.get("PHOTON_PROJECT_ID", ""))
     anthropic_api_key: str = field(default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY", ""))

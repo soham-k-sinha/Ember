@@ -74,18 +74,32 @@ CREATE TABLE IF NOT EXISTS messages (
     thread_key   TEXT NOT NULL,              -- 'household:492' | 'facility:mt_auburn'
     direction    TEXT NOT NULL,
     plan_version INTEGER,
-    external_id  TEXT UNIQUE,                -- Photon message id (dedupes inbound)
-    data         TEXT NOT NULL
+    external_id  TEXT UNIQUE,                -- Photon message id (dedupes inbound redeliveries)
+    delivery     TEXT,                       -- outbound: pending | sent | failed | dev | no_phone | not_opted_in
+    data         TEXT NOT NULL               -- the state.messages[] object, verbatim
 );
 CREATE INDEX IF NOT EXISTS messages_thread ON messages (thread_key, seq);
+-- Tester phones. Not scenario state: kept across reseeds. The thread is resolved from `role` against
+-- the current state (resident → the judge's household, operator → the critical hospital), so the
+-- same phones work for the fixture and for allston_flood_v1.
 CREATE TABLE IF NOT EXISTS phones (
-    handle          TEXT PRIMARY KEY,        -- E.164 phone number or email of the tester
-    role            TEXT NOT NULL,           -- resident | operator
-    thread_key      TEXT NOT NULL UNIQUE,
-    assigned_number TEXT,                    -- Photon shared line the tester texts
-    data            TEXT NOT NULL DEFAULT '{}'
+    handle          TEXT PRIMARY KEY,        -- E.164, e.g. +14135550100
+    role            TEXT NOT NULL UNIQUE,    -- resident | operator
+    assignment_id   TEXT,                    -- Photon shared-line assignment
+    assigned_number TEXT,                    -- the shared line this tester texts
+    peer_user_id    TEXT,                    -- Photon user id of the tester    } learned from their
+    agent_user_id   TEXT,                    -- Photon user id of our line      } first inbound message;
+    space_id        TEXT,                    -- the direct chat                 } needed to send
+    last_inbound_at TEXT                     -- opt-in: a shared line may only reply after this is set
+);
+-- Small durable settings that survive reseeds (e.g. the Photon event cursor).
+CREATE TABLE IF NOT EXISTS kv (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 """
+
+PHONE_FIELDS = ("handle", "role", "assignment_id", "assigned_number", "peer_user_id", "agent_user_id", "space_id", "last_inbound_at")
 
 # Snapshot keys that live in `meta` (everything that isn't a row in its own table).
 META_KEYS = ("version", "scenario_id", "t_s", "plan_version", "source", "synthetic", "hazard", "metrics")
@@ -192,11 +206,71 @@ class Store:
                        (plan["version"], a["id"], i, a["resource_id"], a["status"], _dump(a)))
 
     @staticmethod
-    def _insert_message(db: sqlite3.Connection, m: dict, external_id: str | None) -> None:
+    def _insert_message(db: sqlite3.Connection, m: dict, external_id: str | None, delivery: str | None = None) -> None:
         db.execute(
-            "INSERT INTO messages (id, thread_key, direction, plan_version, external_id, data) VALUES (?, ?, ?, ?, ?, ?)",
-            (m["id"], thread_key(m["thread"]), m["direction"], m.get("plan_version"), external_id, _dump(m)),
+            "INSERT INTO messages (id, thread_key, direction, plan_version, external_id, delivery, data) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (m["id"], thread_key(m["thread"]), m["direction"], m.get("plan_version"), external_id, delivery, _dump(m)),
         )
+
+    def add_message(self, m: dict, external_id: str | None = None, delivery: str | None = None) -> bool:
+        """Store one state.messages[] object. False (and nothing written) if `external_id` was already
+        stored: Photon redelivers events after reconnects, and the poller can see the same message."""
+        with self._tx() as db:
+            if external_id and db.execute("SELECT 1 FROM messages WHERE external_id = ?", (external_id,)).fetchone():
+                return False
+            self._insert_message(db, m, external_id, delivery)
+            return True
+
+    def set_delivery(self, message_id: str, delivery: str, external_id: str | None = None) -> None:
+        with self._tx() as db:
+            db.execute("UPDATE messages SET delivery = ?, external_id = COALESCE(?, external_id) WHERE id = ?",
+                       (delivery, external_id, message_id))
+
+    def message_delivery(self, message_id: str) -> tuple[str | None, str | None]:
+        rows = self._rows("SELECT delivery, external_id FROM messages WHERE id = ?", (message_id,))
+        return (rows[0]["delivery"], rows[0]["external_id"]) if rows else (None, None)
+
+    def has_external_id(self, external_id: str) -> bool:
+        return bool(self._rows("SELECT 1 FROM messages WHERE external_id = ?", (external_id,)))
+
+    def thread_messages(self, key: str) -> list[dict]:
+        return [json.loads(r["data"]) for r in self._rows("SELECT data FROM messages WHERE thread_key = ? ORDER BY seq", (key,))]
+
+    def last_outbound_plan_version(self, key: str) -> int | None:
+        """The plan version of the last message we sent on a thread = what an inbound reply answers."""
+        rows = self._rows("SELECT plan_version FROM messages WHERE thread_key = ? AND direction = 'out' ORDER BY seq DESC LIMIT 1", (key,))
+        return rows[0]["plan_version"] if rows else None
+
+    # ---------- phones + kv (survive reseeds) ----------
+    def upsert_phone(self, handle: str, role: str, **fields: str | None) -> dict:
+        bad = set(fields) - set(PHONE_FIELDS)
+        if bad:
+            raise ValueError(f"unknown phone fields {bad}")
+        with self._tx() as db:
+            # one phone per role: re-registering a role with a new number replaces the old one
+            db.execute("DELETE FROM phones WHERE role = ? AND handle != ?", (role, handle))
+            db.execute("INSERT INTO phones (handle, role) VALUES (?, ?) ON CONFLICT(handle) DO UPDATE SET role = excluded.role",
+                       (handle, role))
+            for k, v in fields.items():
+                if v is not None:
+                    db.execute(f"UPDATE phones SET {k} = ? WHERE handle = ?", (v, handle))
+        return self.phone(handle=handle)  # type: ignore[return-value]
+
+    def phone(self, *, handle: str | None = None, role: str | None = None) -> dict | None:
+        col, val = ("handle", handle) if handle is not None else ("role", role)
+        rows = self._rows(f"SELECT * FROM phones WHERE {col} = ?", (val,))
+        return dict(rows[0]) if rows else None
+
+    def phones(self) -> list[dict]:
+        return [dict(r) for r in self._rows("SELECT * FROM phones ORDER BY role")]
+
+    def kv_get(self, key: str, default: str | None = None) -> str | None:
+        rows = self._rows("SELECT value FROM kv WHERE key = ?", (key,))
+        return rows[0]["value"] if rows else default
+
+    def kv_set(self, key: str, value: str) -> None:
+        with self._tx() as db:
+            db.execute("INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
 
     # ---------- readers ----------
     def meta(self) -> dict:
@@ -220,6 +294,12 @@ class Store:
 
     def _objects(self, sql: str) -> list[dict]:
         return [json.loads(r["data"]) for r in self._rows(sql)]
+
+    def households(self) -> list[dict]:
+        return self._objects("SELECT data FROM households ORDER BY ord")
+
+    def facilities(self) -> list[dict]:
+        return self._objects("SELECT data FROM facilities ORDER BY ord")
 
     def snapshot(self) -> dict:
         """The state contract (state.schema.json v0.1), assembled from the rows."""
