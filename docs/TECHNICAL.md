@@ -30,7 +30,7 @@ data/town.json                                (engine)    roads, footways, build
 └───────────────────────────────────────────────────────────────────────────────┘
                  │ python import                      ▲ job list / metrics
                  ▼                                    │
-┌──────────────── residents/ = backend (Arnav) ────────────────┐     ┌──────── web/ (Soham) ────────┐
+┌──────────────── residents/ = backend (Soham) ────────────────┐     ┌──────── web/ (Arnav) ────────┐
 │ FastAPI · SQLite shared state · plan versions · reports      │ WS  │ deck.gl map, ledger,         │
 │ Photon 2.0 Beta threads (resident, operator) · LLM extract   │◄───►│ household/facility inspector,│
 │ POST /reports → replan → outbound messages (plan_version)    │     │ conversation, comparison,    │
@@ -98,7 +98,7 @@ Incident-by-incident: alerts processed in arrival order, each served by the near
 
 ---
 
-## 4. Backend = `residents/` (Arnav)
+## 4. Backend = `residents/` (Soham)
 
 - **Stack:** FastAPI + SQLite (file), `httpx`, `python-socketio` client (Photon events), one LLM client. Runs on a laptop with a hotspot; optional small VM / Cloudflare Tunnel if the voice vendor needs a public URL.
 - **Endpoints:** `GET /state`, `GET /plan/current`, `GET /plan/{version}`, `POST /reports` (structured), `POST /disruption` (close edge / set facility field; used by the judge via the map), `POST /replan`, `POST /assignments/{id}/confirm|reject`, `GET /comparison`, `POST /simulate` (baseline|ember), `WS /ws` (events: `state`, `plan`, `assignment`, `message`, `report`, `scatter_point`, `metrics`).
@@ -110,7 +110,7 @@ Incident-by-incident: alerts processed in arrival order, each served by the near
 
 ---
 
-## 5. Web (Soham) — `web/`
+## 5. Web (Arnav) — `web/`
 
 - **Stack:** Vite + React + TypeScript, deck.gl 9.4 (`@deck.gl/maplibre`, `react-map-gl/maplibre`, CARTO basemap, no token), Zustand or plain context for state, a tiny WS client.
 - **Layers:** roads (PathLayer; closed = red), flood polygon (PolygonLayer, keyframed by the sim clock), households (ScatterplotLayer; assisted ones colored by status; judge highlighted), facilities (IconLayer/Scatterplot with state badge), resources (moving dots along their route; interpolate between snapshots), assignments (ArcLayer resource → target), venue star. Optional ambient trips (TripsLayer from `trajectories.json`).
@@ -138,11 +138,11 @@ Existing: `town`, `plan`, `job`, `metrics`, `trajectories` (+ fixtures via `embe
 
 Venue closes 8 PM. Lodging work is allowed and expected Saturday night.
 
-| Window | Aryaman (engine) | Soham (web) | Arnav (backend) | Anshuman (scenario/story) | Gate |
+| Window | Aryaman (engine) | Arnav (web) | Soham (backend) | Anshuman (scenario/story) | Gate |
 |---|---|---|---|---|---|
 | Fri night (lodging) | finish sim-env gates; `scenario.schema.json` + `validate-scenario`; facility/resource models skeleton | Vite app renders `town.fixture.json` + a flood polygon | FastAPI skeleton, DB, Photon assignment for 2 phones, first inbound event | scenario.json v0 with facilities/resources/households drafted from the rendered map | map renders with venue; fixtures load |
 | Sat 09–12 | flood keyframes → deadlines; simulator executes a hand-written plan; wastewater model | facilities/resources/assignments layers from fixtures; ledger + inspector | `/state`, `/reports`, WS events; LLM extraction against 20 sample messages | scenario v1 validated; assumptions.md; sources.md | **I1 @ 12:00:** scenario → simulate(baseline) → metrics; web shows state via backend |
-| Sat 12–17 | allocator (candidates + constraints + objective); baseline; replan; rationale | conversation panel, plan-version timeline, "close road" control | replan loop end-to-end; outbound messages with plan_version; operator thread | DEMO.md v1; content video; Devpost skeleton; SpaceXAI workshop 13:30 w/ Arnav (voice go/no-go) | **I2 @ 17:00:** judge reply → replan → both a rescue and a generator assignment change on the map |
+| Sat 12–17 | allocator (candidates + constraints + objective); baseline; replan; rationale | conversation panel, plan-version timeline, "close road" control | replan loop end-to-end; outbound messages with plan_version; operator thread | DEMO.md v1; content video; Devpost skeleton; SpaceXAI workshop 13:30 w/ Soham (voice go/no-go) | **I2 @ 17:00:** judge reply → replan → both a rescue and a generator assignment change on the map |
 | Sat 17–20 | perturbations + Daytona pool (workshop 14:30) + robust selection | comparison panel + scatter | robustness: stale-version replies, duplicate reports, rejects | rehearse as judge; QA.md; fix copy in messages | **I3 @ 20:00:** comparison runs; scatter fills |
 | Sat 20–24 (lodging) | perf, edge cases, `compare --seeds 5` | polish, empty states, screenshots | voice if green-lit, else cut; message copy | Devpost text, video edit, README | full run-through ×3 |
 | Sun 00–06 | sleep in shifts; one person awake | | | | |
@@ -155,8 +155,8 @@ Venue closes 8 PM. Lodging work is allowed and expected Saturday night.
 | Person | Owns | Critical deliverable | Cut line if behind |
 |---|---|---|---|
 | Aryaman | `engine/` | simulator + allocator + replan + comparison | drop Daytona fan-out (local pool), drop crew tasks, K=10 candidates |
-| Soham | `web/` | live map with assignments + comparison panel | drop scatter animation (static), drop ambient trips |
-| Arnav | `residents/` | report → replan → changed messages, two threads | drop operator thread (scripted operator via UI), drop voice |
+| Arnav | `web/` | live map with assignments + comparison panel | drop scatter animation (static), drop ambient trips |
+| Soham | `residents/` | report → replan → changed messages, two threads | drop operator thread (scripted operator via UI), drop voice |
 | Anshuman | `scenarios/`, `docs/DEMO.md`, `docs/QA.md`, Devpost, video, content post | validated scenario + demo script + submission | fewer households (20), 3 keyframes |
 
 Nobody edits another's directory. Shared files: `contracts/` (announce + PR), `docs/DECISIONS.md` (append one line, rebase first), `docs/log/<own>.md` (own file only).
@@ -165,8 +165,8 @@ Nobody edits another's directory. Shared files: `contracts/` (announce + PR), `d
 
 ## 10. Git and logging protocol (everyone, every agent)
 
-1. **One clone per person**, on your own machine: `git clone https://github.com/soham-k-sinha/Ember.git && cd Ember`.
-2. `git checkout main && git pull`, then `git checkout -b <name>/<topic>` (e.g. `soham/map-layers`). Short-lived branches; new branch per feature.
+1. **One clone per person**, on your own machine: `git clone https://github.com/arnav-k-sinha/Ember.git && cd Ember`.
+2. `git checkout main && git pull`, then `git checkout -b <name>/<topic>` (e.g. `arnav/map-layers`). Short-lived branches; new branch per feature.
 3. Commit small and often: `git add <your-dir> docs/log/<name>.md && git commit -m "<dir>: what and why"`. Never `git add -A` from the repo root if you have stray files.
 4. Before every push: `git fetch origin && git rebase origin/main`. Conflicts can only occur in shared files; resolve by keeping both lines (logs and decisions are append-only).
 5. `git push -u origin <branch>` then open a PR to `main`. **Self-merge is allowed** when the PR touches only your directory (+ your log) and your check passes (`engine`: `uv run ember smoke` + `pytest`; `web`: `npm run build`; `residents`: `pytest`; `scenarios`: `ember validate-scenario`). Otherwise ask the owner of the other directory in chat.

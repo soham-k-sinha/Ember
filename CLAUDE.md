@@ -24,8 +24,8 @@ A city-scale disaster simulation around the David Rubenstein Treehouse (Harvard,
 
 ## Ownership (one directory each; never edit another's without asking)
 - `engine/` — Aryaman: world, hazards, models, plan simulator, allocator, baseline, run_job, Daytona pool; owns `contracts/` schemas.
-- `web/` — Soham: map, panels, comparison, WebSocket client.
-- `residents/` — Arnav: backend (shared-state DB, API, WS), Photon threads, the one LLM extraction call, replan loop.
+- `web/` — Arnav: map, panels, comparison, WebSocket client.
+- `residents/` — Soham: backend (shared-state DB, API, WS), Photon threads, the one LLM extraction call, replan loop.
 - `scenarios/`, `docs/DEMO.md`, `docs/QA.md`, Devpost — Anshuman: scenario JSON, flood keyframes, assumptions and sources, demo script, submission.
 - `contracts/`, `docs/DECISIONS.md` — shared; append-only or PR + announce; `docs/log/<name>.md` — own file only.
 

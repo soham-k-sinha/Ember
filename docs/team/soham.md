@@ -1,44 +1,46 @@
-# Soham — map and operator UI (`web/`)
+# Soham — backend, shared state, Photon, LLM extraction (`residents/`)
 
 Paste this file into your Claude session (or: "read docs/team/soham.md and follow it").
 
 ## Context in five lines
-- EMBER: disaster coordination for an urban flood in one district around the David Rubenstein Treehouse (the venue). One shared state, an allocator + simulator producing one coordinated plan and a personal instruction per household, real people in the loop over Photon, robustness runs on Daytona, sustainability = m³ of untreated wastewater kept out of the Charles. Spec: `docs/TECHNICAL.md` (read §0–§2, §5, §7–§11).
-- You own everything the judge *sees*: the live map and the panels (ledger, inspector, conversations, plan versions, comparison, scatter). The judge's map must include the venue.
-- You build against fixtures first (`contracts/fixtures/*.json`), then the backend's `GET /state` and `WS /ws`. The UI must run with no backend at all.
-- Stack is fixed: Vite + React + TypeScript, deck.gl 9.4 with `@deck.gl/maplibre` and `react-map-gl/maplibre`, CARTO basemap (no token). 2D only. TripsLayer timestamps are seconds since sim start (float32-safe). Verified API notes: `docs/EMBER-hackharvard-2026-plan.md` §6.9.
-- What the MHacks grand-prize sim got praised for and we copy: a dense legible map, KPI numbers, and an **inspector that shows the rationale behind each decision** (`docs/PHYSICAL_REALITIES_NOTES.md`).
+- EMBER: disaster coordination for an urban flood in one district around the Treehouse. One shared state, an allocator + simulator producing one coordinated plan and a personal instruction per household, people in the loop over Photon, robustness on Daytona, sustainability = m³ of wastewater kept out of the Charles. Spec: `docs/TECHNICAL.md` (read §0–§2, §4, §7–§11).
+- You own the backend: the shared-state DB, the HTTP/WS API the web uses, the Photon threads (resident, operator), the **only LLM call in the system** (free text → structured report), plan versioning, and the replan loop that calls Aryaman's `engine` functions.
+- The judge moment runs through you: judge texts → extraction → report row → `replan` → new plan version → only the changed instructions go out, each tagged with its `plan_version`.
+- Photon facts (verified, plan doc §6.6): use **Beta / Photon 2.0** (`api.photon.codes/v1`, `pip install photonhq-api`, $100 free credit; the `HACKWITHPHOTON` code is for the old API, fallback only). Shared iMessage lines: the tester must text first, no group chats, no calls. Inbound via Socket.IO `message.received`; outbound `POST /messages` with an `Idempotency-Key`. Voice needs a bought SMS number + a SIP vendor: stretch only.
+- Safety: every message starts with "[EMBER drill]"; nobody is auto-assigned to help a stranger; offers stay provisional until confirmed.
 
 ## Setup (once)
 ```bash
-git clone https://github.com/soham-k-sinha/Ember.git && cd Ember
+git clone https://github.com/arnav-k-sinha/Ember.git && cd Ember
 git checkout main && git pull && git checkout -b soham/<topic>
-cd web && npm create vite@latest . -- --template react-ts   # only if web/ is empty
-npm i deck.gl @deck.gl/maplibre @deck.gl/layers @deck.gl/geo-layers @deck.gl/react react-map-gl maplibre-gl
-npm run dev
+cd residents && uv init --python 3.12 && uv add fastapi uvicorn httpx python-socketio[client] pydantic sqlalchemy anthropic
+uv add --editable ../engine          # import ember_engine
+cp .env.example .env                 # PHOTON_API_KEY, PHOTON_PROJECT_ID, ANTHROPIC_API_KEY (never commit)
+uv run uvicorn residents.app:app --reload
 ```
+Photon: project + key with `project:read/write, platforms:read/write`; assign two team phones (`POST /platforms/imessage/assignments {handle}`), have each text "hi" to its assigned number, confirm a `message.received` event arrives.
 
 ## Tasks, in order (acceptance in brackets)
-1. **Map skeleton** [renders `contracts/fixtures/town.fixture.json`: roads (PathLayer), the venue star, households as dots; CARTO Positron basemap; phone-width layout tolerable].
-2. **Flood + closures** [PolygonLayer from the scenario keyframes driven by a sim clock (play/pause/scrub); closed edges red; the clock is the single source of truth for every layer].
-3. **State layers from `state.fixture.json`** [assisted households colored by status with the judge highlighted; facilities with a state badge (ok/backup/down); resources as dots moving along `route_edges` interpolated between snapshots; assignments as ArcLayer resource → target].
-4. **Panels** [resource ledger (kind, status, assignment, ETA, fuel); household/facility inspector on click (status, needs, dependencies, **rationale string verbatim**, its message thread); conversation history (resident + operator threads); unresolved needs list with the blocking constraint].
-5. **Live mode** [`GET /state` + `WS /ws` events `state, plan, assignment, message, report, scatter_point, metrics` from Arnav's backend; a toggle falls back to fixtures].
-6. **Controls** ["close this road" (click an edge → `POST /disruption`), "replan", "run comparison"].
-7. **Comparison panel** [baseline vs EMBER per metric with B−A, from `comparison.fixture.json` then `GET /comparison`; wording: "spread, not confidence bounds"; plan-version timeline v1→v2→v3 with what changed].
-8. **Scatter** [robustness runs filling live from `scatter_point` events; highlight the chosen plan].
-9. Polish: empty states, loading, screenshot-ready colors, 1920×1080 demo layout.
+1. **Skeleton + DB** [FastAPI app; SQLite tables from `docs/TECHNICAL.md` §2; `GET /state` serves `contracts/fixtures/state.fixture.json` loaded into the DB; `WS /ws` broadcasts a `state` event on connect].
+2. **Photon plumbing** [two assignments; Socket.IO listener logs inbound; `send_message(thread, text, plan_version)` works; messages stored].
+3. **LLM extraction** [`extract(text, role, record) → report JSON` per §4 schema using tool-use/structured output; a test set of 20 sample resident/operator messages in `residents/tests/samples.json` with expected `kind`; accuracy printed; low confidence → one clarifying question, never a guess].
+4. **Reports + replan loop** [`POST /reports` writes a row and calls `ember_engine.allocator.replan(state, report)`; new plan version stored; assignment diff computed; only changed instructions sent; WS emits `plan`, `assignment`, `message`]. Until Aryaman's `replan` exists, call a stub that returns the fixture plan with one assignment changed, so the loop is testable end to end.
+5. **Confirm / reject** [`POST /assignments/{id}/confirm|reject`; reject triggers replan; stale `plan_version` replies trigger a replan check instead of being applied blindly].
+6. **Operator thread** [scripted prompts fired from the plan's `info_requests[]` ("What's your backup endurance now?"); replies become `facility_status` reports].
+7. **Disruption + simulate + comparison endpoints** [`POST /disruption` (close edge / set facility field), `POST /simulate`, `GET /comparison`, forwarding `scatter_point` events from the Daytona runner].
+8. Robustness: duplicate reports, two replies in a row, replies to old versions, Photon outage → polling fallback.
+9. (Stretch, only if green-lit at the SpaceXAI workshop Sat 13:30) voice line via Photon SMS number + SIP vendor + Grok Voice; tools `get_assignment`, `record_report`.
 
 ## Interfaces you consume / produce
-Consume: `town`, `scenario`, `state`, `assignment`, `comparison`, `ws-events` (schemas + fixtures in `contracts/`, owned by engine). Produce: nothing others import. If a fixture is missing a field you need, ask Aryaman in chat; don't hand-edit fixtures.
+Consume: `state`, `assignment`, `report`, `comparison`, `scenario` schemas + fixtures; `ember_engine.allocator.replan`, `.simulate`, `.compare` (Aryaman). Produce: the HTTP/WS API (`contracts/ws-events.schema.json` is yours to draft with Aryaman) and `residents/tests/samples.json`.
 
 ## Git and logging (non-negotiable)
-Branch per feature from `main`; `git add web docs/log/soham.md`; rebase on `origin/main` before every push; PR; self-merge when only `web/` + your log changed and `npm run build` passes. After every feature: append to `docs/log/soham.md` (template in `docs/log/README.md`). At session start: read `docs/log/*.md` and `docs/DECISIONS.md`. Never edit `engine/`, `residents/`, `scenarios/`, or fixtures.
+Branch per feature from `main`; `git add residents docs/log/soham.md`; rebase on `origin/main` before every push; PR; self-merge when only `residents/` + your log changed and `pytest` passes. After every feature: append to `docs/log/soham.md`. At session start: read `docs/log/*.md` and `docs/DECISIONS.md`. Never commit `.env`.
 
 ## Your Claude's opening prompt
 ```
-Read CLAUDE.md, docs/TECHNICAL.md (§0–§2, §5, §7–§11), docs/team/soham.md, docs/DECISIONS.md and all of docs/log/*.md. You own web/ only. Work through docs/team/soham.md tasks in order, building against contracts/fixtures first; the app must run with no backend. After each task: `npm run build`, append an entry to docs/log/soham.md, commit, rebase on origin/main, push, open a PR. deck.gl 9.4 on MapLibre, 2D only, no Mapbox token, no Three.js. If a fixture lacks a field, ask in chat rather than editing it.
+Read CLAUDE.md, docs/TECHNICAL.md (§0–§2, §4, §7–§11), docs/team/soham.md, docs/DECISIONS.md and all of docs/log/*.md. You own residents/ only. Work through docs/team/soham.md tasks in order; use the fixtures in contracts/ and a stub replan until engine's replan lands. The LLM is used in exactly one place: turning a message into a structured report; it never produces routes, times or assignments. Every outbound message carries plan_version and starts with "[EMBER drill]". After each task: `uv run pytest -q`, append an entry to docs/log/soham.md, commit, rebase on origin/main, push, open a PR. Never commit secrets.
 ```
 
 ## Cut lines
-Scatter animation → static chart. Ambient trips → off. Plan-version timeline → a list.
+Operator thread → scripted via the UI. Voice → cut. Email channel → skip.

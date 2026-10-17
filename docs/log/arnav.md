@@ -1,3 +1,3 @@
-# Arnav — backend log (`residents/`)
+# Arnav — web log (`web/`)
 
-(no entries yet — first entry should be the FastAPI skeleton with `/state` serving the state fixture and one Photon inbound event logged)
+(no entries yet — first entry should be the Vite + deck.gl app rendering `contracts/fixtures/town.fixture.json`)
