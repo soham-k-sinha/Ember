@@ -10,10 +10,10 @@ Roles: **A** = Aryaman (laptop), **S** = Soham (backend, operator phone), **J** 
 ## 0 · Setup (T−15 min)
 | # | Who | Action | Expected | Blocker / fallback | ✓ |
 |---|---|---|---|---|---|
-| 0.1 | A | `cd engine && uv run pytest -q` | all pass (86+) incl. `test_demo_beats.py` (3) | **blocker**: don't demo a broken beat; fix or cut it | |
+| 0.1 | A | `cd engine && uv run pytest -q` | all pass (95+) incl. `test_demo_beats.py` and `test_replan_rules.py`; then `cd residents && uv run python ../engine/scripts/e2e.py` against the running backend → all checks pass | **blocker**: don't demo a broken beat; fix or cut it | |
 | 0.2 | S | `cd residents && uv run pytest -q` | all pass | **blocker** | |
 | 0.3 | A | `engine/.env` and `residents/.env` both on the backend machine | `DAYTONA_API_KEY`, `EMBER_DAYTONA_WORKERS`, `PHOTON_API_KEY`, `PHOTON_PROJECT_ID`, `ANTHROPIC_API_KEY` present (names only, never print values) | Daytona missing → local pool (fine); Photon/LLM missing → § fallbacks | |
-| 0.4 | A | `cd engine && uv run ember daytona-snapshot` | "ready" in seconds (snapshot exists; `ember-engine-6a73b6188a` or newer) | build takes ~90 s; never let `/optimize` be the first thing to need it | |
+| 0.4 | A | `cd engine && uv run ember daytona-snapshot` | "ready" in seconds (snapshot exists; `ember-engine-9634de9e37` or newer) | build takes ~90 s; never let `/optimize` be the first thing to need it | |
 | 0.5 | S | start backend (DEMO.md § Before going on stage, step 3) | log shows plan v1, listener connected | | |
 | 0.6 | A | `curl localhost:8000/health` | `mode: engine`, `extraction: on`, `photon: enabled`, `photon_listener` connected | **blocker** for real phones → `/dev/inbound` | |
 | 0.7 | S | `curl localhost:8000/phones` | 2 phones, roles `resident` and `operator`, both opted in | not opted in → that phone texts its line first | |
@@ -25,7 +25,7 @@ Roles: **A** = Aryaman (laptop), **S** = Soham (backend, operator phone), **J** 
 | # | Who | Action | Expected | Blocker / fallback | ✓ |
 |---|---|---|---|---|---|
 | 1.1 | A | point at venue, water, households, Mount Auburn, Cottage Farm | all visible and labelled; "synthetic" label on screen | | |
-| 1.2 | A | read the KPI bar | 78 reached before deadline, 9 not, overflow 0 m³ | different numbers → scenario/engine changed; re-measure DEMO.md | |
+| 1.2 | A | read the KPI bar | 78 reached before deadline, 9 not, overflow 0 m³, 51 vehicle-km | different numbers → scenario/engine changed; re-measure DEMO.md | |
 | 1.3 | A | click Generator 1 → Inspector | → Cottage Farm, ETA 14 min, rationale "prevents 9,600 m³ of untreated overflow…" | | |
 
 ## 2 · Judge texts (0:30–1:20), clock paused at 5:00
@@ -33,14 +33,14 @@ Roles: **A** = Aryaman (laptop), **S** = Soham (backend, operator phone), **J** 
 |---|---|---|---|---|---|
 | 2.1 | J | resident phone: "2 of us, one is in a wheelchair, River St is blocked" | message appears in Conversations within ~5 s | **blocker** >10 s → X sends `/dev/inbound` (DEMO § Replay 2b) | |
 | 2.2 | A | watch the map, no reload | new plan version within ~3 s of the inbound; River St segments red; "Roads closed" goes up | not red → reload once (web refetches `/state` after each plan) | |
-| 2.3 | A | Inspector on #10296 | Accessible Van 3, pickup 132 min vs deadline 165 min | no van → extraction lost the wheelchair; X sends DEMO § Replay 2c | |
+| 2.3 | A | Inspector on #10296 | Accessible Van 3, pickup 130 min vs deadline 165 min | no van → extraction lost the wheelchair; X sends DEMO § Replay 2c | |
 | 2.4 | A | Inspector on Generator 1 | re-routed, ETA 14 → 25 min, rationale "route changed: road reported closed" | | |
 | 2.5 | J | resident phone | instruction text naming Accessible Van 3 and a pickup time | no text → say it, show the Conversations panel | |
 
 ## 3 · Comparison (1:20–1:50)
 | # | Who | Action | Expected | Blocker / fallback | ✓ |
 |---|---|---|---|---|---|
-| 3.1 | A | Comparison tab → **Run comparison** (~5 s) | live numbers (not the example fixture): overflow EMBER 0 vs baseline ≈ 5,244 m³; not reached ≈ 9.4 vs 59.6; EMBER vehicle-km higher, said so | "Comparison failed" → `curl "$B/comparison?seeds=5"` on the second screen | |
+| 3.1 | A | Comparison tab → **Run comparison** (~5 s) | live numbers (not the example fixture): overflow EMBER 0 vs baseline ≈ 5,244 m³; reached ≈ 89 vs 52.6; EMBER vehicle-km higher (≈ +27), said so | "Comparison failed" → `curl "$B/comparison?seeds=5"` on the second screen | |
 | 3.2 | A | the label says "spread, not confidence bounds" / 5 perturbed worlds | visible | | |
 
 ## 4 · Operator texts (1:50–2:30)
@@ -58,7 +58,7 @@ Roles: **A** = Aryaman (laptop), **S** = Soham (backend, operator phone), **J** 
 |---|---|---|---|---|---|
 | 5.1 | A | press **Optimize** (or Replay 5) | scatter fills with 100 points live | | |
 | 5.2 | A | wait | done in ~10 s (Tier 1, 8 sandboxes) or less on Tier 2; `GET /optimize` → `pool: daytona` | `local-fallback` → say "local pool" and move on | |
-| 5.3 | A | read the result | chosen c03 ≠ nominal best c00; worst-20% unreached 31 vs 42; judge's van and hospital generator unchanged | | |
+| 5.3 | A | read the result | chosen c02 ≠ nominal best c00; worst-20% unreached 16.8 vs 29; judge's van and hospital generator unchanged | | |
 
 ## 6 · Close (3:10–3:30)
 | # | Who | Action | Expected | Blocker / fallback | ✓ |
