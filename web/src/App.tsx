@@ -843,7 +843,7 @@ export function App() {
         </label>
         <label className="check">
           <input type="checkbox" checked={model.showWalkers} onChange={() => dispatch({ type: "walkers" })} />
-          Neighbours on foot (illustrative)
+          People on foot (illustrative)
         </label>
         <label className="check">
           <input type="checkbox" checked={model.showTrips} onChange={() => dispatch({ type: "trips" })} />

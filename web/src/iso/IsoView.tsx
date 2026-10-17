@@ -7,7 +7,7 @@
 import { useEffect, useRef } from "react";
 import { Application, Container, Graphics, Sprite, Text, type FederatedPointerEvent } from "pixi.js";
 import { loadDiorama, type Diorama } from "./data";
-import { agentWorld, buildAgents, waitLonLat, type AgentWorld } from "./agents";
+import { agentWorld, buildAgents, setScene, waitLonLat, type AgentWorld } from "./agents";
 import { Crowd } from "./crowd";
 import { FloodWater } from "./water";
 import { clockLabel, lightAt, tint } from "./lighting";
@@ -131,6 +131,7 @@ export function IsoView(props: IsoProps) {
       world.addChild(scene.slab, scene.ground, scene.tiles.ground, scene.shadow, scene.tiles.shadow, scene.pools, scene.slabMask, dyn, scene.objects, top);
       const crowd = new Crowd(scene.objects, marks, scene.atlas, p, scene.depthFor);
       const aw = agentWorld(p, scene.insideBuilding, scene.onRoad, propsRef.current.playback);
+      setScene(aw, data, scenario.hazard.keyframes, [town.venue.lon, town.venue.lat]);
       const overlay = new Graphics();
       const hits = new Container();
       const pillLayer = new Container();
@@ -427,7 +428,9 @@ function applyLight(ctx: Ctx, t: number) {
 function drawPeople(ctx: Ctx, props: IsoProps, t: number, now: number) {
   if (ctx.awFor !== props.playback) {
     ctx.awFor = props.playback;
+    const { strolls, strollCum, flood } = ctx.aw;
     ctx.aw = agentWorld(ctx.p, ctx.scene.insideBuilding, ctx.scene.onRoad, props.playback);
+    Object.assign(ctx.aw, { strolls, strollCum, flood });
   }
   // a seek (scrub, replay switch): no strides or springs carried across the jump
   if (t < ctx.lastT || t - ctx.lastT > 600) ctx.crowd.reset();

@@ -6,7 +6,9 @@
  *    waited to the parked van's door and get in;
  *  - getting out: after the engine's drop-off, they walk from the van into the nearest facility;
  *  - the shelter crowd (the engine's people_on_site plus neighbours who walked there), milling — illustrative;
- *  - neighbours on foot (the walker plan) — illustrative.
+ *  - neighbours on foot (the walker plan) — illustrative;
+ *  - passers-by on the pavements and paths, walking at real pace from the start and thinning out
+ *    as the flood rises; never on water — illustrative, so the city is alive before anyone leaves.
  * All times come from the playback (pickup / drop-off events, vehicle tracks); this only acts them out.
  */
 
@@ -16,7 +18,9 @@ import type { Projector } from "./project";
 import { curb, householdColor, peopleCount, type LegendMode } from "../layers";
 import { arrivedAtShelter, cluster, crowd, walkersAt, type WalkerPlan } from "../people";
 import { poseAt, type Playback, type Track } from "../playback";
-import type { StateHousehold, StateSnapshot } from "../types";
+import type { Diorama } from "./data";
+import { FOOT, ROAD_W } from "./ground";
+import type { ScenarioKeyframe, StateHousehold, StateSnapshot } from "../types";
 
 type Leg = { rid: string; arrive: number; pickup: number; dropoff: number | null };
 
@@ -28,7 +32,88 @@ export type AgentWorld = {
   tracks: Map<string, Track>;
   spots: Map<number, [number, number]>; // household → where its people wait (a, b)
   outside: Map<string, [number, number]>; // facility → a standing spot outside it (a, b)
+  strolls: Stroll[]; // pavement and path routes for passers-by
+  strollCum: number[];
+  flood: Array<{ t: number; rings: Array<Array<[number, number]>> }>; // flood keyframes in (a, b)
 };
+
+type Stroll = { pts: Array<[number, number]>; cum: number[]; len: number; w: number };
+
+/** Pavement lines (both sides of each street, kerb + 1.8 m) and footpaths, in ground metres. */
+export function strollRoutes(data: Diorama, p: Projector, insideBuilding: (a: number, b: number) => boolean): Stroll[] {
+  const out: Stroll[] = [];
+  const push = (pts: Array<[number, number]>) => {
+    const keep = pts.filter(([a, b]) => !insideBuilding(a, b));
+    if (keep.length < 2) return;
+    const cum = [0];
+    for (let i = 1; i < keep.length; i++) cum.push(cum[i - 1] + Math.hypot(keep[i][0] - keep[i - 1][0], keep[i][1] - keep[i - 1][1]));
+    if (cum[cum.length - 1] > 25) out.push({ pts: keep, cum, len: cum[cum.length - 1], w: 1 });
+  };
+  for (const road of data.roads) {
+    const ab = road.path.map(([lon, lat]) => p.toAB(lon, lat));
+    if (FOOT.has(road.k)) {
+      if (road.k !== "steps") push(ab);
+      continue;
+    }
+    if (road.k === "motorway" || road.k === "trunk") continue;
+    const off = (ROAD_W[road.k] ?? 5) / 2 + 1.8;
+    for (const side of [1, -1]) {
+      const line: Array<[number, number]> = ab.map(([a, b], i) => {
+        const [pa, pb] = ab[Math.max(0, i - 1)];
+        const [qa, qb] = ab[Math.min(ab.length - 1, i + 1)];
+        const len = Math.hypot(qa - pa, qb - pb) || 1;
+        return [a - ((qb - pb) / len) * off * side, b + ((qa - pa) / len) * off * side];
+      });
+      push(line);
+    }
+  }
+  return out;
+}
+
+function inRing(ring: Array<[number, number]>, a: number, b: number): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [ai, bi] = ring[i];
+    const [aj, bj] = ring[j];
+    if (bi > b !== bj > b && a < ((aj - ai) * (b - bi)) / (bj - bi) + ai) inside = !inside;
+  }
+  return inside;
+}
+
+function underWater(w: AgentWorld, t: number, a: number, b: number): boolean {
+  for (const f of w.flood) if (f.t <= t && f.rings.some((ring) => inRing(ring, a, b))) return true;
+  return false;
+}
+
+/** Pick a route with probability ∝ its weight (cumulative table built in setScene). */
+function pickRoute(w: AgentWorld, u: number): Stroll {
+  const total = w.strollCum[w.strollCum.length - 1];
+  let lo = 0;
+  let hi = w.strollCum.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (w.strollCum[mid] < u * total) lo = mid + 1;
+    else hi = mid;
+  }
+  return w.strolls[lo];
+}
+
+export function setScene(w: AgentWorld, data: Diorama, keyframes: ScenarioKeyframe[], venue: [number, number]) {
+  w.strolls = strollRoutes(data, w.p, w.insideBuilding);
+  // busier near the venue (campus, plazas) and on footpaths; quieter far out
+  const [va, vb] = w.p.toAB(venue[0], venue[1]);
+  let acc = 0;
+  w.strollCum = w.strolls.map((r) => {
+    const [ma, mb] = r.pts[Math.floor(r.pts.length / 2)];
+    r.w = Math.max(0.12, Math.exp(-Math.hypot(ma - va, mb - vb) / 380)) * Math.min(2, r.len / 60);
+    acc += r.w;
+    return acc;
+  });
+  w.flood = keyframes.map((k) => {
+    const list = k.geometry.type === "Polygon" ? [k.geometry.coordinates as [number, number][][]] : (k.geometry.coordinates as [number, number][][][]);
+    return { t: k.t_s, rings: list.map((poly) => poly[0].map(([lon, lat]) => w.p.toAB(lon, lat))) };
+  });
+}
 
 export function agentWorld(p: Projector, insideBuilding: (a: number, b: number) => boolean, onRoad: (a: number, b: number) => boolean, pb: Playback | null): AgentWorld {
   const legs = new Map<number, Leg>();
@@ -51,7 +136,7 @@ export function agentWorld(p: Projector, insideBuilding: (a: number, b: number) 
       legs.set(e.household_id, { rid: arrive.rid, arrive: arrive.t, pickup: picked, dropoff: safe });
     }
   }
-  return { p, insideBuilding, onRoad, legs, tracks, spots: new Map(), outside: new Map() };
+  return { p, insideBuilding, onRoad, legs, tracks, spots: new Map(), outside: new Map(), strolls: [], strollCum: [], flood: [] };
 }
 
 /** Nearest ground point outside any building: first along `toward`, then in widening rings. */
@@ -289,6 +374,40 @@ export function buildAgents(args: {
         pose: sits ? "sit" : "stand", faceTo: centre,
       });
     });
+  }
+
+  // passers-by (illustrative): real walking pace on wall time, fewer as the flood rises, never on water
+  if (args.showWalkers && w.strolls.length) {
+    const N = 700;
+    const share = 1 - 0.75 * clamp01((t - 2400) / 7200);
+    const CLOTH = [0x8a94a6, 0x6f7f96, 0xb39b7d, 0x9a6b5a, 0x5d7a6a, 0xc9c2b4, 0x7b6f8f, 0x4f5d75, 0xa88a5c, 0x6a8caf];
+    for (let i = 0; i < N; i++) {
+      const h1 = ((i * 2654435761) >>> 0) / 4294967296;
+      if (h1 > share) continue;
+      const h2 = ((i * 40503 + 977) % 10007) / 10007;
+      const h3 = ((i * 69069 + 12345) % 9973) / 9973;
+      const route = pickRoute(w, h2);
+      const speed = 1.05 + h3 * 0.5;
+      const pause = 4 + h1 * 10;
+      const cycle = (route.len * 2) / speed + pause * 2;
+      const tt = (now + h3 * 997) % cycle;
+      // there, pause, back, pause
+      let d: number;
+      let moving = true;
+      const leg = route.len / speed;
+      if (tt < leg) d = tt * speed;
+      else if (tt < leg + pause) { d = route.len; moving = false; }
+      else if (tt < 2 * leg + pause) d = route.len - (tt - leg - pause) * speed;
+      else { d = 0; moving = false; }
+      let k = 1;
+      while (k < route.cum.length - 1 && route.cum[k] < d) k++;
+      const s0 = route.cum[k - 1];
+      const f = (d - s0) / (route.cum[k] - s0 || 1);
+      const a = route.pts[k - 1][0] + (route.pts[k][0] - route.pts[k - 1][0]) * f;
+      const b = route.pts[k - 1][1] + (route.pts[k][1] - route.pts[k - 1][1]) * f;
+      if (!p.inside(...p.fromAB(a, b)) || underWater(w, t, a, b)) continue;
+      out.push({ id: `p:${i}`, a, b, color: CLOTH[i % CLOTH.length], shape: "circle", moving, alpha: 0.95 });
+    }
   }
 
   // neighbours on foot (illustrative)
