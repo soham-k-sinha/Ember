@@ -9,14 +9,14 @@ import { Container, Graphics, Matrix, Sprite, Texture, CanvasSource } from "pixi
 import { buildAtlas, RES, type Atlas, type TreeKind } from "./atlas";
 import { drawBuilding } from "./build3d";
 import type { Diorama, DioBuilding } from "./data";
-import { bakeGround, groundMatrix, P, SHADOW_P, type TreeSpot } from "./ground";
+import { bakeGround, FOOT, groundMatrix, P, ROAD_W, SHADOW_P, type TreeSpot } from "./ground";
 import { hashN } from "./palette";
 import type { Projector } from "./project";
 
 const SLAB_M = 4.5;
 
 export type Bounds = { x0: number; y0: number; x1: number; y1: number };
-export type BuildingRec = { b: DioBuilding; id: number; holder: Container; lite: Container; full: Container | null; bounds: Bounds };
+export type BuildingRec = { b: DioBuilding; id: number; holder: Container; lite: Container; full: Container | null; bounds: Bounds; foot: Array<[number, number]>; depth: number };
 export type Cullable = { node: Container; bounds: Bounds };
 
 export type StaticScene = {
@@ -25,6 +25,17 @@ export type StaticScene = {
   light: { tint: number; lights: number };
   /** Build (once) and show the detailed version of a building: windows, doors, rooftop units. */
   ensureFull: (rec: BuildingRec) => Container;
+  /**
+   * Painter's depth for a small upright object (person, vehicle) standing at ground (a, b), drawn at
+   * plane (px, py) with half-width and height in plane units: a + b, corrected against the buildings
+   * whose screen box it overlaps so it sorts in front of a façade it stands before and behind one it
+   * stands behind, even where the building's own depth (its nearest corner) says otherwise.
+   */
+  depthFor: (a: number, b: number, px: number, py: number, halfW: number, height: number, out?: { behind: boolean }) => number;
+  /** Whether ground point (a, b) is inside a building footprint. */
+  insideBuilding: (a: number, b: number) => boolean;
+  /** Whether ground point (a, b) is on a carriageway (kerb to kerb, plus a metre). */
+  onRoad: (a: number, b: number) => boolean;
   atlas: Atlas;
   slab: Graphics;
   ground: Sprite;
@@ -75,7 +86,7 @@ export function buildStatic(data: Diorama, p: Projector): StaticScene {
       y0 = Math.min(y0, y - built.topM * 1.22 - 2);
       y1 = Math.max(y1, y + 1);
     }
-    buildings.push({ b, id: i, holder, lite: built.node, full: null, bounds: { x0, y0, x1, y1 } });
+    buildings.push({ b, id: i, holder, lite: built.node, full: null, bounds: { x0, y0, x1, y1 }, foot: built.foot, depth: built.depth });
     shadows.push(built.shadow);
     footprints.push(built.foot);
     if (built.label && built.labelAt && !seen.has(built.label)) {
@@ -166,6 +177,130 @@ export function buildStatic(data: Diorama, p: Projector): StaticScene {
   slab.poly(corners.flat()).stroke({ width: 1.4, color: 0xe8dcc4, alpha: 0.5 });
   const slabMask = new Graphics().poly(corners.flat()).fill(0xffffff);
 
+  // screen-space buckets (plane units) for the depth test, ground buckets for inside tests
+  const CELL = 16;
+  const screenBuckets = new Map<number, number[]>();
+  const groundBuckets = new Map<number, number[]>();
+  const GCELL = 24;
+  buildings.forEach((rec, i) => {
+    const { x0, y0, x1, y1 } = rec.bounds;
+    for (let by = Math.floor(y0 / CELL); by <= Math.floor(y1 / CELL); by++)
+      for (let bx = Math.floor(x0 / CELL); bx <= Math.floor(x1 / CELL); bx++) {
+        const key = by * 65536 + bx;
+        const list = screenBuckets.get(key);
+        if (list) list.push(i);
+        else screenBuckets.set(key, [i]);
+      }
+    let ga0 = Infinity, ga1 = -Infinity, gb0 = Infinity, gb1 = -Infinity;
+    for (const [a, b] of rec.foot) {
+      ga0 = Math.min(ga0, a); ga1 = Math.max(ga1, a); gb0 = Math.min(gb0, b); gb1 = Math.max(gb1, b);
+    }
+    for (let gb = Math.floor(gb0 / GCELL); gb <= Math.floor(gb1 / GCELL); gb++)
+      for (let ga = Math.floor(ga0 / GCELL); ga <= Math.floor(ga1 / GCELL); ga++) {
+        const key = gb * 65536 + ga;
+        const list = groundBuckets.get(key);
+        if (list) list.push(i);
+        else groundBuckets.set(key, [i]);
+      }
+  });
+  const pointIn = (foot: Array<[number, number]>, a: number, b: number) => {
+    let inside = false;
+    for (let i = 0, j = foot.length - 1; i < foot.length; j = i++) {
+      const [ai, bi] = foot[i];
+      const [aj, bj] = foot[j];
+      if (bi > b !== bj > b && a < ((aj - ai) * (b - bi)) / (bj - bi) + ai) inside = !inside;
+    }
+    return inside;
+  };
+  const insideBuilding = (a: number, b: number) => {
+    const list = groundBuckets.get(Math.floor(b / GCELL) * 65536 + Math.floor(a / GCELL));
+    return !!list && list.some((i) => pointIn(buildings[i].foot, a, b));
+  };
+  /** Along the viewing line through (a, b) (a − b constant), the nearest-to-viewer a + b on the footprint, or null if the line misses it. */
+  const frontAt = (foot: Array<[number, number]>, c: number): [number, number] | null => {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let i = 0, j = foot.length - 1; i < foot.length; j = i++) {
+      const [ai, bi] = foot[i];
+      const [aj, bj] = foot[j];
+      const ci = ai - bi;
+      const cj = aj - bj;
+      if ((ci - c) * (cj - c) > 0 || ci === cj) continue;
+      const k = (c - ci) / (cj - ci);
+      const sum = ai + bi + (aj + bj - ai - bi) * k;
+      lo = Math.min(lo, sum);
+      hi = Math.max(hi, sum);
+    }
+    return hi > -Infinity ? [lo, hi] : null;
+  };
+  const seenStamp = new Int32Array(buildings.length);
+  let stamp = 0;
+  const depthFor = (a: number, b: number, px: number, py: number, halfW: number, height: number, out?: { behind: boolean }) => {
+    let z = a + b;
+    if (out) out.behind = false;
+    let lo = Infinity;
+    let hi = -Infinity;
+    stamp++;
+    for (let by = Math.floor((py - height) / CELL); by <= Math.floor(py / CELL); by++)
+      for (let bx = Math.floor((px - halfW) / CELL); bx <= Math.floor((px + halfW) / CELL); bx++) {
+        const list = screenBuckets.get(by * 65536 + bx);
+        if (!list) continue;
+        for (const i of list) {
+          if (seenStamp[i] === stamp) continue;
+          seenStamp[i] = stamp;
+          const r = buildings[i];
+          const bb = r.bounds;
+          if (px + halfW < bb.x0 || px - halfW > bb.x1 || py < bb.y0 || py - height > bb.y1) continue;
+          const span = frontAt(r.foot, a - b);
+          if (!span) {
+            // beside the footprint but overlapping its screen box (roof overhang, the figure's width)
+            if (a + b > r.depth) hi = Math.max(hi, r.depth + 0.01);
+            continue;
+          }
+          if (a + b >= span[1] - 0.05) hi = Math.max(hi, r.depth + 0.01);
+          else {
+            lo = Math.min(lo, r.depth - 0.01);
+            if (out) out.behind = true;
+          }
+        }
+      }
+    if (hi > -Infinity) z = Math.max(z, hi);
+    if (lo < Infinity) z = Math.min(z, lo);
+    return z;
+  };
+
+  // carriageway segments in a ground grid, for keeping crowds on pavements and plazas
+  const RCELL = 20;
+  const roadBuckets = new Map<number, Array<[number, number, number, number, number]>>();
+  for (const road of data.roads) {
+    if (FOOT.has(road.k)) continue;
+    const half = (ROAD_W[road.k] ?? 5) / 2 + 1;
+    for (let i = 1; i < road.path.length; i++) {
+      const [pa, pb] = p.toAB(road.path[i - 1][0], road.path[i - 1][1]);
+      const [qa, qb] = p.toAB(road.path[i][0], road.path[i][1]);
+      const seg: [number, number, number, number, number] = [pa, pb, qa, qb, half];
+      for (let gb = Math.floor((Math.min(pb, qb) - half) / RCELL); gb <= Math.floor((Math.max(pb, qb) + half) / RCELL); gb++)
+        for (let ga = Math.floor((Math.min(pa, qa) - half) / RCELL); ga <= Math.floor((Math.max(pa, qa) + half) / RCELL); ga++) {
+          const key = gb * 65536 + ga;
+          const list = roadBuckets.get(key);
+          if (list) list.push(seg);
+          else roadBuckets.set(key, [seg]);
+        }
+    }
+  }
+  const onRoad = (a: number, b: number) => {
+    const list = roadBuckets.get(Math.floor(b / RCELL) * 65536 + Math.floor(a / RCELL));
+    if (!list) return false;
+    for (const [pa, pb, qa, qb, half] of list) {
+      const da = qa - pa;
+      const db = qb - pb;
+      const len2 = da * da + db * db || 1;
+      const k = Math.max(0, Math.min(1, ((a - pa) * da + (b - pb) * db) / len2));
+      if (Math.hypot(a - (pa + da * k), b - (pb + db * k)) < half) return true;
+    }
+    return false;
+  };
+
   const ensureFull = (rec: BuildingRec) => {
     if (rec.full) return rec.full;
     const built = drawBuilding(p, rec.b, rec.id, true);
@@ -183,5 +318,5 @@ export function buildStatic(data: Diorama, p: Projector): StaticScene {
     return built.node;
   };
 
-  return { buildings, cullables, light, ensureFull, atlas, slab, ground, shadow, pools, objects, slabMask, lit: [ground as unknown as Container, slab as unknown as Container, ...lit, ...objects.children.filter((c) => c instanceof Sprite) as unknown as Container[]], glows, lampGlows, labels };
+  return { buildings, cullables, light, ensureFull, depthFor, insideBuilding, onRoad, atlas, slab, ground, shadow, pools, objects, slabMask, lit: [ground as unknown as Container, slab as unknown as Container, ...lit, ...objects.children.filter((c) => c instanceof Sprite) as unknown as Container[]], glows, lampGlows, labels };
 }

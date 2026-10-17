@@ -8,11 +8,14 @@ import { CanvasSource, Rectangle, Texture } from "pixi.js";
 import { rgba, type RGB } from "./palette";
 import { KZ } from "./project";
 
-export const RES = 26; // atlas px per metre on the ground plane
+export const RES = 32; // atlas px per metre on the ground plane
 const V = KZ * RES; // atlas px per vertical metre
 
-export type Pose = "stand" | "walkA" | "walkB" | "wave";
-export const POSES: Pose[] = ["stand", "walkA", "walkB", "wave"];
+export type Pose = "stand" | "walkA" | "walkB" | "wave" | "sit";
+export const POSES: Pose[] = ["stand", "walkA", "walkB", "wave", "sit"];
+/** Ground marks under each person: the state is carried by shape as well as colour. */
+export type Shape = "circle" | "square" | "triangle" | "diamond" | "ring" | "hollow";
+export const SHAPES: Shape[] = ["circle", "square", "triangle", "diamond", "ring", "hollow"];
 export const LOOKS = 8;
 export type TreeKind = "oak" | "oakDark" | "elm" | "pine" | "shrub";
 export const TREES: TreeKind[] = ["oak", "oakDark", "elm", "pine", "shrub"];
@@ -21,6 +24,7 @@ export type Frame = { tex: Texture; ax: number; ay: number; w: number; h: number
 export type Atlas = {
   person: Frame[][]; // [look][pose]
   cloth: Frame[]; // [pose]
+  decal: Record<Shape, Frame>;
   tree: Record<TreeKind, Frame>;
   lamp: Frame;
   glow: Frame;
@@ -33,8 +37,8 @@ const LEGS: RGB[] = [[46, 52, 66], [72, 66, 58], [38, 40, 46], [94, 88, 76], [54
 
 const RIM = "rgba(14,14,16,0.88)";
 
-function body(_pose: Pose) {
-  const hip = 0.85 * V;
+function body(pose: Pose) {
+  const hip = pose === "sit" ? 0.48 * V : 0.85 * V;
   const shoulder = hip + 0.55 * V;
   return { hip, shoulder, head: shoulder + 0.2 * V, headR: 0.135 * V, w: 0.52 * RES };
 }
@@ -106,6 +110,17 @@ function person(ctx: CanvasRenderingContext2D, fx: number, fy: number, pose: Pos
   } else if (pose === "walkB") {
     leg(-sp * 0.5, 0.17 * RES, 2, dark);
     leg(sp * 0.5, -0.19 * RES, 3, legs);
+  } else if (pose === "sit") {
+    // seated on a kerb or bench: thighs forward, shins down
+    for (const [col, w] of [[RIM, legW + 2.4], [rgba(legs), legW]] as const) {
+      ctx.strokeStyle = col;
+      ctx.lineWidth = w;
+      ctx.beginPath();
+      ctx.moveTo(fx - 1, fy - g.hip);
+      ctx.lineTo(fx + 0.3 * RES, fy - g.hip + 1);
+      ctx.lineTo(fx + 0.32 * RES, fy - 2);
+      ctx.stroke();
+    }
   } else {
     leg(-sp, -sp * 1.1, 2, dark);
     leg(sp, sp, 2, legs);
@@ -162,6 +177,49 @@ function cloth(ctx: CanvasRenderingContext2D, fx: number, fy: number, pose: Pose
   ctx.moveTo(near[0], near[1]);
   ctx.lineTo(near[2], near[3]);
   ctx.stroke();
+}
+
+/** Soft contact shadow plus a white shape mark on the ground (squashed 2:1, never rotated). */
+function decal(ctx: CanvasRenderingContext2D, cx: number, cy: number, shape: Shape) {
+  const rx = 0.62 * RES;
+  ctx.save();
+  ctx.translate(cx + 2, cy + 1);
+  ctx.scale(1, 0.5);
+  const sg = ctx.createRadialGradient(0, 0, 1, 0, 0, rx);
+  sg.addColorStop(0, "rgba(0,0,0,0.55)");
+  sg.addColorStop(0.6, "rgba(0,0,0,0.25)");
+  sg.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = sg;
+  ctx.beginPath();
+  ctx.arc(0, 0, rx, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  const r = 0.6 * RES;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(1, 0.5);
+  ctx.beginPath();
+  if (shape === "circle" || shape === "ring" || shape === "hollow") ctx.arc(0, 0, r, 0, Math.PI * 2);
+  if (shape === "square") ctx.rect(-r * 0.86, -r * 0.86, r * 1.72, r * 1.72);
+  if (shape === "triangle") {
+    ctx.moveTo(0, -r * 1.05);
+    ctx.lineTo(r, r * 0.8);
+    ctx.lineTo(-r, r * 0.8);
+    ctx.closePath();
+  }
+  if (shape === "diamond") {
+    ctx.moveTo(0, -r * 1.1);
+    ctx.lineTo(r * 1.1, 0);
+    ctx.lineTo(0, r * 1.1);
+    ctx.lineTo(-r * 1.1, 0);
+    ctx.closePath();
+  }
+  ctx.restore();
+  ctx.lineWidth = shape === "ring" ? 2.8 : 1.9;
+  if (shape === "hollow") ctx.setLineDash([3, 3]);
+  ctx.strokeStyle = "rgba(255,255,255,0.95)";
+  ctx.stroke();
+  ctx.setLineDash([]);
 }
 
 function leafClump(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, base: RGB, rnd: () => number) {
@@ -291,6 +349,12 @@ export function buildAtlas(): Atlas {
     const c = alloc(`cloth:${pose}`, fw, fh, fw / 2, fh - 3);
     cloth(ctx, c.x + c.ax, c.y + c.ay, pose);
   }
+  for (const shape of SHAPES) {
+    const w = Math.ceil(1.9 * RES);
+    const h = Math.ceil(1.1 * RES);
+    const c = alloc(`decal:${shape}`, w, h, w / 2, h / 2);
+    decal(ctx, c.x + c.ax, c.y + c.ay, shape);
+  }
   {
     const w = Math.ceil(0.9 * RES);
     const h = Math.ceil(4.4 * V);
@@ -336,6 +400,7 @@ export function buildAtlas(): Atlas {
   return {
     person: Array.from({ length: LOOKS }, (_, look) => POSES.map((pose) => frame(`person:${look}:${pose}`))),
     cloth: POSES.map((pose) => frame(`cloth:${pose}`)),
+    decal: Object.fromEntries(SHAPES.map((shape) => [shape, frame(`decal:${shape}`)])) as Record<Shape, Frame>,
     tree: Object.fromEntries(TREES.map((kind) => [kind, frame(`tree:${kind}`)])) as Record<TreeKind, Frame>,
     lamp: frame("lamp"),
     glow: frame("glow"),
