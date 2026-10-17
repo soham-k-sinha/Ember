@@ -12,6 +12,7 @@ import type { Diorama, DioBuilding } from "./data";
 import { bakeGround, FOOT, groundMatrix, P, ROAD_W, SHADOW_P, type TreeSpot } from "./ground";
 import { hashN } from "./palette";
 import type { Projector } from "./project";
+import { GroundTiles } from "./tiles";
 
 const SLAB_M = 4.5;
 
@@ -37,6 +38,8 @@ export type StaticScene = {
   /** Whether ground point (a, b) is on a carriageway (kerb to kerb, plus a metre). */
   onRoad: (a: number, b: number) => boolean;
   atlas: Atlas;
+  /** sharp ground + shadow tiles for zoomed-in views */
+  tiles: GroundTiles;
   slab: Graphics;
   ground: Sprite;
   shadow: Sprite;
@@ -123,6 +126,7 @@ export function buildStatic(data: Diorama, p: Projector): StaticScene {
 
   // the ground image, cast shadows and lamp pools
   const bake = bakeGround(data, p, shadows, trees, footprints);
+  const tiles = new GroundTiles({ data, p, trees, footprints }, shadows);
   const ground = new Sprite(tex(bake.ground));
   ground.setFromMatrix(new Matrix(...groundMatrix(p, P)));
   const shadow = new Sprite(tex(bake.shadow));
@@ -318,5 +322,5 @@ export function buildStatic(data: Diorama, p: Projector): StaticScene {
     return built.node;
   };
 
-  return { buildings, cullables, light, ensureFull, depthFor, insideBuilding, onRoad, atlas, slab, ground, shadow, pools, objects, slabMask, lit: [ground as unknown as Container, slab as unknown as Container, ...lit, ...objects.children.filter((c) => c instanceof Sprite) as unknown as Container[]], glows, lampGlows, labels };
+  return { buildings, cullables, light, ensureFull, depthFor, insideBuilding, onRoad, atlas, tiles, slab, ground, shadow, pools, objects, slabMask, lit: [ground as unknown as Container, slab as unknown as Container, ...lit, ...objects.children.filter((c) => c instanceof Sprite) as unknown as Container[]], glows, lampGlows, labels };
 }

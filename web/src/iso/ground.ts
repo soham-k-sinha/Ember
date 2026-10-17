@@ -17,7 +17,7 @@ export const SUN_SHADOW: [number, number] = [0.95, -0.32];
 
 const T = 40; // tile size in metres (textures repeat every 40 m)
 
-function tile(paint: (img: ImageData, n: number) => void): HTMLCanvasElement {
+function tile(P: number, paint: (img: ImageData, n: number) => void): HTMLCanvasElement {
   const n = T * P;
   const c = document.createElement("canvas");
   c.width = n;
@@ -37,8 +37,8 @@ const put = (img: ImageData, i: number, r: number, g: number, b: number) => {
   d[i + 3] = 255;
 };
 
-function grass(base0: RGB, base1: RGB, seed: number, stripes = false) {
-  return tile((img, n) => {
+function grass(P: number, base0: RGB, base1: RGB, seed: number, stripes = false) {
+  return tile(P, (img, n) => {
     for (let y = 0; y < n; y++) {
       for (let x = 0; x < n; x++) {
         const v = 0.45 * noise(x / (P * 2.5), y / (P * 2.5), seed, n / (P * 2.5)) + 0.35 * noise(x / (P * 0.5), y / (P * 0.5), seed + 1, n / (P * 0.5)) + 0.2 * hash2(x, y, seed + 2);
@@ -62,8 +62,8 @@ function grass(base0: RGB, base1: RGB, seed: number, stripes = false) {
   });
 }
 
-function speckle(base: RGB, amount: number, seed: number) {
-  return tile((img, n) => {
+function speckle(P: number, base: RGB, amount: number, seed: number) {
+  return tile(P, (img, n) => {
     for (let y = 0; y < n; y++) {
       for (let x = 0; x < n; x++) {
         const v = 0.6 * noise(x / (P * 3), y / (P * 3), seed, n / (P * 3)) + 0.4 * hash2(x, y, seed + 1);
@@ -75,8 +75,8 @@ function speckle(base: RGB, amount: number, seed: number) {
 }
 
 /** Rectangular units in running bond (slabs, bricks), lit from the upper left. */
-function bond(base: RGB, seam: RGB, wM: number, hM: number, seed: number, toneVar = 0.18) {
-  return tile((img, n) => {
+function bond(P: number, base: RGB, seam: RGB, wM: number, hM: number, seed: number, toneVar = 0.18) {
+  return tile(P, (img, n) => {
     const bw = n / Math.round(n / (wM * P));
     const bh = n / Math.round(n / (hM * P));
     for (let y = 0; y < n; y++) {
@@ -89,9 +89,10 @@ function bond(base: RGB, seam: RGB, wM: number, hM: number, seed: number, toneVa
         const fy = y - row * bh;
         const grain = 0.94 + hash2(x, y, seed + 3) * 0.12;
         const tone = 1 - toneVar / 2 + hash2(col, row, seed) * toneVar;
-        if (fx < 1 || fy < 1) put(img, (y * n + x) * 4, seam[0] * grain, seam[1] * grain, seam[2] * grain);
+        const seamPx = Math.max(1, P / 4);
+        if (fx < seamPx || fy < seamPx) put(img, (y * n + x) * 4, seam[0] * grain, seam[1] * grain, seam[2] * grain);
         else {
-          const lit = fx < 2 || fy < 2 ? 1.07 : 1;
+          const lit = fx < seamPx * 2 || fy < seamPx * 2 ? 1.07 : 1;
           const k = tone * grain * lit;
           put(img, (y * n + x) * 4, base[0] * k, base[1] * k, base[2] * k);
         }
@@ -100,8 +101,8 @@ function bond(base: RGB, seam: RGB, wM: number, hM: number, seed: number, toneVa
   });
 }
 
-function water() {
-  return tile((img, n) => {
+function water(P: number) {
+  return tile(P, (img, n) => {
     for (let y = 0; y < n; y++) {
       for (let x = 0; x < n; x++) {
         const v = 0.6 * noise(x / (P * 5), y / (P * 1.6), 21, n / (P * 5)) + 0.4 * noise(x / (P * 1.2), y / (P * 0.5), 22, n / (P * 1.2));
@@ -132,46 +133,60 @@ export type GroundBake = {
 export type ShadowShape = Array<[number, number]>; // (a, b) metres
 export type TreeSpot = { a: number; b: number; r: number; h: number };
 
-export function bakeGround(data: Diorama, p: Projector, shadows: ShadowShape[], trees: TreeSpot[], footprints: Array<Array<[number, number]>>): GroundBake {
-  const { a0, a1, b0, b1 } = p.bounds;
-  const W = Math.ceil((a1 - a0) * P);
-  const H = Math.ceil((b1 - b0) * P);
-  const ground = document.createElement("canvas");
-  ground.width = W;
-  ground.height = H;
-  const ctx = ground.getContext("2d")!;
+type Textures = Record<"lot" | "yard" | "grass" | "field" | "plaza" | "brick" | "concrete" | "asphalt" | "path" | "play" | "water", HTMLCanvasElement>;
+const TEXTURES = new Map<number, Textures>();
+
+function texturesAt(P: number): Textures {
+  let tex = TEXTURES.get(P);
+  if (tex) return tex;
+  tex = {
+    lot: speckle(P, GROUND.lot, 0.18, 5),
+    yard: grass(P, GROUND.yard, GROUND.grassLight, 11),
+    grass: grass(P, GROUND.grassDark, GROUND.grassLight, 13),
+    field: grass(P, GROUND.field, [104, 138, 74], 17, true),
+    plaza: bond(P, GROUND.plaza, GROUND.plazaSeam, 1.2, 0.8, 7),
+    brick: bond(P, GROUND.brickWalk, [96, 56, 44], 0.4, 0.2, 9, 0.24),
+    concrete: bond(P, GROUND.concrete, GROUND.concreteSeam, 1.6, 1.6, 3, 0.1),
+    asphalt: speckle(P, GROUND.asphalt, 0.16, 23),
+    path: speckle(P, GROUND.path, 0.22, 29),
+    play: speckle(P, GROUND.play, 0.2, 31),
+    water: water(P),
+  };
+  TEXTURES.set(P, tex);
+  return tex;
+}
+
+export type GroundInputs = { data: Diorama; p: Projector; trees: TreeSpot[]; footprints: Array<Array<[number, number]>> };
+
+/**
+ * Paint the ground (land use, the Charles, streets, paths, pads, tree contact) for the stage area
+ * [ra0, ra0 + W/P] × [rb0, rb0 + H/P] at P px per metre. Patterns are anchored to the stage origin,
+ * so tiles painted separately meet without seams.
+ */
+function paintGround(ctx: CanvasRenderingContext2D, inputs: GroundInputs, P: number, ra0: number, rb0: number, W: number, H: number) {
+  const { data, p, trees, footprints } = inputs;
+  const { a0, b0 } = p.bounds;
+  ctx.save();
+  ctx.translate(-(ra0 - a0) * P, -(rb0 - b0) * P);
+  const x0 = (ra0 - a0) * P;
+  const y0 = (rb0 - b0) * P;
   const U = (lon: number, lat: number): [number, number] => {
     const [a, b] = p.toAB(lon, lat);
     return [(a - a0) * P, (b - b0) * P];
   };
-  const ringPath = (c: CanvasRenderingContext2D, ring: [number, number][], scale = P) => {
+  const ringPath = (c: CanvasRenderingContext2D, ring: [number, number][]) => {
     ring.forEach(([lon, lat], i) => {
-      const [a, b] = p.toAB(lon, lat);
-      const x = (a - a0) * scale;
-      const y = (b - b0) * scale;
+      const [x, y] = U(lon, lat);
       if (i === 0) c.moveTo(x, y);
       else c.lineTo(x, y);
     });
     c.closePath();
   };
   const pattern = (c: HTMLCanvasElement) => ctx.createPattern(c, "repeat")!;
-  const tex = {
-    lot: speckle(GROUND.lot, 0.18, 5),
-    yard: grass(GROUND.yard, GROUND.grassLight, 11),
-    grass: grass(GROUND.grassDark, GROUND.grassLight, 13),
-    field: grass(GROUND.field, [104, 138, 74], 17, true),
-    plaza: bond(GROUND.plaza, GROUND.plazaSeam, 1.2, 0.8, 7),
-    brick: bond(GROUND.brickWalk, [96, 56, 44], 0.4, 0.2, 9, 0.24),
-    concrete: bond(GROUND.concrete, GROUND.concreteSeam, 1.6, 1.6, 3, 0.1),
-    asphalt: speckle(GROUND.asphalt, 0.16, 23),
-    path: speckle(GROUND.path, 0.22, 29),
-    play: speckle(GROUND.play, 0.2, 31),
-    water: water(),
-  };
-
+  const tex = texturesAt(P);
   // 1) urban ground everywhere (lots, courtyards), then land use on top
   ctx.fillStyle = pattern(tex.lot);
-  ctx.fillRect(0, 0, W, H);
+  ctx.fillRect(x0, y0, W, H);
   const fill = (k: string): CanvasPattern | null => {
     if (k === "residential") return pattern(tex.yard);
     if (k === "grass" || k === "village_green" || k === "meadow" || k === "park" || k === "recreation_ground" || k === "garden" || k === "protected_landscape_seascape" || k === "dog_park" || k === "cemetery" || k === "flowerbed" || k === "allotments") return pattern(tex.grass);
@@ -279,28 +294,26 @@ export function bakeGround(data: Diorama, p: Projector, shadows: ShadowShape[], 
     ctx.fillRect(x - P * t.r, y - P * t.r, P * t.r * 2, P * t.r * 2);
   }
 
+  ctx.restore();
+}
+
+export function bakeGround(data: Diorama, p: Projector, shadows: ShadowShape[], trees: TreeSpot[], footprints: Array<Array<[number, number]>>): GroundBake {
+  const { a0, a1, b0, b1 } = p.bounds;
+  const W = Math.ceil((a1 - a0) * P);
+  const H = Math.ceil((b1 - b0) * P);
+  const ground = document.createElement("canvas");
+  ground.width = W;
+  ground.height = H;
+  paintGround(ground.getContext("2d")!, { data, p, trees, footprints }, P, a0, b0, W, H);
+  const roads = data.roads.filter((road) => !FOOT.has(road.k));
+
   // 7) cast shadows on their own blurred layer
   const SW = Math.ceil((a1 - a0) * SHADOW_P);
   const SH = Math.ceil((b1 - b0) * SHADOW_P);
   const shadow = document.createElement("canvas");
   shadow.width = SW;
   shadow.height = SH;
-  const sctx = shadow.getContext("2d")!;
-  sctx.filter = `blur(${Math.max(1, SHADOW_P * 1.4)}px)`;
-  sctx.fillStyle = "#000";
-  sctx.beginPath();
-  for (const poly of shadows) {
-    poly.forEach(([a, b], i) => (i === 0 ? sctx.moveTo((a - a0) * SHADOW_P, (b - b0) * SHADOW_P) : sctx.lineTo((a - a0) * SHADOW_P, (b - b0) * SHADOW_P)));
-    sctx.closePath();
-  }
-  sctx.fill("nonzero");
-  for (const t of trees) {
-    sctx.beginPath();
-    const ang = Math.atan2(SUN_SHADOW[1], SUN_SHADOW[0]);
-    sctx.ellipse((t.a + SUN_SHADOW[0] * t.h * 0.7 - a0) * SHADOW_P, (t.b + SUN_SHADOW[1] * t.h * 0.7 - b0) * SHADOW_P, t.r * SHADOW_P * 1.25, t.r * SHADOW_P * 0.85, ang, 0, Math.PI * 2);
-    sctx.fill();
-  }
-  sctx.filter = "none";
+  paintShadows(shadow.getContext("2d")!, p, shadows, trees, SHADOW_P, a0, b0);
 
   // 8) street lamps every ~32 m along real roads, alternating sides; warm pools on their own layer
   const lamps: Lamp[] = [];
@@ -342,16 +355,54 @@ export function bakeGround(data: Diorama, p: Projector, shadows: ShadowShape[], 
     pctx.fillRect(x - r, y - r, r * 2, r * 2);
   }
 
-  for (const c of Object.values(tex)) {
-    c.width = 0;
-    c.height = 0;
-  }
   return { ground, shadow, pools, lamps, width: W, height: H };
 }
 
+/** Cast shadows of buildings and trees for the area starting at (ra0, rb0), at SP px per metre, softly blurred. */
+function paintShadows(sctx: CanvasRenderingContext2D, p: Projector, shadows: ShadowShape[], trees: TreeSpot[], SP: number, ra0: number, rb0: number) {
+  sctx.filter = `blur(${Math.max(1, SP * 1.4)}px)`;
+  sctx.fillStyle = "#000";
+  sctx.beginPath();
+  for (const poly of shadows) {
+    poly.forEach(([a, b], i) => (i === 0 ? sctx.moveTo((a - ra0) * SP, (b - rb0) * SP) : sctx.lineTo((a - ra0) * SP, (b - rb0) * SP)));
+    sctx.closePath();
+  }
+  sctx.fill("nonzero");
+  const ang = Math.atan2(SUN_SHADOW[1], SUN_SHADOW[0]);
+  for (const t of trees) {
+    sctx.beginPath();
+    sctx.ellipse((t.a + SUN_SHADOW[0] * t.h * 0.7 - ra0) * SP, (t.b + SUN_SHADOW[1] * t.h * 0.7 - rb0) * SP, t.r * SP * 1.25, t.r * SP * 0.85, ang, 0, Math.PI * 2);
+    sctx.fill();
+  }
+  sctx.filter = "none";
+  void p;
+}
+
+/** Hi-resolution ground for zoomed-in views: one square tile of the stage, with its own cast-shadow layer. */
+export const TILE_M = 128;
+export const TILE_P = 8;
+export const TILE_SP = 4;
+export function bakeTile(inputs: GroundInputs, shadows: ShadowShape[], ra0: number, rb0: number): { ground: HTMLCanvasElement; shadow: HTMLCanvasElement; wM: number; hM: number } {
+  const { a1, b1 } = inputs.p.bounds;
+  const wM = Math.min(TILE_M, a1 - ra0);
+  const hM = Math.min(TILE_M, b1 - rb0);
+  const ground = document.createElement("canvas");
+  ground.width = Math.ceil(wM * TILE_P);
+  ground.height = Math.ceil(hM * TILE_P);
+  paintGround(ground.getContext("2d")!, inputs, TILE_P, ra0, rb0, ground.width, ground.height);
+  const shadow = document.createElement("canvas");
+  shadow.width = Math.ceil(wM * TILE_SP);
+  shadow.height = Math.ceil(hM * TILE_SP);
+  // only the shadows that can reach this tile
+  const near = shadows.filter((poly) => poly.some(([a, b]) => a > ra0 - 80 && a < ra0 + wM + 80 && b > rb0 - 80 && b < rb0 + hM + 80));
+  const trees = inputs.trees.filter((t) => t.a > ra0 - 30 && t.a < ra0 + wM + 30 && t.b > rb0 - 30 && t.b < rb0 + hM + 30);
+  paintShadows(shadow.getContext("2d")!, inputs.p, near, trees, TILE_SP, ra0, rb0);
+  return { ground, shadow, wM, hM };
+}
+
 /** Affine (a, b, c, d, tx, ty) mapping a top-down image at `px` per metre onto the iso ground plane. */
-export function groundMatrix(p: Projector, px: number): [number, number, number, number, number, number] {
-  const { a0, b0 } = p.bounds;
+export function groundMatrix(p: Projector, px: number, origin?: [number, number]): [number, number, number, number, number, number] {
+  const [a0, b0] = origin ?? [p.bounds.a0, p.bounds.b0];
   // screen = ((a − b), (a + b)/2) with a = a0 + u/px, b = b0 + v/px
   return [1 / px, 0.5 / px, -1 / px, 0.5 / px, a0 - b0, (a0 + b0) / 2];
 }
