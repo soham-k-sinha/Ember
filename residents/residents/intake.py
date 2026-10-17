@@ -66,6 +66,7 @@ class Intake:
             self.store.kv_delete(f"pending:{key}")
 
         replanned = False
+        outs_before = sum(1 for m in self.store.thread_messages(key) if m["direction"] == "out")
         stored: list[dict] = []
         for r in out.reports:
             try:
@@ -83,11 +84,36 @@ class Intake:
             if facts:
                 await self.planner.replan(trigger="; ".join(self.planner._trigger(r) for r in facts))
                 replanned = True  # the plan hook already texted any changed instruction
-        if any(r["kind"] in ("confirm", "reject") for r in stored):
-            replanned = True  # the answer (ack / latest instruction / new plan) was already texted
-        if out.question:
-            await self.messenger.send_message(thread, out.question, self.store.meta().get("plan_version"))
-        elif not replanned and self.outbound is not None and (view := self.store.plan_view()):
-            # nothing new from them (e.g. "hi" after opting in): ask what the plan still needs to know
-            await self.outbound.sync(view, only=key)
+        answered = any(r["kind"] in ("confirm", "reject") for r in stored)  # ack / latest already texted
+        texted = sum(1 for m in self.store.thread_messages(key) if m["direction"] == "out") > outs_before
+        version = self.store.meta().get("plan_version")
+        if out.question and out.question_is_missing_info:
+            await self.messenger.send_message(thread, out.question, version)  # finish the fact first
+        elif replanned:
+            if not texted and self.outbound is not None:  # never leave a fact unanswered
+                if not await self.outbound.send_status(thread, prefix="Got it. "):
+                    await self.messenger.send_message(thread, "Got it, thanks.", version)
+        elif answered:
+            pass
+        elif self.outbound is not None:
+            await self._reply_without_facts(thread, out, stored)
+        elif out.question:
+            await self.messenger.send_message(thread, out.question, version)
         return out
+
+    async def _reply_without_facts(self, thread: dict, out: Outcome, stored: list[dict]) -> None:
+        """Chatter or a question: the plan's open question first, else where they stand, else the model's
+        own prompt. A resident's question is never answered by the LLM: we say it went to the coordinators."""
+        view = self.store.plan_view()
+        asked_q = any(r["kind"] == "question" for r in stored)
+        q = self.outbound.next_info_request(view, thread) if view else None
+        if q and not asked_q:
+            await self.outbound.sync(view, only=thread_key(thread))
+            return
+        prefix = "We've passed your question to the coordinators. " if asked_q else ""
+        if await self.outbound.send_status(thread, prefix=prefix):
+            return
+        if out.question:
+            await self.messenger.send_message(thread, prefix + out.question, self.store.meta().get("plan_version"))
+        elif prefix:
+            await self.messenger.send_message(thread, prefix.strip(), self.store.meta().get("plan_version"))

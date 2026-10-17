@@ -57,3 +57,12 @@ Notes for Aryaman (engine, please):
   - `rejected` isn't understood by carry_over: a declined (resource, household) pair goes back into prev_queues and is usually re-proposed. The backend works around it (no re-offer, keeps it rejected), but the vehicle stays booked. Ask: treat `status == "rejected"` like cancelled history and exclude that pair in construct().
   - Confirming moves the work to the front of the vehicle's queue: judge confirmed at t=0 → van-3 ETA 153 → 21 min on the next replan (carry_over sets free_at = rescue_cycle from now). Intended? It can push earlier-deadline households later.
 Next: robustness (Task 8: duplicate reports, two replies in a row, Photon outage) and a live phone run-through.
+
+## 2026-10-17 09:40 · fixes from the first real-phone run-through · branch soham/conversation-fixes · commit (this PR)
+What: the live judge conversation exposed (1) a later partial need ("Yes, 2 people") replacing the earlier one and dropping the wheelchair → the non-accessible Generator truck was assigned and confirmed; (2) no reply when the plan couldn't serve the judge yet; (3) generic chatter replies. Fixed: need payloads merge with the household's known needs; every fact gets a reply (instruction or computed status incl. the allocator's blocked_by); chatter → open info_request, else status, else the model's prompt; questions → "passed to the coordinators" + status.
+Files: residents/residents/{extract,outbound,intake}.py, residents/tests/test_conversation.py
+Run: cd residents && uv run pytest -q (112 pass; the replay test fails on the previous code)
+Interfaces: none changed. D46.
+Status: done.
+Notes: Anshuman — at 50 min the judge's accessible need is unservable ("every eligible vehicle is committed to earlier deadlines"); EMBER now tells the judge that honestly, but for the demo beat the judge needs a reachable accessible vehicle (Aryaman's earlier note).
+Next: switch engine_bridge.py to EngineSession (Aryaman's request), then Task 8 robustness + Task 6/7 leftovers.
