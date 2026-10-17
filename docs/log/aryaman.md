@@ -114,3 +114,17 @@ Run: AUTHOR=aryamangoenka BASE=origin/main HEAD=HEAD HEAD_REF=aryaman/x python3 
 Interfaces: none (process only, D49). Arnav/Anshuman: you can still push to your lanes; tell Aryaman before you do so we don't collide.
 Status: done.
 Next: bring Arnav's website (arnav/operator-ui) to main and fix it against the contracts; DEMO.md, QA.md, Devpost.
+
+## 2026-10-17 16:40 · 2.5D view decision + web visual style brief · branch aryaman/view-2-5d · commit (this PR)
+What: D50 amends D8/hard rule 7 to "2D simulation, 2.5D view" (tilted camera, extruded buildings, lighting, dark basemap, clock tint; still no Three.js, no z in engine/contracts). Added § Visual style + task 10 to the web brief, mapping each Physical Realities visual to a deck.gl/MapLibre option. Fixed the clone URL (arnav-k-sinha → soham-k-sinha).
+Files: docs/DECISIONS.md, CLAUDE.md, docs/TECHNICAL.md, docs/HANDOFF.md, docs/team/arnav.md, docs/log/aryaman.md
+Run: n/a (docs only)
+Interfaces: none changed (D50).
+Status: done.
+Next: whoever has web/ (Aryaman per D49, or Arnav) does the style pass after tasks 1–8; first check whether CARTO tiles carry building heights.
+
+## 2026-10-17 16:30 · HANDOFF rewritten for a fresh session · branch aryaman/handoff-sat · commit (this PR)
+What: docs/HANDOFF.md now reflects Saturday afternoon: what's on main per part, lanes (D49), how to run backend + web + the judge beat by hand, the four demo beats with numbers and the judge-timing rule, Daytona state (key local, snapshot, Tier 2 tomorrow), ordered open issues, gotchas, and an opening prompt. Merged Arnav's #21 (squash) after a live end-to-end test.
+Files: docs/HANDOFF.md, docs/log/aryaman.md
+Status: done.
+Next: HANDOFF "Open issues / next steps" 1–5 (state broadcast check, EngineSession moves=, DEMO.md, QA.md, Devpost).
