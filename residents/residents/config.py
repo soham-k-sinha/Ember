@@ -40,4 +40,6 @@ class Settings:
     photon_listen: bool = field(default_factory=lambda: _flag("PHOTON_LISTEN", True))
     photon_api_key: str = field(default_factory=lambda: os.environ.get("PHOTON_API_KEY", ""))
     photon_project_id: str = field(default_factory=lambda: os.environ.get("PHOTON_PROJECT_ID", ""))
+    # The one LLM call (text → report). On when engine mode is on and a key is set.
+    extract_enabled: bool = field(default_factory=lambda: _flag("EXTRACT_ENABLED", True))
     anthropic_api_key: str = field(default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY", ""))

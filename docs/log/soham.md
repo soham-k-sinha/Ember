@@ -25,3 +25,15 @@ Run: cd residents && uv run pytest -q (74 pass, real allocator on allston) ; uv 
 Interfaces: consumes ember_engine.allocator.allocate, sim.simulate(...).state_at, compare.compare (through engine_bridge.py only). Produces the HTTP API above + WS events per ws-events (D37/D38). Arnav: the plan event carries routes; `assignment` events are in `plan.changes` order; scrub with POST /clock. Anshuman: live judge beat at 75 min gives Accessible Van 3 → #10296. D41.
 Status: done. `POST /optimize` (robust fan-out) waits on engine PR #12; outbound changed-instruction texts are Task 4 (plan hook in place).
 Next: LLM extraction (text → report), then changed-instruction messages.
+
+## 2026-10-17 06:30 · LLM extraction (text → report) · branch soham/llm-extraction · commit (this PR)
+What: the one LLM call. Inbound texts (Photon or /dev/inbound) → Claude Opus 5.5 structured output (facts + confidence + clarifying question) → deterministic reports (need / closure_report with resolved edge ids / facility_status / confirm / reject / question) → one replan → the inbound message gets its report_id; missing info → one clarifying question back on the thread.
+Files: residents/residents/{extract,intake,engine_bridge,db,app,config}.py, residents/tests/{test_extract.py,samples.json}, residents/scripts/eval_extract.py
+Run: cd residents && uv run pytest -q (92 pass, no API calls) ; uv run python scripts/eval_extract.py → 20/20, median 1.9 s ; live: POST /dev/inbound {"role":"resident","text":"..."} with ANTHROPIC_API_KEY set
+Interfaces: produces reports per report.schema (closure payload carries edge_ids + road_hint/cross_street), WS `message` re-sent with report_id after extraction (clients upsert by id). D43.
+Status: done. Live chain verified: judge demo line → one combined clarifying question; "2 of us. River St near Memorial Dr is flooded" → need + closure → plan v2; operator "90 minutes of fuel" → backup_endurance_s 5400 → v3.
+Notes for the team:
+  - Anshuman/Aryaman: the judge (#10296) is AT River St × Memorial Dr. A judge text that closes River St there leaves no open route to the household → van-3 "no open route", judge unreached. The demo line should name a street on the van's way, not the judge's own access street (or engine could allow an alternate pickup node).
+  - Operator "90 min of fuel" at 75 min: allocator keeps gen-1 at Cottage Farm and lists mt-auburn as unresolved ("the only compatible generator is protecting cottage-farm"), hospital outage 75 min. Good trade-off for the beat; a shorter endurance moves the generator (Aryaman's test: 10 min at 50 min).
+  - Questions from residents ("is the bridge open?") are stored as `question` reports; nothing answers them automatically yet.
+Next: Task 4 outbound: text only changed instructions (with plan_version) after each replan; then confirm/reject + stale replies.

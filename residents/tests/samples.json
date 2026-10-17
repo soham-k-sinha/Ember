@@ -1,0 +1,25 @@
+{
+  "_doc": "20 messages a resident or operator might text during the drill, with the expected extraction. `expect.kinds` = fact kinds in order; other keys are checked on the fact of that kind. `context` = what we last sent / what we're waiting on. Run: uv run python scripts/eval_extract.py",
+  "samples": [
+    {"role": "resident", "text": "there are 3 of us here, nobody needs help walking", "expect": {"kinds": ["need"], "people": 3, "mobility": false}},
+    {"role": "resident", "text": "Me and my mom. She's in a wheelchair", "expect": {"kinds": ["need"], "people": 2, "mobility": true, "accessible_vehicle": true}},
+    {"role": "resident", "text": "we need an accessible vehicle, and the pickup road is blocked", "expect": {"kinds": ["need", "closure_report"], "accessible_vehicle": true, "road_hint": null, "question": true}},
+    {"role": "resident", "text": "River St is completely flooded near Memorial Dr", "expect": {"kinds": ["closure_report"], "road_hint": "River St", "cross_street": "Memorial Dr"}},
+    {"role": "resident", "text": "just me, I use a walker and I'm on oxygen", "expect": {"kinds": ["need"], "people": 1, "mobility": true, "medical": true}},
+    {"role": "resident", "text": "4 people incl 2 kids, we're fine to walk to the van", "expect": {"kinds": ["need"], "people": 4, "mobility": false}},
+    {"role": "resident", "text": "yes", "context": {"last_outbound": "[EMBER drill] Accessible Van 3 will pick you up at 14 Elm St in about 12 min. Reply YES to confirm."}, "expect": {"kinds": ["confirm"]}},
+    {"role": "resident", "text": "no we can't leave, my dad refuses to go", "context": {"last_outbound": "[EMBER drill] Van 1 will pick you up in about 20 min. Reply YES to confirm."}, "expect": {"kinds": ["reject"]}},
+    {"role": "resident", "text": "is the western ave bridge still open?", "expect": {"kinds": ["question"]}},
+    {"role": "resident", "text": "hi", "expect": {"kinds": ["other"]}},
+    {"role": "resident", "text": "2", "context": {"last_outbound": "[EMBER drill] How many people need to be picked up, including you?", "pending": {"kind": "need", "accessible_vehicle": true}}, "expect": {"kinds": ["need"], "people": 2}},
+    {"role": "resident", "text": "water is coming up Western Avenue by the bridge, can't get the car out", "expect": {"kinds": ["closure_report"], "road_hint": "Western Avenue"}},
+    {"role": "resident", "text": "we have a dialysis patient here, 2 adults total", "expect": {"kinds": ["need"], "people": 2, "medical": true}},
+    {"role": "resident", "text": "thanks!!", "expect": {"kinds": ["other"]}},
+    {"role": "operator", "text": "about 6 hours of diesel left on the backup generator", "expect": {"kinds": ["facility_status"], "endurance_h": 6}},
+    {"role": "operator", "text": "grid power just went out, we're on backup now, maybe 90 min of fuel", "expect": {"kinds": ["facility_status"], "endurance_h": 1.5, "facility_state": "backup"}},
+    {"role": "operator", "text": "We lost everything, the whole site is down", "expect": {"kinds": ["facility_status"], "facility_state": "down"}},
+    {"role": "operator", "text": "power is back on, we're on the grid again", "expect": {"kinds": ["facility_status"], "facility_state": "ok"}},
+    {"role": "operator", "text": "how long until the generator truck gets here?", "expect": {"kinds": ["question"]}},
+    {"role": "operator", "text": "ok will do", "context": {"last_outbound": "[EMBER drill] Generator 1 is on its way to you, arriving in about 25 min. Reply YES to confirm someone will meet it."}, "expect": {"kinds": ["confirm"]}}
+  ]
+}
