@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from residents.app import create_app
 from residents.extract import Extraction, Fact, to_outcome
-from tests.test_engine import JUDGE, SCENARIO, bridge  # noqa: F401
+from tests.test_engine import JUDGE, SCENARIO, bridge, full_bridge  # noqa: F401
 from tests.test_extract import FakeLLM, ex, fact
 
 JT = {"household_id": JUDGE}
@@ -104,7 +104,7 @@ def test_question_goes_to_coordinators_with_status(settings, bridge):  # noqa: F
         assert r.startswith("[EMBER drill] We've passed your question to the coordinators.")
 
 
-def test_tuned_demo_beat_through_the_text_pipeline(settings, bridge):  # noqa: F811
+def test_tuned_demo_beat_through_the_text_pipeline(settings, full_bridge):  # noqa: F811
     """Engine's judge beat (engine/tests/test_demo_beats.py), but starting from the judge's TEXT: at minute 5
     "2 of us, my mom's in a wheelchair, River St is blocked" → one replan → the judge gets the accessible van
     before the deadline AND the generator plan changes; the judge is texted the instruction."""
@@ -112,7 +112,7 @@ def test_tuned_demo_beat_through_the_text_pipeline(settings, bridge):  # noqa: F
     llm = FakeLLM({text: ex(fact("need", people=2, mobility=True, accessible_vehicle=True),
                             fact("closure_report", road_hint="River St"))})
     s = replace(settings, scenario=SCENARIO, extract_enabled=True)
-    with TestClient(create_app(s, bridge=bridge, llm=llm)) as c:
+    with TestClient(create_app(s, bridge=full_bridge, llm=llm)) as c:
         c.post("/phones", json={"role": "resident", "handle": "4133620520"})
         c.post("/clock", json={"t_s": 300})
         v1 = c.get("/plan/1").json()

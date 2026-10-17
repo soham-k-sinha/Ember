@@ -19,7 +19,8 @@ FACT_KINDS = ("need", "closure_report", "facility_status")  # what the allocator
 
 
 class EngineBridge:
-    def __init__(self, scenario_path: Path | str, town_path: Path | str | None = None, seed: int = 0):
+    def __init__(self, scenario_path: Path | str, town_path: Path | str | None = None, seed: int = 0,
+                 moves: int | None = None):
         from ember_engine.scenario import load_scenario
         from ember_engine.world import World
 
@@ -30,7 +31,8 @@ class EngineBridge:
         self.world = World.load(town_file)
         self.seed = seed
         from ember_engine.api import EngineSession
-        self.session = EngineSession(self.scenario_path, world=self.world, seed=seed)
+        # moves = allocator local-search budget per (re)plan; None = engine's default (production)
+        self.session = EngineSession(self.scenario_path, world=self.world, seed=seed, moves=moves)
         self._lock = threading.Lock()
         self._edges = {e["id"]: e for e in self.town["edges"]}
         self._reverse = {(e["u"], e["v"]): e["id"] for e in self.town["edges"]}

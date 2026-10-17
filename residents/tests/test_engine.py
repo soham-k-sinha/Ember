@@ -21,6 +21,12 @@ JUDGE = 10296
 
 @pytest.fixture(scope="session")
 def bridge():
+    """Small search budget for speed. Demo-beat tests use `full_bridge` (the engine's default search)."""
+    return EngineBridge(SCENARIO, moves=10)
+
+
+@pytest.fixture(scope="session")
+def full_bridge():
     return EngineBridge(SCENARIO)
 
 

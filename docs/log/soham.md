@@ -84,3 +84,4 @@ Interfaces: none changed. D51.
 Status: done. Found while building it: tests had patched the global asyncio.sleep (to skip Photon backoff), which made the new retry loop spin without yielding and hang the suite; fixed with a photon-local `_backoff` hook.
 Notes: Aryaman — closing both directions adds 951 (reverse of 833) to your [523, 833, 952]; I re-ran your beat with it: judge still gets van-3 at 121 min (deadline 165) and the generator still changes. Anshuman — the judge's text in DEMO.md can be "2 of us, my mom's in a wheelchair, River St is blocked" at minute ~5; that exact flow is a residents test now.
 Next: Task 6 (operator prompt from the web), Task 7 (POST /simulate), live phone re-run.
+Follow-up (same PR): adopted EngineSession's new `moves=` (Aryaman, b9b1613): `ENGINE_MOVES` env (unset = engine default in production); tests run the bridge at moves=10 and the demo-beat test at the default search. 119 tests in 27 s (was 62 s).
