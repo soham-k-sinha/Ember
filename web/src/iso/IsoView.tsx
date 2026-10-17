@@ -5,15 +5,18 @@
  */
 
 import { useEffect, useRef } from "react";
-import { Application, Container, Graphics, Text, type FederatedPointerEvent } from "pixi.js";
-import { loadDiorama, type Diorama } from "../diorama";
+import { Application, Container, Graphics, Sprite, Text, type FederatedPointerEvent } from "pixi.js";
+import { loadDiorama, type Diorama } from "./data";
+import { LOOKS, RES, type Pose } from "./atlas";
+import { clockLabel, lightAt, tint } from "./lighting";
+import { hashN, SKY_BG } from "./palette";
 import { scenario, town } from "../fixtures";
 import { curb, householdColor, peopleCount, type LegendMode } from "../layers";
 import { cluster, crowd, walkersAt, type WalkerPlan } from "../people";
 import { pathAhead, type Playback } from "../playback";
 import type { Closure, FloodGeometry, Selection, StateFacility, StateResource, StateSnapshot } from "../types";
 import { edgePoint, projector, type Projector } from "./project";
-import { buildStatic, CLAY } from "./scene";
+import { buildStatic, type StaticScene } from "./scene";
 
 export type IsoProps = {
   state: StateSnapshot;
@@ -27,6 +30,8 @@ export type IsoProps = {
   follow: Selection | null;
   onSelect: (selection: Selection | null) => void;
   onFollow: (selection: Selection | null) => void;
+  /** camera presets (Treehouse, Judge's corner…): ease the stage camera to a place */
+  focus?: { lon: number; lat: number; zoom: number; key: number } | null;
 };
 
 const KIND: Record<string, { color: number; label: string }> = {
@@ -53,17 +58,25 @@ const toHex = (c: [number, number, number]) => (c[0] << 16) | (c[1] << 8) | c[2]
 
 type Pill = { root: Container; bg: Graphics; text: Text; key: string; used: boolean };
 
+type Figure = { root: Container; body: Sprite; cloth: Sprite };
+
 type Ctx = {
   app: Application;
   data: Diorama;
   p: Projector;
+  scene: StaticScene;
   world: Container;
   dyn: Container;
   flood: Graphics;
   closed: Graphics;
   trails: Graphics;
-  actors: Graphics;
-  people: Graphics;
+  decals: Graphics;
+  figures: Figure[];
+  vehicles: Map<string, Graphics>;
+  lightKey: string;
+  fitS: number;
+  focusKey: number;
+  target: { x: number; y: number; s: number } | null;
   overlay: Graphics;
   hits: Container;
   pills: Map<string, Pill>;
@@ -87,7 +100,7 @@ export function IsoView(props: IsoProps) {
     let ready = false;
     const app = new Application();
     void (async () => {
-      await app.init({ resizeTo: el, antialias: true, background: CLAY.bg, resolution: Math.min(2, window.devicePixelRatio || 1), autoDensity: true });
+      await app.init({ resizeTo: el, antialias: true, background: SKY_BG, resolution: Math.min(2, window.devicePixelRatio || 1), autoDensity: true });
       ready = true;
       if (dead) {
         app.destroy(true, { children: true });
@@ -97,34 +110,31 @@ export function IsoView(props: IsoProps) {
       const data = await loadDiorama("stage");
       if (dead || !data) return;
       const p = projector(data.bbox);
-      const accents = propsRef.current.state.facilities
-        .filter((facility) => p.inside(facility.lon, facility.lat))
-        .map((facility) => ({ lon: facility.lon, lat: facility.lat, color: FACILITY[facility.type]?.color ?? 0x888888 }));
-      const scene = buildStatic(app.renderer, data, p, accents);
+      const scene = buildStatic(data, p);
       const world = new Container();
       const dyn = new Container();
       const flood = new Graphics();
       const closed = new Graphics();
       const trails = new Graphics();
-      dyn.addChild(flood, closed, trails);
+      const decals = new Graphics();
+      dyn.addChild(flood, closed, trails, decals);
       dyn.mask = scene.slabMask;
-      const actors = new Graphics();
-      const people = new Graphics();
-      world.addChild(scene.ground, scene.slabMask, dyn, scene.sorted, people, actors);
+      world.addChild(scene.slab, scene.ground, scene.shadow, scene.pools, scene.slabMask, dyn, scene.objects);
       const overlay = new Graphics();
       const hits = new Container();
       const pillLayer = new Container();
       app.stage.addChild(world, overlay, pillLayer, hits);
 
       // camera: fit the stage
-      const b = world.getLocalBounds();
+      const b = scene.slab.getLocalBounds();
       const s = Math.min(app.screen.width / (b.width * 1.08), app.screen.height / (b.height * 1.12));
       const cam = { s, x: app.screen.width / 2 - (b.x + b.width / 2) * s, y: app.screen.height / 2 - (b.y + b.height / 2) * s };
       const ctx: Ctx = {
-        app, data, p, world, dyn, flood, closed, trails, actors, people, overlay, hits, pills: new Map(), pillLayer,
+        app, data, p, scene, world, dyn, flood, closed, trails, decals, figures: [], vehicles: new Map(), lightKey: "", fitS: s, focusKey: 0, target: null, overlay, hits, pills: new Map(), pillLayer,
         floodKey: null, closedKey: "", cam, drag: { on: false, moved: false, x: 0, y: 0 },
       };
       ctxRef.current = ctx;
+      if (import.meta.env.DEV) (window as unknown as { __iso?: { app: Application; ctx: Ctx; frame: () => void } }).__iso = { app, ctx, frame: () => frame(ctx, propsRef.current) };
 
       // pan / zoom
       app.stage.eventMode = "static";
@@ -138,6 +148,7 @@ export function IsoView(props: IsoProps) {
         const dy = e.global.y - ctx.drag.y;
         if (Math.abs(dx) + Math.abs(dy) > 3) {
           ctx.drag.moved = true;
+          ctx.target = null;
           if (propsRef.current.follow) propsRef.current.onFollow(null);
         }
         ctx.cam.x += dx;
@@ -158,6 +169,7 @@ export function IsoView(props: IsoProps) {
         "wheel",
         (event) => {
           event.preventDefault();
+          ctx.target = null;
           const rect = app.canvas.getBoundingClientRect();
           const mx = event.clientX - rect.left;
           const my = event.clientY - rect.top;
@@ -206,8 +218,24 @@ function frame(ctx: Ctx, props: IsoProps) {
     cam.x += (tx - cam.x) * 0.12;
     cam.y += (ty - cam.y) * 0.12;
   }
+  // presets: ease to the requested place (zoom 14.3 ≈ the whole stage, each level doubles)
+  if (props.focus && props.focus.key !== ctx.focusKey) {
+    ctx.focusKey = props.focus.key;
+    const s = Math.min(9, ctx.fitS * 2 ** (props.focus.zoom - 14.3));
+    const [x, y] = p.lonlat(props.focus.lon, props.focus.lat);
+    ctx.target = { s, x: ctx.app.screen.width * 0.45 - x * s, y: ctx.app.screen.height * 0.55 - y * s };
+  }
+  if (ctx.target && !followAt) {
+    const k = 0.1;
+    cam.s += (ctx.target.s - cam.s) * k;
+    cam.x += (ctx.target.x - cam.x) * k;
+    cam.y += (ctx.target.y - cam.y) * k;
+    if (Math.abs(ctx.target.s - cam.s) < 0.002 && Math.abs(ctx.target.x - cam.x) < 0.5) ctx.target = null;
+  }
   ctx.world.position.set(cam.x, cam.y);
   ctx.world.scale.set(cam.s);
+  cull(ctx);
+  applyLight(ctx, t);
 
   drawFlood(ctx, props, pulse);
   drawClosures(ctx, props);
@@ -320,97 +348,197 @@ function drawTrails(ctx: Ctx, props: IsoProps, t: number) {
   }
 }
 
-/** A tiny standing person: shadow, legs/body, head. Height ~ h px in world units. */
-function figure(g: Graphics, x: number, y: number, color: number, h: number, bob = 0) {
-  g.ellipse(x, y, h * 0.32, h * 0.13).fill({ color: 0x000000, alpha: 0.18 });
-  g.roundRect(x - h * 0.18, y - h * 0.78 - bob, h * 0.36, h * 0.62, h * 0.16).fill(color);
-  g.circle(x, y - h * 0.92 - bob, h * 0.17).fill(0xf1d6b8);
+const DETAIL_S = 2.1; // zoom at which buildings switch to full detail (windows, doors, rooftop units)
+
+/** Draw only what is on screen; zoomed in, swap visible buildings to their detailed version. */
+function cull(ctx: Ctx) {
+  const { cam, app } = ctx;
+  const m = 40 / cam.s;
+  const x0 = -cam.x / cam.s - m;
+  const y0 = -cam.y / cam.s - m;
+  const x1 = (app.screen.width - cam.x) / cam.s + m;
+  const y1 = (app.screen.height - cam.y) / cam.s + m;
+  const hit = (b: { x0: number; y0: number; x1: number; y1: number }) => b.x1 >= x0 && b.x0 <= x1 && b.y1 >= y0 && b.y0 <= y1;
+  const detail = cam.s >= DETAIL_S;
+  for (const rec of ctx.scene.buildings) {
+    const on = hit(rec.bounds);
+    rec.holder.visible = on;
+    if (!on) continue;
+    if (detail) {
+      const full = ctx.scene.ensureFull(rec);
+      full.visible = true;
+      rec.lite.visible = false;
+    } else {
+      rec.lite.visible = true;
+      if (rec.full) rec.full.visible = false;
+    }
+  }
+  for (const item of ctx.scene.cullables) item.node.visible = hit(item.bounds);
 }
 
+/** Evening light: tint the city, fade shadows, bring up windows, lamps and pools, in 48 steps over the run. */
+function applyLight(ctx: Ctx, t: number) {
+  const step = Math.round(t / (scenario.t_end_s / 48));
+  const key = String(step);
+  if (key === ctx.lightKey) return;
+  ctx.lightKey = key;
+  const L = lightAt(step * (scenario.t_end_s / 48));
+  const world = tint(L.world);
+  ctx.scene.light.tint = world;
+  ctx.scene.light.lights = L.lights;
+  for (const node of ctx.scene.lit) node.tint = world;
+  ctx.scene.shadow.alpha = L.shadow;
+  ctx.scene.pools.alpha = L.lights * 0.95;
+  ctx.scene.pools.visible = L.lights > 0.01;
+  for (const g of ctx.scene.glows) {
+    g.alpha = L.lights;
+    g.visible = L.lights > 0.01;
+  }
+  for (const g of ctx.scene.lampGlows) g.alpha = ((g as Sprite & { base?: number }).base ?? 1) * L.lights;
+  ctx.app.renderer.background.color = L.sky;
+  ctx.flood.tint = tint([Math.min(1, L.world[0] * 0.5 + 0.5), Math.min(1, L.world[1] * 0.5 + 0.5), Math.min(1, L.world[2] * 0.4 + 0.6)]);
+}
+
+/** Where a household's people wait: toward their nearest street, but never more than 18 m from home. */
+function waitPoint(h: { lon: number; lat: number; node: number }): [number, number] {
+  const c = curb(h.lon, h.lat, h.node);
+  const dx = (c[0] - h.lon) * 82_000;
+  const dy = (c[1] - h.lat) * 111_000;
+  const d = Math.hypot(dx, dy);
+  if (d <= 18) return c;
+  const k = 18 / d;
+  return [h.lon + (c[0] - h.lon) * k, h.lat + (c[1] - h.lat) * k];
+}
+
+type FigureSpec = { lon: number; lat: number; color: number; look: number; pose: Pose; ring?: number; onTop?: boolean };
+
 function drawPeople(ctx: Ctx, props: IsoProps, t: number, now: number) {
-  const g = ctx.people;
-  g.clear();
   const { p } = ctx;
-  const h = 5.2;
-  // households waiting for help, at the curb
+  const L = lightAt(t);
+  const peopleTint = tint(L.people);
+  const specs: FigureSpec[] = [];
+  // households waiting for help, at the curb (the engine's status colours their clothes)
   for (const household of props.state.households) {
     if (household.status === "picked_up" || household.status === "safe") continue;
     if (!p.inside(household.lon, household.lat)) continue;
     const c = toHex(householdColor(household, props.legend, t));
     const n = Math.min(6, peopleCount(household));
-    cluster(curb(household.lon, household.lat, household.node), n, household.household_id, 2.2).forEach(([lon, lat], i) => {
-      const [x, y] = p.lonlat(lon, lat);
-      const wave = i === 0 && (household.status === "needs" || household.status === "unknown") ? Math.abs(Math.sin(now * 4 + i)) * 0.6 : 0;
-      figure(g, x, y, c, h, wave);
+    const urgent = household.status === "needs" || household.status === "unknown";
+    cluster(waitPoint(household), n, household.household_id, 1.6).forEach(([lon, lat], i) => {
+      const wave = urgent && i === 0 && Math.floor(now * 1.6 + household.household_id) % 2 === 0;
+      specs.push({ lon, lat, color: c, look: (household.household_id + i) % LOOKS, pose: wave ? "wave" : "stand", ring: c, onTop: true });
     });
   }
-  // the shelter crowd
+  // the shelter crowd (dropped off by the fleet)
   const shelter = props.state.facilities.find((facility) => facility.type === "shelter");
   if (shelter && p.inside(shelter.lon, shelter.lat)) {
-    const n = Math.min(70, shelter.people_on_site ?? 0);
-    crowd([shelter.lon, shelter.lat], n, 3.4).forEach(([lon, lat], i) => {
-      const [x, y] = p.lonlat(lon, lat);
-      figure(g, x, y, 0x22a06b, h * 0.95, Math.abs(Math.sin(now * 2 + i)) * 0.25);
+    const n = Math.min(80, shelter.people_on_site ?? 0);
+    crowd([shelter.lon, shelter.lat], n, 2.6).forEach(([lon, lat], i) => {
+      specs.push({ lon, lat, color: 0x3fbf7f, look: i % LOOKS, pose: Math.floor(now * 0.7 + i) % 9 === 0 ? "wave" : "stand" });
     });
   }
-  // neighbours on foot (illustrative), only those on stage
+  // neighbours on foot (illustrative)
   if (props.walkers && props.showWalkers) {
-    let drawn = 0;
+    let n = 0;
     for (const pose of walkersAt(props.walkers, t, null)) {
-      if (drawn > 500) break;
+      if (n > 600) break;
       if (!p.inside(pose.position[0], pose.position[1])) continue;
-      const [x, y] = p.lonlat(pose.position[0], pose.position[1]);
-      figure(g, x, y, pose.walker.turnedBack ? 0xe08a4f : 0x9aa6b8, h * 0.85, pose.frame === "walk1" ? 0.5 : 0);
-      drawn++;
+      specs.push({ lon: pose.position[0], lat: pose.position[1], color: pose.walker.turnedBack ? 0xe08a4f : 0xb8c2d0, look: pose.walker.household % LOOKS, pose: pose.frame === "walk1" ? "walkA" : pose.frame === "walk2" ? "walkB" : "stand" });
+      n++;
     }
   }
+
+  // keep people legible when zoomed out (never smaller than ~10 px tall)
+  const figurePx = ctx.scene.atlas.figureM * 1.22 * ctx.cam.s;
+  const k = Math.max(1, 10 / figurePx);
+  const atlas = ctx.scene.atlas;
+  while (ctx.figures.length < specs.length) {
+    const root = new Container();
+    const body = new Sprite(atlas.person[0][0].tex);
+    const cloth = new Sprite(atlas.cloth[0].tex);
+    body.anchor.set(atlas.person[0][0].ax, atlas.person[0][0].ay);
+    cloth.anchor.set(atlas.cloth[0].ax, atlas.cloth[0].ay);
+    root.addChild(body, cloth);
+    ctx.scene.objects.addChild(root);
+    ctx.figures.push({ root, body, cloth });
+  }
+  const g = ctx.decals;
+  g.clear();
+  specs.forEach((spec, i) => {
+    const f = ctx.figures[i];
+    const poseIdx = ["stand", "walkA", "walkB", "wave"].indexOf(spec.pose);
+    f.body.texture = atlas.person[spec.look][poseIdx].tex;
+    f.cloth.texture = atlas.cloth[poseIdx].tex;
+    f.cloth.tint = spec.color;
+    f.body.tint = peopleTint;
+    const [a, b] = p.toAB(spec.lon, spec.lat);
+    const [x, y] = p.iso(a, b);
+    f.root.position.set(x, y);
+    f.root.scale.set((k / RES) * (hashN(i, 3) < 0.5 ? 1 : -1), k / RES);
+    // people waiting for help are the subject: never hidden behind a building
+    f.root.zIndex = spec.onTop ? 1e6 + a + b : a + b + 0.25;
+    f.root.visible = true;
+    if (spec.ring != null) g.ellipse(x, y, 0.75 * k, 0.37 * k).stroke({ width: 0.22 * k, color: spec.ring, alpha: 0.95 });
+    g.ellipse(x + 0.15 * k, y + 0.05 * k, 0.5 * k, 0.24 * k).fill({ color: 0x000000, alpha: 0.28 });
+  });
+  for (let i = specs.length; i < ctx.figures.length; i++) ctx.figures[i].root.visible = false;
 }
 
-/** Oriented vehicle box seen in iso: footprint L×W (m), height H, plus a light bar when en route. */
-function vehicle(g: Graphics, p: Projector, r: StateResource, now: number, selected: boolean) {
+/** Oriented vehicle seen in iso: footprint L×W (m), height H, light bar and headlights glowing after dusk. */
+function vehicle(g: Graphics, p: Projector, r: StateResource, now: number, selected: boolean, lights: number, ox: number, oy: number) {
   const [a, b] = p.toAB(r.lon, r.lat);
   const hd = ((r.heading_deg ?? 0) * Math.PI) / 180;
   const fa = Math.sin(hd);
-  const fb = -Math.cos(hd); // forward in (a = east, b = south)
+  const fb = -Math.cos(hd);
   const sa = -fb;
-  const sb = fa; // right side
-  const big = r.kind === "truck" || r.kind === "generator" ? 1.25 : 1;
-  const L = 9 * big;
-  const W = 4.4 * big;
-  const H = 3.6 * big;
+  const sb = fa;
+  const big = r.kind === "truck" || r.kind === "generator" ? 1.3 : 1;
+  const L = 6.2 * big;
+  const W = 2.5 * big;
+  const H = 2.4 * big;
   const corner = (u: number, v: number): [number, number] => [a + fa * u + sa * v, b + fb * u + sb * v];
+  const iso = (x: number, y: number, z = 0): [number, number] => {
+    const [sx, sy] = p.iso(x, y, z);
+    return [sx - ox, sy - oy];
+  };
   const base = [corner(L / 2, -W / 2), corner(L / 2, W / 2), corner(-L / 2, W / 2), corner(-L / 2, -W / 2)];
   const color = KIND[r.kind]?.color ?? 0x888888;
-  const dark = shadeHex(color, 0.72);
-  const mid = shadeHex(color, 0.86);
-  // ground shadow
-  g.poly(base.flatMap(([x, y]) => p.iso(x + 1.2, y + 1.2))).fill({ color: 0x000000, alpha: 0.22 });
-  // visible sides
+  g.poly(base.flatMap(([x, y]) => iso(x + 0.8, y - 0.3))).fill({ color: 0x000000, alpha: 0.3 });
   for (let i = 0; i < 4; i++) {
     const [a1, b1] = base[i];
     const [a2, b2] = base[(i + 1) % 4];
     const na = b2 - b1;
     const nb = -(a2 - a1);
     if (na + nb <= 0) continue;
-    g.poly([...p.iso(a1, b1), ...p.iso(a2, b2), ...p.iso(a2, b2, H), ...p.iso(a1, b1, H)]).fill(na > nb ? mid : dark).stroke({ width: 0.4, color: 0x1a1a1a, alpha: 0.5 });
+    const len = Math.hypot(na, nb) || 1;
+    g.poly([...iso(a1, b1, 0.35), ...iso(a2, b2, 0.35), ...iso(a2, b2, H), ...iso(a1, b1, H)]).fill(shadeHex(color, 0.6 * (na / len) ** 2 + 0.84 * (nb / len) ** 2 + 0.1)).stroke({ width: 0.12, color: 0x101010, alpha: 0.6 });
+    // wheels
+    g.poly([...iso(a1, b1, 0), ...iso(a2, b2, 0), ...iso(a2, b2, 0.4), ...iso(a1, b1, 0.4)]).fill({ color: 0x1a1a1a, alpha: 0.9 });
   }
-  g.poly(base.flatMap(([x, y]) => p.iso(x, y, H))).fill(shadeHex(color, 1.08)).stroke({ width: selected ? 1.4 : 0.4, color: selected ? 0xffffff : 0x1a1a1a, alpha: selected ? 1 : 0.5 });
-  // windscreen at the front
-  const [wa1, wb1] = corner(L / 2 - 0.4, -W / 2 + 0.6);
-  const [wa2, wb2] = corner(L / 2 - 0.4, W / 2 - 0.6);
-  const [wa3, wb3] = corner(L / 2 - 2.2, W / 2 - 0.6);
-  const [wa4, wb4] = corner(L / 2 - 2.2, -W / 2 + 0.6);
-  g.poly([...p.iso(wa1, wb1, H + 0.02), ...p.iso(wa2, wb2, H + 0.02), ...p.iso(wa3, wb3, H + 0.02), ...p.iso(wa4, wb4, H + 0.02)]).fill(0x1d2a36);
-  if (r.status === "en_route" || r.status === "returning") {
+  g.poly(base.flatMap(([x, y]) => iso(x, y, H))).fill(shadeHex(color, 1.08)).stroke({ width: selected ? 0.5 : 0.12, color: selected ? 0xffffff : 0x101010, alpha: selected ? 1 : 0.6 });
+  const [wa1, wb1] = corner(L / 2 - 0.3, -W / 2 + 0.35);
+  const [wa2, wb2] = corner(L / 2 - 0.3, W / 2 - 0.35);
+  const [wa3, wb3] = corner(L / 2 - 1.5, W / 2 - 0.35);
+  const [wa4, wb4] = corner(L / 2 - 1.5, -W / 2 + 0.35);
+  g.poly([...iso(wa1, wb1, H + 0.02), ...iso(wa2, wb2, H + 0.02), ...iso(wa3, wb3, H + 0.02), ...iso(wa4, wb4, H + 0.02)]).fill(0x1d2a36);
+  if (r.status === "en_route" || r.status === "returning" || r.status === "working") {
     const on = Math.floor(now * 5) % 2 === 0;
-    const [la, lb] = corner(0.3, -W / 4);
-    const [ra, rb] = corner(0.3, W / 4);
-    g.circle(...p.iso(la, lb, H + 0.6), 1.1).fill(on ? 0xff3b3b : 0x5a1010);
-    g.circle(...p.iso(ra, rb, H + 0.6), 1.1).fill(on ? 0x2a1a60 : 0x4d8dff);
+    const [la, lb] = corner(-0.2, -W / 4);
+    const [ra, rb] = corner(-0.2, W / 4);
+    g.rect(...iso(la, lb, H + 0.35), 0.7, 0.45).fill(on ? 0xff3b3b : 0x5a1010);
+    g.rect(...iso(ra, rb, H + 0.35), 0.7, 0.45).fill(on ? 0x2a1a60 : 0x4d8dff);
+    const glowAlpha = 0.35 + 0.65 * lights;
+    g.circle(...iso(on ? la : ra, on ? lb : rb, H + 0.5), 2.2).fill({ color: on ? 0xff3030 : 0x3a7dff, alpha: 0.28 * glowAlpha });
   }
-  if (r.status === "working") {
-    const [x, y] = p.iso(a, b, H + 2.2);
-    g.circle(x, y, 1.6 + 0.6 * Math.sin(now * 6)).fill({ color: 0xffb020, alpha: 0.9 });
+  if (lights > 0.05 && r.status !== "available") {
+    const [ha, hb] = corner(L / 2 + 6, 0);
+    const [l1a, l1b] = corner(L / 2, -W / 2 + 0.3);
+    const [l2a, l2b] = corner(L / 2, W / 2 - 0.3);
+    const [s1a, s1b] = corner(L / 2 + 7, -2.6);
+    const [s2a, s2b] = corner(L / 2 + 7, 2.6);
+    void ha;
+    void hb;
+    g.poly([...iso(l1a, l1b, 0.7), ...iso(s1a, s1b, 0), ...iso(s2a, s2b, 0), ...iso(l2a, l2b, 0.7)]).fill({ color: 0xfff1c8, alpha: 0.22 * lights });
   }
 }
 
@@ -422,13 +550,29 @@ function shadeHex(c: number, k: number): number {
 }
 
 function drawVehicles(ctx: Ctx, props: IsoProps, now: number) {
-  const g = ctx.actors;
-  g.clear();
   const sel = props.selection?.kind === "resource" ? props.selection.id : props.follow?.kind === "resource" ? props.follow.id : null;
-  const list = props.state.resources
-    .filter((r) => ctx.p.inside(r.lon, r.lat))
-    .sort((x, y) => ctx.p.depth(x.lon, x.lat) - ctx.p.depth(y.lon, y.lat));
-  for (const r of list) vehicle(g, ctx.p, r, now, r.id === sel);
+  const lights = lightAt(props.t).lights;
+  const seen = new Set<string>();
+  for (const r of props.state.resources) {
+    let g = ctx.vehicles.get(r.id);
+    if (!g) {
+      g = new Graphics();
+      ctx.scene.objects.addChild(g);
+      ctx.vehicles.set(r.id, g);
+    }
+    g.clear();
+    if (!ctx.p.inside(r.lon, r.lat)) {
+      g.visible = false;
+      continue;
+    }
+    seen.add(r.id);
+    const [a, b] = ctx.p.toAB(r.lon, r.lat);
+    const [ox, oy] = ctx.p.iso(a, b);
+    g.position.set(ox, oy);
+    vehicle(g, ctx.p, r, now, r.id === sel, lights, ox, oy);
+    g.zIndex = a + b + 1.5;
+    g.visible = true;
+  }
 }
 
 // ---------- screen-space markers, labels, hit targets ----------
@@ -489,6 +633,15 @@ function drawOverlay(ctx: Ctx, props: IsoProps, _now: number, pulse: number) {
   for (const child of ctx.hits.children) child.visible = false;
   const { p } = ctx;
   const zoomed = ctx.cam.s > 1.6;
+
+  // landmarks (real buildings) and the illustrative clock
+  if (ctx.cam.s > 0.75) {
+    for (const lm of ctx.scene.labels) {
+      const [x, y] = toScreen(ctx, ...p.iso(lm.at[0], lm.at[1], lm.at[2] + 4));
+      pill(ctx, `lm:${lm.text}`, lm.text, x, y, { bg: 0x1b1f27, fg: 0xe9e3d6, size: 10 });
+    }
+  }
+  pill(ctx, "clock", `${clockLabel(props.t)} · illustrative clock`, 92, ctx.app.screen.height - 14, { bg: 0x161a22, fg: 0xd9d3c6, size: 11 });
 
   // facilities: on stage → a base marker; off stage → an edge tile pointing to where it is
   const offStageCount = new Map<string, number>();
@@ -555,7 +708,7 @@ function drawOverlay(ctx: Ctx, props: IsoProps, _now: number, pulse: number) {
     const lost = household.status === "unreached";
     if (!waiting && !lost && !(props.selection?.kind === "household" && props.selection.id === household.household_id)) continue;
     const color = toHex(householdColor(household, props.legend, props.t));
-    const [gx, gy] = toScreen(ctx, ...p.lonlat(household.lon, household.lat));
+    const [gx, gy] = toScreen(ctx, ...p.lonlat(...waitPoint(household)));
     const urgent = household.status === "needs" || household.status === "unknown";
     if (urgent) g.ellipse(gx, gy, (14 + 10 * pulse) * Math.max(0.6, ctx.cam.s * 0.5), (7 + 5 * pulse) * Math.max(0.6, ctx.cam.s * 0.5)).stroke({ width: 2, color, alpha: 0.85 - 0.5 * pulse });
     const py = gy - 30;
@@ -567,7 +720,7 @@ function drawOverlay(ctx: Ctx, props: IsoProps, _now: number, pulse: number) {
       g.moveTo(gx, py - 13).arc(gx, py, 13, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * left).stroke({ width: 2.5, color: left < 0.25 ? 0xe5484d : 0xffffff, alpha: 0.95 });
     }
     pill(ctx, `n:${household.household_id}`, String(peopleCount(household, 1)), gx, py + 7, { bg: household.judge ? 0xffc542 : color, fg: household.judge ? 0x1a1406 : 0xffffff, size: 11 });
-    if (household.judge || zoomed || (props.selection?.kind === "household" && props.selection.id === household.household_id)) {
+    if (household.judge || (props.selection?.kind === "household" && props.selection.id === household.household_id)) {
       const needs = household.needs;
       const extra = needs !== "unknown" && (needs.mobility || needs.accessible_vehicle) ? " · wheelchair" : needs !== "unknown" && needs.medical ? " · medical" : needs === "unknown" ? " · needs unknown" : "";
       pill(ctx, `hh:${household.household_id}`, `${household.judge ? "JUDGE · " : ""}${household.label ?? `#${household.household_id}`}${extra}`, gx, py - 13, { bg: 0x161a22, border: household.judge ? 0xffc542 : undefined, size: 10 });

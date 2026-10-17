@@ -5,7 +5,7 @@
  */
 
 export const S = 1; // screen px per metre at zoom 1 (the camera scales the world container)
-export const KZ = 1.05; // vertical exaggeration of heights
+export const KZ = 1.22; // screen px per vertical metre (2:1 dimetric with a slightly tall z, which reads better)
 
 export type Projector = {
   origin: [number, number];
