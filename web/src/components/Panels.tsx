@@ -19,12 +19,14 @@ import {
   resourceById,
 } from "../model";
 import { town } from "../fixtures";
+import { robustOf } from "../live";
 import type {
   Closure,
   Comparison,
   JudgeClosure,
   PlanMetrics,
   PlanSnapshot,
+  RobustSummary,
   ScatterPoint,
   Selection,
   StateSnapshot,
@@ -74,6 +76,7 @@ export function Panels(props: {
   onUndoClosure: (edgeId: number) => void;
   onReplan: () => void;
   onCompare: () => void;
+  onOptimize: () => void;
 }) {
   return (
     <aside className="side">
@@ -565,55 +568,116 @@ function PlanMetricsBlock(props: { title: string; metrics: PlanMetrics }) {
   );
 }
 
-function Scatter(props: { scatter: ScatterPoint[]; scatterTotal: number | null }) {
+function Scatter(props: {
+  scatter: ScatterPoint[];
+  scatterTotal: number | null;
+  state: StateSnapshot;
+  busy: string | null;
+  onOptimize: () => void;
+}) {
   const points = props.scatter;
+  const batch = points[0]?.batchId;
+  const robust = robustOf(props.state.plan);
+  const result = robust && (batch == null || robust.batch_id === batch) ? robust : null;
   return (
     <div className="stack">
+      <button className="primary" disabled={props.busy != null} onClick={props.onOptimize}>
+        {props.busy === "optimize"
+          ? `Optimizing… ${points.length}${props.scatterTotal ? ` / ${props.scatterTotal}` : ""} runs`
+          : "Optimize (robust replan)"}
+      </button>
       <p className="meta">
-        scatter_point follows contracts/ws-events.schema.json. The shape is still proposed (D38) until Soham signs off. Chosen candidate is ember.
+        Top plan candidates and the baseline, each run in 20 perturbed worlds (travel times, flood timing, backup
+        endurance, a vehicle failing) on Daytona sandboxes or the local pool. EMBER keeps the candidate with the best
+        worst 20% of runs: people unreached, then overflow.
       </p>
       {points.length === 0 ? (
-        <p className="empty">
-          Robustness runs fill this chart from <code>scatter_point</code> events. A new batch clears the previous one. The chosen EMBER plan is the ring.
-        </p>
+        <p className="empty">No runs yet. Optimize fills this chart live, one dot per run.</p>
       ) : (
-        <ScatterChart points={points} total={props.scatterTotal} />
+        <ScatterChart points={points} total={props.scatterTotal} chosen={result?.chosen ?? null} />
       )}
+      {result?.ranking ? <Ranking robust={result} /> : null}
     </div>
   );
 }
 
-function ScatterChart(props: { points: ScatterPoint[]; total: number | null }) {
+function candidateClass(candidate: string, chosen: string | null): string {
+  if (candidate === "baseline") return "baseline";
+  if (candidate === chosen || candidate === "ember") return "chosen";
+  return "candidate";
+}
+
+function ScatterChart(props: { points: ScatterPoint[]; total: number | null; chosen: string | null }) {
   const points = props.points;
   const maxX = Math.max(...points.map((point) => point.peopleUnreached), 1);
   const maxY = Math.max(...points.map((point) => point.overflowM3), 1);
-  const width = 280;
-  const height = 180;
-  const pad = 16;
-  const batch = points[0]?.batchId;
+  const width = 300;
+  const height = 200;
+  const left = 34;
+  const bottom = 26;
+  const pad = 10;
+  const x = (v: number) => left + (v / maxX) * (width - left - pad);
+  const y = (v: number) => height - bottom - (v / maxY) * (height - bottom - pad);
+  // draw the chosen plan last so it sits on top
+  const order = [...points].sort(
+    (a, b) => Number(candidateClass(a.candidate, props.chosen) === "chosen") - Number(candidateClass(b.candidate, props.chosen) === "chosen"),
+  );
   return (
     <figure className="scatter">
       <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Robustness scatter">
-        {points.map((point) => {
-          const x = pad + (point.peopleUnreached / maxX) * (width - pad * 2);
-          const y = height - pad - (point.overflowM3 / maxY) * (height - pad * 2);
+        <line className="axis" x1={left} y1={height - bottom} x2={width - pad} y2={height - bottom} />
+        <line className="axis" x1={left} y1={pad} x2={left} y2={height - bottom} />
+        <text className="tick" x={left} y={height - bottom + 12}>0</text>
+        <text className="tick end" x={width - pad} y={height - bottom + 12}>{Math.round(maxX)}</text>
+        <text className="tick end" x={left - 4} y={pad + 4}>{Math.round(maxY).toLocaleString("en-US")}</text>
+        <text className="label" x={(left + width) / 2} y={height - 4}>people unreached →</text>
+        <text className="label" transform={`translate(10 ${(height - bottom) / 2}) rotate(-90)`}>overflow m³ →</text>
+        {order.map((point) => {
+          const kind = candidateClass(point.candidate, props.chosen);
           return (
-            <circle
-              key={point.runId}
-              cx={x}
-              cy={y}
-              r={point.chosen ? 6 : 3.5}
-              className={point.chosen ? "chosen" : ""}
-            >
-              <title>{point.candidate} seed {point.seed}</title>
+            <circle key={point.runId} cx={x(point.peopleUnreached)} cy={y(point.overflowM3)} r={kind === "chosen" ? 4.5 : 3.5} className={kind}>
+              <title>{point.candidate} · seed {point.seed} · {point.peopleUnreached} unreached · {Math.round(point.overflowM3).toLocaleString("en-US")} m³</title>
             </circle>
           );
         })}
       </svg>
       <figcaption>
-        {points.length}{props.total ? ` / ${props.total}` : ""} in {batch}. Horizontal: people unreached. Vertical: overflow m³. Spread, not confidence bounds.
+        <span className="key"><i className="dot chosen" /> {props.chosen ? `chosen (${props.chosen})` : "chosen (when done)"}</span>
+        <span className="key"><i className="dot candidate" /> other candidates</span>
+        <span className="key"><i className="dot baseline" /> baseline</span>
+        <span>{points.length}{props.total ? ` / ${props.total}` : ""} runs in {points[0]?.batchId}. Spread, not confidence bounds.</span>
       </figcaption>
     </figure>
+  );
+}
+
+function Ranking(props: { robust: RobustSummary }) {
+  const r = props.robust;
+  return (
+    <section>
+      <h3>Ranking · {r.jobs} runs on {r.pool}{r.fanout_wall_s != null ? ` in ${r.fanout_wall_s.toFixed(1)} s` : ""}</h3>
+      <table className="grid">
+        <thead>
+          <tr><th>Plan</th><th>Worst 20%</th><th>Mean</th><th>Max</th><th>Overflow</th></tr>
+        </thead>
+        <tbody>
+          {(r.ranking ?? []).map((row) => (
+            <tr key={row.candidate} className={row.candidate === r.chosen ? "picked" : ""}>
+              <td>
+                {row.candidate}
+                {row.candidate === r.chosen ? <span>chosen</span> : null}
+                {row.candidate === r.nominal_best && row.candidate !== r.chosen ? <span>best on the forecast</span> : null}
+              </td>
+              <td>{row.worst20_people_unreached.toFixed(1)}</td>
+              <td>{row.mean_people_unreached.toFixed(1)}</td>
+              <td>{row.max_people_unreached}</td>
+              <td>{Math.round(row.mean_overflow_m3).toLocaleString("en-US")} m³</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="meta">People unreached per run. Rule: {r.rule}.</p>
+    </section>
   );
 }
 

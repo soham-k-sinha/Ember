@@ -25,7 +25,7 @@ code { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.92em;
 .app {
   height: 100%;
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 
 .top, .kpis, .foot, .banner {
@@ -77,18 +77,37 @@ h3 { font-size: 13px; margin-top: 12px; }
 .primary:disabled { opacity: 0.6; cursor: wait; }
 .ghost { border: 1px solid var(--line); border-radius: 999px; margin-top: 8px; }
 
-.kpis { gap: 18px; }
+.kpis { gap: 28px; flex-direction: row; flex-wrap: wrap; }
 .kpis p { display: flex; flex-direction: column; min-width: 88px; }
 .kpis span { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
-.kpis strong { font-variant-numeric: tabular-nums; font-size: 18px; }
+.kpis strong { font-variant-numeric: tabular-nums; font-size: 20px; }
+.kpis strong small { font-size: 12px; font-weight: 500; color: var(--muted); }
+.kpis em { font-style: normal; font-size: 11px; color: var(--muted); }
+.kpis .kpi.bad strong { color: var(--down); }
+.kpis .kpi.good strong { color: var(--ok); }
+.kpis .kpi-caption { min-width: 70px; padding-right: 16px; border-right: 1px solid var(--line); }
+.kpis .kpi-caption strong { font-size: 15px; }
 
 .banner {
   background: #f8efe0;
   color: #6b4b16;
   font-size: 13px;
 }
+.workspace > .banner {
+  position: absolute;
+  z-index: 2;
+  top: 12px;
+  left: 12px;
+  right: 432px;
+  max-width: 760px;
+  border: 1px solid #ecdcbf;
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  pointer-events: none;
+}
 
 .workspace {
+  position: relative;
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 420px;
@@ -182,8 +201,21 @@ dt { color: var(--muted); }
 
 .spark svg, .scatter svg { width: 100%; height: auto; background: #f6f3ec; border-radius: 8px; }
 .spark path { fill: none; stroke: var(--flood); stroke-width: 2; }
-.scatter circle { fill: var(--flood); }
-.scatter circle.chosen { fill: none; stroke: #b45309; stroke-width: 2; }
+.scatter circle.candidate { fill: var(--flood); opacity: 0.45; }
+.scatter circle.baseline { fill: var(--closed); opacity: 0.55; }
+.scatter circle.chosen { fill: #d97706; stroke: #7c2d12; stroke-width: 1; }
+.scatter .axis { stroke: var(--line); }
+.scatter text { font-size: 9px; fill: var(--muted); }
+.scatter text.end { text-anchor: end; }
+.scatter text.label { text-anchor: middle; }
+.scatter figcaption { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); margin-top: 6px; }
+.scatter .key { display: inline-flex; align-items: center; gap: 4px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.dot.chosen { background: #d97706; }
+.dot.candidate { background: var(--flood); opacity: 0.6; }
+.dot.baseline { background: var(--closed); opacity: 0.7; }
+figure { margin: 0; }
+.grid tr.picked td { background: #fdf3e2; }
 .foot { border-top: 1px solid var(--line); border-bottom: 0; font-size: 13px; }
 .foot details { flex: 1; min-width: 180px; }
 .check { display: flex; gap: 6px; align-items: center; }
@@ -196,5 +228,6 @@ dt { color: var(--muted); }
   .top { grid-template-columns: 1fr; }
   .workspace { grid-template-columns: 1fr; }
   .map-wrap { height: 62vh; }
+  .workspace > .banner { right: 12px; }
   .side { border-left: 0; border-top: 1px solid var(--line); min-height: 420px; }
 }
