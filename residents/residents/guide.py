@@ -29,15 +29,13 @@ from dataclasses import dataclass
 
 from starlette.concurrency import run_in_threadpool
 
+from .briefing import walk_phrase
 from .db import Store, thread_key
 from .messaging import Messenger
 from .threads import phone_for_thread
 
 log = logging.getLogger("residents.guide")
 
-WALK_MPS = 1.2          # an adult walking with a bag
-WALK_DETOUR = 1.3       # street distance ≈ straight line × 1.3
-OUTSIDE_M = 40.0        # pickup corner this close = "right outside"
 
 STEP_DONE = re.compile(
     r"^\s*(?:ok(?:ay)?[,!. ]*)?(?:done|ready|here|i'?m here|we'?re here|i am here|we are here|aboard|on board|"
@@ -164,15 +162,7 @@ class Guide:
             board = (f"Step 2 of 4: {who} is outside {here} now and the crew is coming to your door. "
                      f"Reply DONE once everyone is aboard.")
         else:
-            nlon, nlat = places.nodes[node]
-            if home is not None:
-                d = places.dist_m(home[0], home[1], nlon, nlat)
-                walk = (f"walk to the pickup point: {corner}, about {round(d * WALK_DETOUR / 10) * 10} m "
-                        f"{places.bearing(home[0], home[1], nlon, nlat)} of you "
-                        f"(about {max(1, round(d * WALK_DETOUR / WALK_MPS / 60))} min on foot)"
-                        if d > OUTSIDE_M else f"go out to the pickup point right outside: {corner}")
-            else:
-                walk = f"go to the pickup point: {corner}"
+            walk = walk_phrase(places, home, node)
             first = (f"Confirmed: {who} is coming to you. Step 1 of 4: Pack medications, ID, your phone and charger, "
                      f"then {walk}. {who} gets there {_mins(arrive - now)}. Reply DONE when you're there.")
             board = (f"Step 2 of 4: {who} is at {corner} now. Tell the driver your address"

@@ -39,9 +39,10 @@ PLACED = "Got it: we have you at {label}. Your nearest pickup point is {corner}.
 
 class Locator:
     def __init__(self, store: Store, messenger: Messenger, planner: Planner, llm: LLM | None = None,
-                 geocoder: Geocoder | None = nominatim):
+                 geocoder: Geocoder | None = nominatim, drill_tips: bool = False):
         self.store, self.messenger, self.planner, self.llm = store, messenger, planner, llm
         self.geocoder = geocoder
+        self.drill_tips = drill_tips  # the drill: tell testers outside the flood where to text instead
         self._lock = asyncio.Lock()  # one placement at a time: two phones must not take the same building
 
     @property
@@ -140,6 +141,10 @@ class Locator:
         now = self.planner.now()
         if deadline is None:
             flood = " Your street is outside the forecast flood area."
+            corners = bridge.flood_corners(1) if self.drill_tips else []
+            if corners:
+                flood += (f" (Drill tip: to test an evacuation, start over from a spot the water reaches, "
+                          f"e.g. {corners[0][1]}.)")
         elif (m := round((deadline + bridge.margin_s - now) / 60)) > 0:
             flood = f" Water is forecast to reach your street in about {m} min."
         else:

@@ -44,16 +44,67 @@ class Intake:
         return bool(same) and same[-1].get("payload") == r.get("payload") and r["kind"] in ("need", "closure_report", "facility_status")
 
     async def _respond(self, rep: dict, thread: dict) -> None:
-        """YES / NO to the last offered instruction → confirm / reject, or the latest instruction if stale."""
+        """YES / NO to the last offered instruction → confirm / reject, or the latest instruction if stale.
+        A NO to the only vehicle that can take them is checked first ("reply YES to keep it, NO to decline
+        anyway"), and a YES after declining takes the decline back (D57)."""
         async def ack(a: dict) -> None:
             if self.guide is not None and rep["kind"] == "confirm":
                 await self.guide.start(a, thread)  # "Confirmed: … Step 1 of 4: …"
             elif self.outbound is not None:
                 await self.outbound.ack(a, rep["kind"], thread)
 
+        key = thread_key(thread)
+        plan = self.store.current_plan() or {}
+        a = next((x for x in plan.get("assignments", []) if x["id"] == rep["assignment_id"]), None)
+        holding = self.store.kv_get(f"keep:{key}")
+        self.store.kv_delete(f"keep:{key}")
+        briefing = self.outbound.briefing if self.outbound is not None else None
+        if rep["kind"] == "reject" and a is not None and briefing is not None and holding != a["id"] \
+                and "household_id" in thread and a["status"] != "rejected" and not briefing.alternatives(thread, a["resource_id"]):
+            await self._check_decline(a, thread)
+            return
+        if rep["kind"] == "confirm" and a is not None and a["status"] == "rejected":
+            self._undo_decline(a, thread)
         res = await self.planner.respond(rep["assignment_id"], rep["kind"], rep.get("plan_version"), on_applied=ack)
         if res["stale"] and self.outbound is not None:
             await self.outbound.latest(thread)
+
+    async def _check_decline(self, a: dict, thread: dict) -> None:
+        """They said no to the only vehicle that fits them: make sure, instead of leaving them with nothing."""
+        briefing = self.outbound.briefing
+        res = {r["id"]: r for r in self.store.snapshot()["resources"]}
+        who = res.get(a["resource_id"], {}).get("name", a["resource_id"])
+        n = briefing.needs(thread)
+        chair = bool(n.get("mobility") or n.get("accessible_vehicle"))
+        h = briefing.household(thread)
+        flood = h.get("deadline_s") is not None
+        self.store.kv_set(f"keep:{thread_key(thread)}", a["id"])
+        await self.messenger.send_message(
+            thread, f"{who} is the only {'wheelchair-accessible ' if chair else ''}vehicle that can take "
+                    f"{n.get('people') or 1} {'person' if n.get('people') == 1 else 'people'}"
+                    f"{' with a wheelchair' if chair else ''}. If you decline it, we have no other way to pick you up"
+                    f"{' before the water reaches your street' if flood else ''}. Reply YES to keep it, or NO to "
+                    f"decline anyway.", self.store.meta().get("plan_version"), a["id"])
+
+    def _undo_decline(self, a: dict, thread: dict) -> None:
+        """YES after a NO: the vehicle may be offered to them again; the assignment goes back to offered."""
+        key = thread_key(thread)
+        rejected = [r for r in json.loads(self.store.kv_get(f"rejected:{key}") or "[]") if r != a["resource_id"]]
+        self.store.kv_set(f"rejected:{key}", json.dumps(rejected))
+        self.store.set_assignment_status(self.store.meta()["plan_version"], a["id"], "offered", ("rejected",))
+        log.info("%s took back their decline of %s", key, a["resource_id"])
+
+    async def _answer(self, thread: dict, topics: list[str]) -> list[str]:
+        """Questions answered from the plan (briefing.py). Returns the topics nobody could answer."""
+        briefing = self.outbound.briefing if self.outbound is not None else None
+        left = []
+        for t in dict.fromkeys(topics):
+            text = await briefing.answer(t, thread) if briefing is not None else None
+            if text:
+                await self.messenger.send_message(thread, text, self.store.meta().get("plan_version"))
+            else:
+                left.append(t)
+        return left
 
     def _record(self, thread: dict) -> dict:
         """What the model may know about the sender (no routes, no plan)."""
@@ -102,7 +153,12 @@ class Intake:
                 stored.append(rep)
             except ReportError as e:
                 log.warning("extracted report rejected (%s): %s", e, r)
-        for rep in [r for r in stored if r["kind"] in ("confirm", "reject")]:
+        decisions = [r for r in stored if r["kind"] in ("confirm", "reject")]
+        unanswered = out.topics
+        if decisions and out.topics:  # "no, is anyone near me?": the answer, then the decision's reply
+            unanswered = await self._answer(thread, out.topics)
+            out.topics = []
+        for rep in decisions:
             await self._respond(rep, thread)
         if stored:
             self.store.set_message_report(msg["id"], stored[0]["id"])
@@ -128,8 +184,11 @@ class Intake:
             if not texted and self.outbound is not None:  # never leave a fact unanswered
                 if not await self.outbound.send_status(thread, prefix="Got it. "):
                     await self.messenger.send_message(thread, "Got it, thanks.", version)
+            if out.follow_up:
+                await self.messenger.send_message(thread, out.follow_up, version)
         elif answered:
-            pass
+            if unanswered:
+                await self.messenger.send_message(thread, "We've passed your question to the coordinators.", version)
         elif self.outbound is not None:
             await self._reply_without_facts(thread, out, stored)
         elif out.question:
@@ -138,9 +197,12 @@ class Intake:
 
     async def _reply_without_facts(self, thread: dict, out: Outcome, stored: list[dict]) -> None:
         """Chatter or a question: the plan's open question first, else where they stand, else the model's
-        own prompt. A resident's question is never answered by the LLM: we say it went to the coordinators."""
+        own prompt. Questions are answered from the plan by topic (briefing.py, never generated); a topic we
+        can't answer goes to the coordinators."""
         view = self.store.plan_view()
         asked_q = any(r["kind"] == "question" for r in stored)
+        if asked_q and out.topics and not await self._answer(thread, out.topics):
+            return  # every question answered from the plan
         if view and not asked_q:
             # A newly opted-in phone may already have a computed assignment. Send the
             # actual offer (with assignment_id) so its next YES can confirm that offer.

@@ -2,6 +2,7 @@
 question, says YES, then gets one text per step (go to the corner / board / ride / checked in) and
 replies DONE; with auto_clock the sim clock jumps to the next step. Real allocator + simulator, fake LLM,
 fake geocoder, no network."""
+import json
 from dataclasses import replace
 
 import pytest
@@ -166,7 +167,7 @@ def test_resident_is_placed_where_they_text(drill, solo_bridge, town):
     hid = t["household_id"]
     outs = tap.outs(R1)
     assert outs[-2].startswith("Got it: we have you at Green Street and Sellers Street. Your nearest pickup point is")
-    assert outs[-2].endswith("Your street is outside the forecast flood area.")
+    assert "Your street is outside the forecast flood area. (Drill tip: to test an evacuation, start over from a spot the water reaches, e.g. " in outs[-2]
     assert outs[-1] == "How many people are with you, and does anyone need a wheelchair-accessible vehicle?"
     st = drill.get("/state").json()
     h = next(x for x in st["households"] if x["household_id"] == hid)
@@ -532,3 +533,121 @@ def test_same_phone_twice_is_a_clear_error(drill):
     d = _drill_for(drill, operators=[f"{R1}@mt-auburn", f"{R2}@mt-auburn"])
     with pytest.raises(SetupError, match="Can't register the phones"):
         drill.portal.call(d.register)
+
+
+# ---------- the plan around other people, in words (D57) ----------
+STADIUM = "Stadium Rd and Western Ave"
+NEIGHBORS = {
+    STADIUM: ex(fact("location", address="Stadium Rd", cross_street="Western Ave")),
+    "4 people and we need a wheelchair": ex(fact("need", people=4, mobility=True, accessible_vehicle=True)),
+    "3 people and we need 2 wheelchairs": ex(fact("need", people=3, mobility=True, accessible_vehicle=True)),
+    "HOW MUCH TIME": ex(fact("question", question_topic="eta")),
+    "no, we want to travel with others, is there another person near me?":
+        ex(fact("reject"), fact("question", question_topic="others")),
+    "are there other vans?": ex(fact("question", question_topic="vehicles")),
+    "where do we go?": ex(fact("question", question_topic="pickup_place")),
+    "what should we bring?": ex(fact("question", question_topic="bring")),
+    "is the bridge open?": ex(fact("question", question_topic="other")),
+    "no": ex(fact("reject")),
+    "4 people and we need a Welch's": ex(fact("need", people=4), confidence=0.6,
+                                        q="Did you mean you need a wheelchair-accessible vehicle?"),
+}
+
+
+@pytest.fixture
+def pair(drill):
+    """Two neighbours at the same corner who both need the fleet's only wheelchair-accessible vehicle
+    (the 2026-10-17 two-phone run, replayed with what the model returned)."""
+    drill.app.state.intake.llm.script.update(NEIGHBORS)
+    drill.app.state.locator.llm.script.update(NEIGHBORS)
+    tap = Tap(drill)
+    for h in (R1, R2):
+        register(drill, h)
+    t2 = place(drill, tap, R2, STADIUM)
+    t1 = place(drill, tap, R1, STADIUM)
+    text(drill, R2, "4 people and we need a wheelchair")
+    text(drill, R1, "3 people and we need 2 wheelchairs")
+    return drill, tap, t1, t2
+
+
+def test_offers_say_why_and_who_is_ahead(pair):
+    c, tap, t1, t2 = pair
+    assert t1 != t2
+    o2, o1 = next(x for x in reversed(tap.outs(R2)) if "will pick you up" in x), tap.outs(R1)[-1]
+    assert o2.startswith("Accessible Van 3 will pick you up at your door")
+    assert "Your street isn't forecast to flood, so this is a precaution; reply NO if you'd rather stay put." in o2
+    assert "Accessible Van 3 is the only wheelchair-accessible vehicle that fits 3 people; it picks up 1 other household first" in o1, o1
+    assert "at your corner" in o1
+
+
+def test_questions_are_answered_from_the_plan(pair):
+    c, tap, t1, t2 = pair
+    text(c, R2, "yes")
+    text(c, R2, "HOW MUCH TIME")
+    ans = tap.outs(R2)[-1]
+    assert ans.startswith("Accessible Van 3 ") and " you should be at " in ans and "Reply YES" not in ans, ans
+    status = c.app.state.outbound.status_text(c.app.state.store.plan_view(), t2)  # already said YES: never "Reply YES"
+    assert status.startswith("Your pickup is confirmed: Accessible Van 3"), status
+    text(c, R1, "are there other vans?")
+    v = tap.outs(R1)[-1]
+    assert v.startswith("Vehicles that fit 3 people with a wheelchair: Accessible Van 3 (assigned to you, after 1 other pickup).")
+    assert "Not suitable:" in v and "Van 1" in v and "Van 2" in v
+    text(c, R1, "where do we go?")
+    assert tap.outs(R1)[-1].startswith("Stay inside at Stadium Road and Western Avenue: the crew comes to your door")
+    text(c, R1, "what should we bring?")
+    assert tap.outs(R1)[-1].startswith("Bring medications")
+    text(c, R1, "is the bridge open?")  # not something the plan knows: a coordinator
+    assert tap.outs(R1)[-1].startswith("We've passed your question to the coordinators.")
+
+
+def test_no_to_the_only_vehicle_is_checked_and_the_question_answered(pair):
+    c, tap, t1, t2 = pair
+    n = len(tap.outs(R1))
+    text(c, R1, "no, we want to travel with others, is there another person near me?")
+    new = tap.outs(R1)[n:]
+    assert new[0].startswith("1 other household in this drill is within 300 m of you (1 at your pickup corner).")
+    assert "Accessible Van 3 also picks up 1 of them (1 before you, 0 after)" in new[0]
+    assert "one household per trip" in new[0]
+    assert new[1].startswith("Accessible Van 3 is the only wheelchair-accessible vehicle that can take 3 people with a wheelchair.")
+    assert c.app.state.store.kv_get(f"rejected:household:{t1['household_id']}") is None  # not banned
+    text(c, R1, "yes")  # keep it
+    assert any("Confirmed: Accessible Van 3 is coming to your door" in x for x in tap.outs(R1)[n:])
+
+
+def test_declined_anyway_then_yes_takes_it_back(pair):
+    c, tap, t1, t2 = pair
+    text(c, R1, "no")
+    text(c, R1, "no")   # decline anyway
+    key = f"rejected:household:{t1['household_id']}"
+    assert c.app.state.store.kv_get(key) == '["van-3"]'
+    text(c, R1, "are there other vans?")
+    assert "Accessible Van 3 (you declined it)" in tap.outs(R1)[-1]
+    status = c.app.state.outbound.status_text(c.app.state.store.plan_view(), t1)
+    assert status.startswith("You declined Accessible Van 3, the only vehicle that can take 3 people, wheelchair-accessible vehicle")
+    assert "Reply YES if you want Accessible Van 3 after all" in status
+    text(c, R1, "yes")
+    assert c.app.state.store.kv_get(key) == "[]"
+    assert any("Confirmed: Accessible Van 3 is coming to your door" in x for x in tap.outs(R1)[-3:]), tap.outs(R1)[-3:]
+
+
+def test_no_with_another_vehicle_free_declines_at_once(drill):
+    tap = Tap(drill)
+    drill.app.state.intake.llm.script.update(NEIGHBORS)
+    register(drill)
+    t = place(drill, tap)
+    text(drill, R1, "2 of us")
+    first = next(a for a in drill.get("/plan/current").json()["assignments"] if a["target"] == t)
+    text(drill, R1, "no")   # vans that fit 2 people: several → no check, it's declined
+    assert drill.app.state.store.kv_get(f"rejected:household:{t['household_id']}") == json.dumps([first["resource_id"]])
+
+
+def test_garbled_need_plans_what_is_clear_and_asks_about_the_rest(drill):
+    """Live 2026-10-17: "we need a Welch's" (autocorrected wheelchair) was silently dropped."""
+    drill.app.state.intake.llm.script.update(NEIGHBORS)
+    tap = Tap(drill)
+    register(drill)
+    place(drill, tap)
+    text(drill, R1, "4 people and we need a Welch's")
+    outs = tap.outs(R1)
+    assert " will pick you up at " in outs[-2]
+    assert outs[-1] == "Did you mean you need a wheelchair-accessible vehicle?"

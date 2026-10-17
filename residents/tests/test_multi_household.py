@@ -191,7 +191,9 @@ def test_confirm_and_reject_only_affect_the_senders_household(multi):
     assignments = {a["id"]: a for a in raw["assignments"]}
     assert assignments[offer_b["assignment_id"]]["status"] == "confirmed"
     assert assignments[offer_a["assignment_id"]]["status"] != "confirmed"
-    deliver(c, received("no-a", PHONE_A, "no"))
+    deliver(c, received("no-a", PHONE_A, "no"))    # the only accessible van: "reply NO to decline anyway" (D57)
+    assert c.app.state.store.kv_get(f"rejected:household:{JUDGE}") is None
+    deliver(c, received("no-a2", PHONE_A, "no"))
     state = c.get("/state").json()
     confirm = next(r for r in state["reports"] if r["kind"] == "confirm")
     reject = next(r for r in state["reports"] if r["kind"] == "reject")

@@ -172,7 +172,7 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         if app.state.planner is not None:
             from .places import nominatim
             app.state.locator = Locator(app.state.store, app.state.messenger, app.state.planner, model,
-                                        nominatim if settings.geocode_enabled else None)
+                                        nominatim if settings.geocode_enabled else None, drill_tips=settings.auto_clock)
             app.state.messenger.lobby_hooks.append(app.state.locator.on_lobby)
             app.state.planner.plan_hooks.append(app.state.locator.on_plan)
         if app.state.planner is not None:  # after messenger + hooks exist: a fresh plan v1 texts its open questions

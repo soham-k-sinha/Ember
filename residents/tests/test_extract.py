@@ -13,7 +13,7 @@ from residents.intake import SORRY
 from tests.test_engine import JUDGE, SCENARIO, bridge  # noqa: F401  (session fixture)
 
 NONE = dict(people=None, mobility=None, accessible_vehicle=None, medical=None, road_hint=None, cross_street=None, address=None,
-            endurance_min=None, facility_state=None)
+            endurance_min=None, facility_state=None, question_topic=None)
 
 
 def fact(kind, **kw):
