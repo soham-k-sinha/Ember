@@ -61,6 +61,14 @@ def test_tracks_follow_roads_at_the_distance_driven(run):
     assert sum(len(tr["path"]) for tr in pb["tracks"]) > 3 * len(ts), "between-sample road geometry is missing"
 
 
+def test_playback_is_strict_json_for_both_planners(run):
+    """The web imports the fixture as JSON: no inf/nan anywhere (the baseline's eta_s is inf before dispatch)."""
+    from ember_engine.baseline import baseline_plan
+    res, pb = run
+    json.dumps(pb, allow_nan=False)
+    json.dumps(playback(simulate(res.world, res.scenario, baseline_plan(res.world, res.scenario)), "baseline"), allow_nan=False)
+
+
 def test_playback_carries_what_the_map_needs(run):
     res, pb = run
     hh = {h["household_id"]: h["status"] for h in pb["households"]}

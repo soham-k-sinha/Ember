@@ -20,6 +20,9 @@ import {
 } from "../model";
 import { town } from "../fixtures";
 import { robustOf } from "../live";
+import { householdColor, peopleCount } from "../layers";
+import { householdName, members, type WalkerPlan } from "../people";
+import { householdTimeline, resourceTimeline, type Playback, type TimelineItem } from "../playback";
 import type {
   Closure,
   Comparison,
@@ -77,6 +80,11 @@ export function Panels(props: {
   onReplan: () => void;
   onCompare: () => void;
   onOptimize: () => void;
+  playback: Playback | null;
+  walkers: WalkerPlan | null;
+  follow: Selection | null;
+  onFollow: (selection: Selection | null) => void;
+  onSelect: (selection: Selection | null) => void;
 }) {
   return (
     <aside className="side">
@@ -107,7 +115,7 @@ export function Panels(props: {
   );
 }
 
-function Ledger(props: { state: StateSnapshot }) {
+function Ledger(props: { state: StateSnapshot; onSelect: (selection: Selection | null) => void; onFollow: (selection: Selection | null) => void }) {
   const resources = props.state.resources;
   if (resources.length === 0) {
     return <p className="empty">No resources in this state snapshot.</p>;
@@ -120,14 +128,14 @@ function Ledger(props: { state: StateSnapshot }) {
           <th>Status</th>
           <th>Assignment</th>
           <th>ETA</th>
-          <th>Fuel</th>
+          <th>On board</th>
         </tr>
       </thead>
       <tbody>
         {resources.map((resource) => {
           const assignment = assignmentById(props.state, resource.assignment_id);
           return (
-            <tr key={resource.id}>
+            <tr key={resource.id} className="clickable" onClick={() => props.onSelect({ kind: "resource", id: resource.id })}>
               <td>
                 <strong>{resource.name}</strong>
                 <span>{resource.kind.replaceAll("_", " ")}</span>
@@ -135,7 +143,19 @@ function Ledger(props: { state: StateSnapshot }) {
               <td><span className={`pill ${resource.status}`}>{statusLabel(resource.status)}</span></td>
               <td>{assignment ? targetLabel(assignment.target) : "—"}</td>
               <td>{formatMinutes(resource.eta_s ?? assignment?.eta_s)}</td>
-              <td>{formatNumber(resource.fuel_l, 1)} L</td>
+              <td>
+                {resource.people_on_board ? `${resource.people_on_board} aboard` : "—"}
+                <button
+                  className="mini"
+                  title="Follow on the map"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    props.onFollow({ kind: "resource", id: resource.id });
+                  }}
+                >
+                  Follow
+                </button>
+              </td>
             </tr>
           );
         })}
@@ -146,12 +166,17 @@ function Ledger(props: { state: StateSnapshot }) {
 
 function Inspector(props: {
   state: StateSnapshot;
+  t: number;
   closures: Closure[];
   selection: Selection | null;
   judge: JudgeClosure[];
   busy: string | null;
   onCloseRoad: (edgeId: number) => void;
   onUndoClosure: (edgeId: number) => void;
+  playback: Playback | null;
+  walkers: WalkerPlan | null;
+  follow: Selection | null;
+  onFollow: (selection: Selection | null) => void;
 }) {
   const selection = props.selection;
   if (!selection) {
@@ -162,9 +187,20 @@ function Inspector(props: {
       </p>
     );
   }
-  if (selection.kind === "household") return <HouseholdInspector state={props.state} id={selection.id} />;
+  const following = props.follow != null && props.follow.kind === selection.kind && props.follow.id === selection.id;
+  const followButton = (
+    <button className={following ? "ghost on" : "ghost"} onClick={() => props.onFollow(following ? null : selection)}>
+      {following ? "Following · stop" : "Follow on map"}
+    </button>
+  );
+  if (selection.kind === "household") {
+    return <HouseholdInspector state={props.state} id={selection.id} t={props.t} playback={props.playback} follow={followButton} />;
+  }
   if (selection.kind === "facility") return <FacilityInspector state={props.state} id={selection.id} />;
-  if (selection.kind === "resource") return <ResourceInspector state={props.state} id={selection.id} />;
+  if (selection.kind === "resource") {
+    return <ResourceInspector state={props.state} id={selection.id} t={props.t} playback={props.playback} follow={followButton} />;
+  }
+  if (selection.kind === "walker") return <WalkerInspector id={selection.id} walkers={props.walkers} t={props.t} />;
   return (
     <EdgeInspector
       edgeId={selection.id}
@@ -177,48 +213,150 @@ function Inspector(props: {
   );
 }
 
-function HouseholdInspector(props: { state: StateSnapshot; id: number }) {
+function Countdown(props: { deadline: number | null; t: number }) {
+  if (props.deadline == null) return <span className="countdown calm">Water does not reach them in this scenario</span>;
+  const left = props.deadline - props.t;
+  if (left <= 0) return <span className="countdown past">Water reached their street {formatSim(-left)} ago</span>;
+  const tone = left < 30 * 60 ? "urgent" : left < 60 * 60 ? "soon" : "calm";
+  return <span className={`countdown ${tone}`}>{formatSim(left)} until water reaches them</span>;
+}
+
+function Timeline(props: { items: TimelineItem[]; empty: string }) {
+  if (props.items.length === 0) return <p className="empty">{props.empty}</p>;
+  return (
+    <ol className="timeline">
+      {props.items.map((item, index) => (
+        <li key={`${item.t_s}-${index}`} className={item.tone ?? ""}>
+          <span>{formatSim(item.t_s)}</span>
+          <p>{item.text}</p>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function HouseholdInspector(props: { state: StateSnapshot; id: number; t: number; playback: Playback | null; follow: JSX.Element }) {
   const household = householdById(props.state, props.id);
   const townHousehold = town.households.find((item) => item.id === props.id);
   if (!household) {
     return (
       <article>
-        <h2>Household #{props.id}</h2>
+        <p className="kicker-small">Home · synthetic</p>
+        <h2>{householdName(props.id)}</h2>
         <p className="empty">
-          This dot is background housing from the town fixture
-          {townHousehold ? ` (zone ${townHousehold.zone}, ${townHousehold.size} people)` : ""}.
-          It is not in the assisted set, so it has no status, need, or rationale.
+          A home in the district{townHousehold ? ` (${townHousehold.size} people, zone ${townHousehold.zone})` : ""}. It is not in the
+          assisted set, so the plan has no task for it. Some neighbours like this one leave on foot as the water rises (illustrative).
         </p>
       </article>
     );
   }
   const assignment = assignmentById(props.state, household.assignment_id)
     ?? assignmentForTarget(props.state, { household_id: household.household_id });
+  const resource = assignment ? resourceById(props.state, assignment.resource_id) : undefined;
   const unresolved = props.state.plan?.unresolved.find(
     (item) => "household_id" in item.target && item.target.household_id === household.household_id,
   );
   const messages = props.state.messages.filter(
     (message) => "household_id" in message.thread && message.thread.household_id === household.household_id,
   );
+  const needs = household.needs;
+  const people = peopleCount(household, 2);
+  const crew = members(
+    household.household_id,
+    people,
+    needs !== "unknown" && Boolean(needs.mobility || needs.accessible_vehicle),
+    needs !== "unknown" && Boolean(needs.medical),
+  );
+  const color = householdColor(household, "status", props.t);
+  const outcome = props.playback?.outcomes.find((item) => item.assignment_id === assignment?.id);
+  const timeline = props.playback ? householdTimeline(props.playback, household.household_id, props.t) : [];
+  const fromMessages: TimelineItem[] = messages
+    .filter((message) => message.t_s <= props.t)
+    .map((message) => ({ t_s: message.t_s, text: `${message.direction === "out" ? "EMBER texted" : "They texted"}: “${message.text}”`, tone: "info" as const }));
+  const items = [...timeline, ...fromMessages].sort((a, b) => a.t_s - b.t_s);
+  return (
+    <article className="profile">
+      <header className="profile-head">
+        <i className="avatar" style={{ background: `rgb(${color.join(",")})` }} />
+        <div>
+          <p className="kicker-small">{household.judge ? "Judge's household" : "Assisted household"} · #{household.household_id}</p>
+          <h2>{household.label && !/^household/i.test(household.label) ? household.label : householdName(household.household_id)}</h2>
+          <p className="meta">
+            <span className={`pill ${household.status}`}>{statusLabel(household.status)}</span>
+            {household.needs_source ? ` · needs from ${household.needs_source === "report" ? "their report" : "the scenario"}` : ""}
+          </p>
+        </div>
+      </header>
+      {props.follow}
+      <Countdown deadline={household.deadline_s} t={props.t} />
+      <section className="card">
+        <dl>
+          <dt>Needs</dt>
+          <dd>{formatNeeds(household.needs)}</dd>
+          <dt>Help</dt>
+          <dd>
+            {resource
+              ? `${resource.name}${outcome?.arrive_t != null ? (outcome.arrive_t > props.t ? ` · arrives in ${formatSim(outcome.arrive_t - props.t)}` : " · arrived") : resource.eta_s != null ? ` · ETA ${formatMinutes(resource.eta_s)}` : ""}`
+              : "No vehicle assigned"}
+          </dd>
+          {outcome?.pickup_t != null ? (
+            <>
+              <dt>Pickup</dt>
+              <dd>{formatSim(outcome.pickup_t)}{outcome.met_deadline === false ? " · after the deadline" : outcome.met_deadline ? " · before the water" : ""}</dd>
+            </>
+          ) : null}
+          <dt>Blocked by</dt>
+          <dd>{unresolved?.blocked_by ?? "nothing on this plan"}</dd>
+        </dl>
+      </section>
+      <section>
+        <h3>Latest decision</h3>
+        {assignment ? <blockquote>{assignment.rationale}</blockquote> : <p className="empty">The plan has no task for this household yet.</p>}
+      </section>
+      <section>
+        <h3>Timeline</h3>
+        <Timeline items={items} empty="Nothing has happened to this household yet at this clock time." />
+      </section>
+      <section>
+        <h3>Who lives here · {crew.length} {crew.length === 1 ? "person" : "people"}</h3>
+        <ul className="members">
+          {crew.map((member) => (
+            <li key={member.name}>
+              <strong>{member.name}</strong>
+              <span>{member.role}</span>
+            </li>
+          ))}
+        </ul>
+        <p className="meta">Names and members are generated from the household id (synthetic). Head count and mobility come from the plan's needs.</p>
+      </section>
+      <ThreadList title="Message thread" messages={messages} />
+    </article>
+  );
+}
+
+function WalkerInspector(props: { id: number; walkers: WalkerPlan | null; t: number }) {
+  const group = props.walkers?.walkers.filter((walker) => walker.household === props.id) ?? [];
+  const first = group[0];
   return (
     <article>
-      <h2>{household.label ?? `Household #${household.household_id}`}</h2>
-      <p className="meta">
-        {household.judge ? "Judge · " : ""}
-        {statusLabel(household.status)}
-        {household.needs_source ? ` · needs from ${household.needs_source}` : ""}
+      <p className="kicker-small">Neighbour on foot · illustrative</p>
+      <h2>{householdName(props.id)}</h2>
+      {first ? (
+        <dl>
+          <dt>Group</dt>
+          <dd>{group.length} {group.length === 1 ? "person" : "people"}</dd>
+          <dt>Left home</dt>
+          <dd>{formatSim(first.start)}</dd>
+          <dt>Heading to</dt>
+          <dd>{first.turnedBack ? "the edge of the water, then back home (took the direct route and found it flooded)" : first.dest === "shelter" ? "the Treehouse shelter" : "out of the district"}</dd>
+          <dt>{first.end > props.t ? "Arrives" : "Arrived"}</dt>
+          <dd>{formatSim(first.end)}</dd>
+        </dl>
+      ) : null}
+      <p className="empty">
+        People who can leave on their own are drawn so the scene reads like a neighbourhood. They are routed on the real streets around
+        roads that will be under water by the time they reach them, but they are not part of the simulation or any metric.
       </p>
-      <dl>
-        <dt>Needs</dt>
-        <dd>{formatNeeds(household.needs)}</dd>
-        <dt>Deadline</dt>
-        <dd>{formatMinutes(household.deadline_s)}</dd>
-        <dt>Blocking constraint</dt>
-        <dd>{unresolved?.blocked_by ?? "None recorded on this plan."}</dd>
-      </dl>
-      <h3>Rationale</h3>
-      {assignment ? <blockquote>{assignment.rationale}</blockquote> : <p className="empty">No assignment rationale for this household.</p>}
-      <ThreadList title="Message thread" messages={messages} />
     </article>
   );
 }
@@ -308,32 +446,48 @@ function Spark(props: { series: Wastewater["series"] }) {
   );
 }
 
-function ResourceInspector(props: { state: StateSnapshot; id: string }) {
+function ResourceInspector(props: { state: StateSnapshot; id: string; t: number; playback: Playback | null; follow: JSX.Element }) {
   const resource = resourceById(props.state, props.id);
   if (!resource) return <p className="empty">That resource is not in the state snapshot.</p>;
   const assignment = assignmentById(props.state, resource.assignment_id);
+  const timeline = props.playback ? resourceTimeline(props.playback, resource.id, props.t) : [];
   return (
-    <article>
-      <h2>{resource.name}</h2>
-      <p className="meta">{resource.kind.replaceAll("_", " ")} · {statusLabel(resource.status)}</p>
-      <dl>
-        <dt>Assignment</dt>
-        <dd>{assignment ? `${assignment.task} → ${targetLabel(assignment.target)}` : "none"}</dd>
-        <dt>ETA</dt>
-        <dd>{formatMinutes(resource.eta_s)}</dd>
-        <dt>Fuel</dt>
-        <dd>{formatNumber(resource.fuel_l, 1)} L{resource.km_driven != null ? ` · ${formatNumber(resource.km_driven, 2)} km` : ""}</dd>
-        <dt>On board</dt>
-        <dd>{resource.people_on_board ?? 0}{resource.capacity_people ? ` / ${resource.capacity_people}` : ""}</dd>
-        {resource.kw ? (
-          <>
-            <dt>Generator</dt>
-            <dd>{resource.kw} kW · {resource.connector ?? "no connector"}</dd>
-          </>
-        ) : null}
-      </dl>
-      <h3>Rationale</h3>
-      {assignment ? <blockquote>{assignment.rationale}</blockquote> : <p className="empty">No rationale while this resource is unassigned.</p>}
+    <article className="profile">
+      <header className="profile-head">
+        <i className={`avatar vehicle ${resource.kind}`} />
+        <div>
+          <p className="kicker-small">{resource.kind.replaceAll("_", " ")}{resource.accessible ? " · accessible" : ""}</p>
+          <h2>{resource.name}</h2>
+          <p className="meta"><span className={`pill ${resource.status}`}>{statusLabel(resource.status)}</span></p>
+        </div>
+      </header>
+      {props.follow}
+      <section className="card">
+        <dl>
+          <dt>Task</dt>
+          <dd>{assignment ? `${assignment.task} → ${targetLabel(assignment.target)}` : "none"}</dd>
+          <dt>ETA</dt>
+          <dd>{resource.eta_s != null ? (resource.eta_s > props.t ? `in ${formatSim(resource.eta_s - props.t)}` : formatMinutes(resource.eta_s)) : "—"}</dd>
+          <dt>On board</dt>
+          <dd>{resource.people_on_board ?? 0}{resource.capacity_people ? ` / ${resource.capacity_people}` : ""}</dd>
+          <dt>Fuel</dt>
+          <dd>{formatNumber(resource.fuel_l, 1)} L{resource.km_driven != null ? ` · ${formatNumber(resource.km_driven, 2)} km` : ""}</dd>
+          {resource.kw ? (
+            <>
+              <dt>Generator</dt>
+              <dd>{resource.kw} kW · {resource.connector ?? "no connector"}</dd>
+            </>
+          ) : null}
+        </dl>
+      </section>
+      <section>
+        <h3>Latest decision</h3>
+        {assignment ? <blockquote>{assignment.rationale}</blockquote> : <p className="empty">No rationale while this resource is unassigned.</p>}
+      </section>
+      <section>
+        <h3>Timeline</h3>
+        <Timeline items={timeline} empty={props.playback ? "Nothing yet at this clock time." : "The timeline needs a replay (fixtures, or GET /playback in live mode)."} />
+      </section>
     </article>
   );
 }

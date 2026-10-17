@@ -138,6 +138,17 @@ def _squeeze(path: list, times: list) -> tuple[list, list]:
     return [path[i] for i in keep], [times[i] for i in keep]
 
 
+def _finite(o):
+    """JSON has no inf/nan (the baseline plan's eta_s is inf until dispatch): → null, recursively."""
+    if isinstance(o, float):
+        return o if math.isfinite(o) else None
+    if isinstance(o, dict):
+        return {k: _finite(v) for k, v in o.items()}
+    if isinstance(o, list):
+        return [_finite(v) for v in o]
+    return o
+
+
 def _target(a: dict) -> dict:
     t = a.get("target", {})
     return {"household_id": int(t["household_id"])} if "household_id" in t else dict(t)
@@ -168,7 +179,7 @@ def playback(res, planner: str | None = None) -> dict:
         r = res.edge_reopened_t[e]
         closures.append([int(w.edge_id[e]), float(res.edge_closed_t[e]), None if np.isnan(r) else float(r)])
     keep = ("id", "resource_id", "task", "target", "dropoff_facility_id", "eta_s", "deadline_s", "slack_s", "status", "rationale")
-    return {
+    return _finite({
         "version": VERSION,
         "scenario_id": scn["scenario_id"],
         "planner": planner or plan.get("planner", "ember"),
@@ -195,4 +206,4 @@ def playback(res, planner: str | None = None) -> dict:
             "metrics": plan.get("metrics", {}),
         },
         "metrics": dict(res.metrics),
-    }
+    })

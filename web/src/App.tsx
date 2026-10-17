@@ -1,14 +1,19 @@
-import { useEffect, useMemo, useReducer, useRef } from "react";
-import { MapView } from "./components/MapView";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { MapView, perf } from "./components/MapView";
 import { Panels, snapshotNote, type PanelId } from "./components/Panels";
 import {
   API_BASE,
-  fixtureClock,
+  fixturePlaybacks,
   publishedComparison,
   publishedScatter,
   publishedState,
   scenario,
+  town,
 } from "./fixtures";
+import type { LegendMode } from "./layers";
+import { buildGraph, planWalkers, type BgHousehold } from "./people";
+import { asPlayback, stateFromPlayback, type Playback } from "./playback";
+import { loadFullTown, type FullTown } from "./townFull";
 import { formatSim } from "./format";
 import { asComparison, asState, getJson, openSocket, postJson, robustOf, type LiveStatus } from "./live";
 import { activeKeyframe, closedEdges } from "./model";
@@ -26,6 +31,9 @@ import type {
 } from "./types";
 
 type Mode = "fixture" | "live";
+type Replay = "ember" | "baseline";
+
+const SPEEDS = [10, 30, 60, 180, 600];
 
 type Model = {
   mode: Mode;
@@ -49,6 +57,12 @@ type Model = {
   showTrips: boolean;
   busy: string | null;
   tab: PanelId;
+  legend: LegendMode;
+  follow: Selection | null;
+  replay: Replay;
+  playbacks: { ember: Playback | null; baseline: Playback | null };
+  playbackNote: string | null;
+  showWalkers: boolean;
 };
 
 type Action =
@@ -72,6 +86,11 @@ type Action =
   | { type: "busy"; busy: string | null }
   | { type: "tab"; tab: PanelId }
   | { type: "households" }
+  | { type: "walkers" }
+  | { type: "legend"; legend: LegendMode }
+  | { type: "follow"; follow: Selection | null }
+  | { type: "replay"; replay: Replay }
+  | { type: "playback"; planner: Replay; playback: Playback | null; note?: string | null }
   | { type: "trips" }
   | { type: "close"; edgeId: number; t: number }
   | { type: "undo"; edgeId: number };
@@ -119,13 +138,15 @@ function reducer(state: Model, action: Action): Model {
           liveDetail: null,
           snapshot: publishedState,
           previous: null,
-          clock: fixtureClock,
+          clock: 0,
           plans: withPlan([], publishedState.plan),
           comparison: publishedComparison,
           scatter: publishedScatter,
           scatterBatch: publishedScatter[0]?.batchId ?? null,
           scatterTotal: publishedScatter[0]?.nTotal ?? null,
-          notice: "Fixture mode. The map is allston_flood_v1. The comparison table is the published fixture until Live loads GET /comparison.",
+          notice: "Fixture mode: allston_flood_v1 replayed end to end from the engine (contracts/fixtures/playback*.json). Press Play.",
+          playbacks: { ...fixturePlaybacks },
+          playbackNote: null,
         };
       }
       return {
@@ -135,6 +156,8 @@ function reducer(state: Model, action: Action): Model {
         scatterBatch: null,
         scatterTotal: null,
         notice: null,
+        playbacks: { ember: null, baseline: null },
+        playbackNote: null,
       };
     case "api":
       return { ...state, apiBase: action.apiBase };
@@ -217,7 +240,12 @@ function reducer(state: Model, action: Action): Model {
         snapshot: { ...state.snapshot, metrics: { ...state.snapshot.metrics, ...action.metrics } },
       };
     case "select":
-      return { ...state, selection: action.selection, tab: action.selection ? "inspector" : state.tab };
+      return {
+        ...state,
+        selection: action.selection,
+        tab: action.selection ? "inspector" : state.tab,
+        follow: action.selection && state.follow && (action.selection.kind !== state.follow.kind || action.selection.id !== state.follow.id) ? null : state.follow,
+      };
     case "notice":
       return { ...state, notice: action.notice };
     case "busy":
@@ -226,6 +254,20 @@ function reducer(state: Model, action: Action): Model {
       return { ...state, tab: action.tab };
     case "households":
       return { ...state, showHouseholds: !state.showHouseholds };
+    case "walkers":
+      return { ...state, showWalkers: !state.showWalkers };
+    case "legend":
+      return { ...state, legend: action.legend };
+    case "follow":
+      return { ...state, follow: action.follow, selection: action.follow ?? state.selection };
+    case "replay":
+      return { ...state, replay: action.replay };
+    case "playback":
+      return {
+        ...state,
+        playbacks: { ...state.playbacks, [action.planner]: action.playback },
+        playbackNote: action.note === undefined ? state.playbackNote : action.note,
+      };
     case "trips":
       return { ...state, showTrips: !state.showTrips };
     case "close":
@@ -248,9 +290,9 @@ const initial: Model = {
   liveDetail: null,
   snapshot: publishedState,
   previous: null,
-  clock: fixtureClock,
+  clock: 0,
   playing: false,
-  speed: 60,
+  speed: 30,
   comparison: publishedComparison,
   scatter: publishedScatter,
   scatterBatch: publishedScatter[0]?.batchId ?? null,
@@ -258,18 +300,66 @@ const initial: Model = {
   plans: withPlan([], publishedState.plan),
   judge: [],
   selection: null,
-  notice: null,
+  notice: "Fixture mode: allston_flood_v1 replayed end to end from the engine. Press Play, or jump to Judge's corner.",
   showHouseholds: true,
   showTrips: false,
   busy: null,
   tab: "ledger",
+  legend: "status",
+  follow: null,
+  replay: "ember",
+  playbacks: { ...fixturePlaybacks },
+  playbackNote: null,
+  showWalkers: true,
 };
 
 export function App() {
   const [model, dispatch] = useReducer(reducer, initial);
+  const playback = model.playbacks[model.replay];
+  const replaying = playback != null && playback.scenario_id === model.snapshot.scenario_id;
+  // the picture at the clock: the replay over the base snapshot, or the snapshot itself
+  const display = useMemo(
+    () => perf("display", () => (replaying && playback ? stateFromPlayback(playback, model.snapshot, model.clock) : model.snapshot)),
+    [replaying, playback, model.snapshot, model.clock],
+  );
   const closures = useMemo(
-    () => closedEdges(model.snapshot, model.clock, model.judge),
-    [model.snapshot, model.clock, model.judge],
+    () => perf("closures", () => closedEdges(display, model.clock, model.judge)),
+    [display, model.clock, model.judge],
+  );
+
+  // every household (full shared town) for lit homes and the walking crowd; the fixture's 1-in-12 sample until it loads
+  const [fullTown, setFullTown] = useState<FullTown | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void loadFullTown().then((loaded) => {
+      if (alive) setFullTown(loaded);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const background: BgHousehold[] = useMemo(
+    () => fullTown?.households ?? (town.households as BgHousehold[]),
+    [fullTown],
+  );
+  const backgroundById = useMemo(() => new Map(background.map((household) => [household.id, household])), [background]);
+  const graph = useMemo(
+    () => buildGraph(town.nodes, town.edges, scenario.hazard.keyframes, playback?.closures),
+    [playback],
+  );
+  const shelterNode = model.snapshot.facilities.find((facility) => facility.type === "shelter")?.node ?? null;
+  const assistedKey = model.snapshot.households.map((household) => household.household_id).join(",");
+  const walkers = useMemo(
+    () =>
+      planWalkers({
+        households: background,
+        assisted: new Set(model.snapshot.households.map((household) => household.household_id)),
+        graph,
+        shelterNode,
+        exitNodes: fullTown?.exits ?? ((town as unknown as { exits?: number[] }).exits ?? []),
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [background, graph, shelterNode, assistedKey, fullTown],
   );
   const frame = model.snapshot.scenario_id === scenario.scenario_id ? activeKeyframe(model.clock) : null;
   const awayFromSnapshot = Math.abs(model.clock - model.snapshot.t_s) > 30;
@@ -370,6 +460,35 @@ export function App() {
       stop();
     };
   }, [model.mode, model.apiBase]);
+
+  // live: fetch the replay of the current plan (and the baseline when asked) after every new plan version
+  const livePlanVersion = model.mode === "live" ? model.snapshot.plan?.version ?? model.snapshot.plan_version : null;
+  useEffect(() => {
+    if (model.mode !== "live" || livePlanVersion == null) return;
+    let cancelled = false;
+    const root = model.apiBase.replace(/\/$/, "");
+    const planners: Replay[] = model.replay === "baseline" ? ["ember", "baseline"] : ["ember"];
+    for (const planner of planners) {
+      getJson(`${root}/playback?planner=${planner}`, 30000)
+        .then((body) => {
+          if (cancelled) return;
+          const pb = asPlayback(body);
+          dispatch({ type: "playback", planner, playback: pb, note: pb ? null : "GET /playback returned no replay; vehicles move between snapshots." });
+        })
+        .catch((error: unknown) => {
+          if (cancelled) return;
+          dispatch({
+            type: "playback",
+            planner,
+            playback: null,
+            note: `Live replay unavailable (${error instanceof Error ? error.message : "GET /playback failed"}); vehicles move between snapshots.`,
+          });
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [model.mode, model.apiBase, livePlanVersion, model.replay]);
 
   const clockRef = useRef(model.clock);
   clockRef.current = model.clock;
@@ -554,11 +673,11 @@ export function App() {
   }
 
   // KPIs show what the current plan is projected to achieve over the whole horizon; "so far" is the outcome at the clock
-  const soFar = model.snapshot.metrics;
-  const projected = model.snapshot.plan?.metrics;
+  const soFar = display.metrics;
+  const projected = display.plan?.metrics;
   const metrics = projected ?? soFar;
-  const planVersion = model.snapshot.plan?.version ?? model.snapshot.plan_version;
-  const hospital = model.snapshot.facilities.find((facility) => facility.type === "hospital");
+  const planVersion = display.plan?.version ?? display.plan_version;
+  const hospital = display.facilities.find((facility) => facility.type === "hospital");
 
   return (
     <div className="app">
@@ -583,21 +702,29 @@ export function App() {
               onChange={(event) => dispatch({ type: "clock", t: Number(event.target.value) })}
             />
           </label>
-          <label>
-            Speed
-            <select
-              value={model.speed}
-              onChange={(event) => dispatch({ type: "speed", speed: Number(event.target.value) })}
-            >
-              <option value={30}>30×</option>
-              <option value={60}>60×</option>
-              <option value={300}>300×</option>
-              <option value={1200}>1200×</option>
-            </select>
-          </label>
+          <div className="segmented small" role="group" aria-label="Speed">
+            {SPEEDS.map((speed) => (
+              <button key={speed} className={model.speed === speed ? "on" : ""} onClick={() => dispatch({ type: "speed", speed })}>
+                {speed}×
+              </button>
+            ))}
+          </div>
           <p className="meta">{frame ? frame.label ?? `Keyframe ${formatSim(frame.t_s)}` : "Dry"}</p>
         </div>
         <div className="mode">
+          <div className="segmented" role="group" aria-label="Plan replayed on the map">
+            <button className={model.replay === "ember" ? "on" : ""} onClick={() => dispatch({ type: "replay", replay: "ember" })}>
+              EMBER plan
+            </button>
+            <button className={model.replay === "baseline" ? "on baseline" : ""} onClick={() => dispatch({ type: "replay", replay: "baseline" })}>
+              Baseline
+            </button>
+          </div>
+          <p className={`meta ${replaying ? "live-live" : ""}`}>
+            {replaying
+              ? `● Replaying ${playback?.planner === "baseline" ? "the baseline" : `plan v${playback?.plan_version ?? "?"}`}`
+              : model.playbackNote ?? "Snapshots only"}
+          </p>
           <div className="segmented" role="group" aria-label="Data source">
             <button
               className={model.mode === "fixture" ? "on" : ""}
@@ -649,7 +776,7 @@ export function App() {
         <Kpi label="Vehicle-km" value={metrics?.vehicle_km} digits={0} />
       </section>
       <main className="workspace">
-      {awayFromSnapshot ? (
+      {awayFromSnapshot && !replaying ? (
         <p className="banner">
           Flood extent and road closures follow the clock. Household status, facility state,
           and resource positions stay at the {formatSim(model.snapshot.t_s)}{" "}
@@ -657,21 +784,36 @@ export function App() {
         </p>
       ) : null}
         <MapView
-          state={model.snapshot}
-          previous={model.previous}
+          state={display}
+          previous={replaying ? null : model.previous}
           t={model.clock}
           closures={closures}
+          playback={replaying ? playback : null}
+          walkers={walkers}
+          background={background}
+          backgroundById={backgroundById}
           showHouseholds={model.showHouseholds}
           showTrips={model.showTrips}
+          showWalkers={model.showWalkers}
+          legend={model.legend}
+          onLegend={(legend) => dispatch({ type: "legend", legend })}
+          selection={model.selection}
+          follow={model.follow}
+          onFollow={(follow) => dispatch({ type: "follow", follow })}
           onSelect={(selection) => dispatch({ type: "select", selection })}
         />
         <Panels
           tab={model.tab}
           onTab={(tab) => dispatch({ type: "tab", tab })}
-          state={model.snapshot}
+          state={display}
           t={model.clock}
           closures={closures}
           selection={model.selection}
+          playback={replaying ? playback : null}
+          walkers={walkers}
+          follow={model.follow}
+          onFollow={(follow) => dispatch({ type: "follow", follow })}
+          onSelect={(selection) => dispatch({ type: "select", selection })}
           comparison={model.comparison}
           scatter={model.scatter}
           scatterTotal={model.scatterTotal}
@@ -693,7 +835,11 @@ export function App() {
             checked={model.showHouseholds}
             onChange={() => dispatch({ type: "households" })}
           />
-          Background households
+          Lit homes
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={model.showWalkers} onChange={() => dispatch({ type: "walkers" })} />
+          Neighbours on foot (illustrative)
         </label>
         <label className="check">
           <input type="checkbox" checked={model.showTrips} onChange={() => dispatch({ type: "trips" })} />
@@ -701,7 +847,14 @@ export function App() {
         </label>
         <details>
           <summary>What is synthetic</summary>
-          <p>{(model.snapshot.synthetic ?? scenario.synthetic ?? []).join(" · ")}</p>
+          <p>
+            {[
+              ...(model.snapshot.synthetic ?? scenario.synthetic ?? []),
+              "household names and members are generated from ids",
+              "neighbours on foot, people gathering at doors and the walking share are illustrative (not simulated, not in any metric)",
+              "vehicles, pickups, deadlines, facility states and overflow come from the engine's simulation",
+            ].join(" · ")}
+          </p>
         </details>
         {model.mode === "live" ? (
           <ApiField value={model.apiBase} onCommit={(apiBase) => dispatch({ type: "api", apiBase })} />
