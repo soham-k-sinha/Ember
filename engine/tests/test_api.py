@@ -81,3 +81,13 @@ def test_assignment_events_shape():
                                                                     {"assignment_id": "a0", "change": "removed", "note": "x"}]}
     ev = assignment_events(plan)
     assert ev[0]["assignment"] == {"id": "a1"} and ev[1]["assignment"] is None and ev[1]["note"] == "x"
+
+
+def test_moves_budget_reaches_the_allocator(town):
+    s = EngineSession(FX / "scenario.fixture.json", world=World.from_dict(town), moves=5)
+    s.start()
+    assert s.plan["search"]["moves_scored"] <= 5
+    out = s.add_report(s.make_report("facility_status", 3000, source="operator", facility_id="mt_auburn",
+                                     payload={"set": {"backup_endurance_s": 600}}))
+    assert out["plan"]["search"]["moves_scored"] <= 5
+    assert validate_state(out["state"], s.scn, town) == []
