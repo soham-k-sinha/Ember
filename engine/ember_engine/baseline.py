@@ -55,11 +55,12 @@ def baseline_plan(world, scn: dict, reports=(), version: int = 1) -> dict:
                 continue
             _, s, start = best
             leg = ctx.travel(s.spec, s.node, node)
-            back = float(ctx.tb(ctx.base_node)[node]) / float(s.spec.get("speed_factor", 1.0))
+            drop = ctx.dropoff_for(ref)   # same drop-off rule as EMBER, so the comparison isolates the planning
+            back = float(ctx.tb(ctx.fac_node[drop])[node]) / float(s.spec.get("speed_factor", 1.0))
             eta = start + leg
-            s.free_at, s.node = eta + float(s.spec.get("service_s", 300)) + back + 120.0, ctx.base_node
+            s.free_at, s.node = eta + float(s.spec.get("service_s", 300)) + back + 120.0, ctx.fac_node[drop]
             assignments.append({"id": f"a-{s.rid}-{ref}", "plan_version": version, "resource_id": s.rid, "task": "rescue",
-                                "target": {"household_id": ref}, "dropoff_facility_id": ctx.base, "eta_s": round(eta, 1),
+                                "target": {"household_id": ref}, "dropoff_facility_id": drop, "eta_s": round(eta, 1),
                                 "deadline_s": ctx.deadline.get(ref), "status": "proposed", "not_before_t_s": t_alert,
                                 "rationale": f"incident-by-incident: alert at {t_alert/60:.0f} min; nearest available "
                                              f"{s.spec['name']} ({leg/60:.0f} min away)"})

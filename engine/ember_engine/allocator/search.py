@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass, replace
 
 from ..models.facilities import compatible
-from ..sim.plan_sim import simulate
+from ..sim.plan_sim import cut_at, simulate
 from .context import VEHICLES, Context, Slot
 
 PROTECT_TYPES = ("pumping_station", "hospital", "clinic")
@@ -65,18 +65,19 @@ class Carry:
     movable: list       # kept protect assignments a variant may cancel to re-target the generator
     prev_queues: dict = None   # rid → [hid] of the previous plan's not-started rescues (the low-churn candidate)
     prev_pairs: set = None     # (rid, hid) of the previous plan's rescues not yet started
+    pinned: dict = None        # (rid, hid) → confirmed, not-started rescue: stays on that vehicle, keeps its place in the queue
 
 
 def carry_over(ctx: Context, prev: dict | None, prev_reports) -> Carry:
     slots = ctx.fleet()
     if not prev:
-        return Carry([], slots, set(), {}, [], {}, set())
+        return Carry([], slots, set(), {}, [], {}, set(), {})
     t = ctx.t_now
     res = simulate(ctx.world, ctx.scn, prev, reports=prev_reports)
     i = res.tick_index(t)
     out = {o["assignment_id"]: o for o in res.outcomes}
     kept, served, protected, movable = [], set(), {}, []
-    prev_queues, prev_pairs = {}, set()
+    prev_queues, prev_pairs, pinned = {}, set(), {}
     for rid, s in slots.items():   # where each resource is at t_now
         tl = res.timeline["res"][rid]
         n = tl["node"][i]
@@ -85,9 +86,16 @@ def carry_over(ctx: Context, prev: dict | None, prev_reports) -> Carry:
         s.available = tl["status"][i] != "out_of_service"
     for a in prev.get("assignments", []):
         o = out[a["id"]]
-        if a.get("status") == "cancelled" or (a.get("cancelled_at_t_s") is not None and a["cancelled_at_t_s"] <= t):
+        status = a.get("status")
+        if status == "rejected":   # a person declined: history, and never this vehicle for that target again
+            kept.append(a if a.get("cancelled_at_t_s") is not None else dict(a, cancelled_at_t_s=t))
+            ctx.banned.add((a["resource_id"], a["target"].get("household_id", a["target"].get("facility_id"))))
+            continue
+        if cut_at(a) is not None and cut_at(a) <= t:
             kept.append(a)   # history
             continue
+        if a.get("cancelled_at_t_s") is not None:   # a decline taken back (status live again): a live assignment
+            a = dict(a, cancelled_at_t_s=None)
         ended = o["end_t"] is not None and o["end_t"] <= t
         started = o["start_t"] is not None and o["start_t"] <= t
         s = slots[a["resource_id"]]
@@ -112,17 +120,19 @@ def carry_over(ctx: Context, prev: dict | None, prev_reports) -> Carry:
         picked = o["pickup_t"] is not None and o["pickup_t"] <= t
         if started and (picked or ctx.eligible(s.spec, hid)):
             kept.append(a); served.add(hid)
-            done_at = o["complete_t"] if o["complete_t"] is not None else ctx.rescue_cycle(s, hid)[1]
-            s.free_at, s.node = max(s.free_at, done_at), ctx.base_node
+            drop = a.get("dropoff_facility_id") if a.get("dropoff_facility_id") in ctx.fac else None
+            done_at = o["complete_t"] if o["complete_t"] is not None else ctx.rescue_cycle(s, hid, drop)[1]
+            s.free_at, s.node = max(s.free_at, done_at), ctx.after_rescue(hid, drop)
         elif started:
             kept.append(dict(a, status="cancelled", cancelled_at_t_s=t))       # new facts made it infeasible
         elif a.get("status") == "confirmed" and ctx.eligible(s.spec, hid):
-            kept.append(a); served.add(hid)                                     # sticky
-            s.free_at = ctx.rescue_cycle(s, hid)[1]; s.node = ctx.base_node
+            pinned[(a["resource_id"], hid)] = a                                 # sticky, but not queue-jumping
+            prev_queues.setdefault(a["resource_id"], []).append(hid)
+            prev_pairs.add((a["resource_id"], hid))
         else:
             prev_queues.setdefault(a["resource_id"], []).append(hid)
             prev_pairs.add((a["resource_id"], hid))
-    return Carry(kept, slots, served, protected, movable, prev_queues, prev_pairs)
+    return Carry(kept, slots, served, protected, movable, prev_queues, prev_pairs, pinned)
 
 
 # ---------- construction ----------
@@ -169,7 +179,7 @@ def construct(ctx: Context, carry: Carry, pol: Policy) -> tuple[dict, list, dict
         threats.sort(key=(lambda kd: (crit(kd[0]), kd[1])) if pol.protect == "critical_first" else (lambda kd: (kd[1], crit(kd[0]))))
         for k, down_t in threats:
             cands = [s for s in slots.values() if s.spec["kind"] == "generator" and s.available and s.rid not in held
-                     and compatible(s.spec, ctx.fac[k])[0]]
+                     and compatible(s.spec, ctx.fac[k])[0] and (s.rid, k) not in ctx.banned]
             if not cands:
                 continue
             g = min(cands, key=lambda s: (s.free_at + ctx.travel(s.spec, s.node, ctx.fac_node[k]) > down_t, -s.spec["kw"],
@@ -184,11 +194,17 @@ def construct(ctx: Context, carry: Carry, pol: Policy) -> tuple[dict, list, dict
             for hid in hids:
                 if s is not None and s.available and hid in todo and ctx.eligible(s.spec, hid):
                     queues[rid].append(hid)
-                    s.free_at, s.node = ctx.rescue_cycle(s, hid)[1], ctx.base_node
+                    s.free_at, s.node = ctx.rescue_cycle(s, hid)[1], ctx.after_rescue(hid)
                     todo.remove(hid)
+    pin = {hid: rid for rid, hid in (carry.pinned or {})}
     for hid in _order(ctx, todo, "deadline" if pol.order == "previous" else pol.order):
         need = ctx.needs[hid]
         mob = need.get("mobility") or need.get("accessible_vehicle")
+        if hid in pin and pin[hid] in queues:   # confirmed: that vehicle, in deadline order with the rest of its queue
+            s = slots[pin[hid]]
+            queues[s.rid].append(hid)
+            s.free_at, s.node = ctx.rescue_cycle(s, hid)[1], ctx.after_rescue(hid)
+            continue
         best = None
         for s in slots.values():
             if not s.available or s.rid in held or not ctx.eligible(s.spec, hid):
@@ -204,7 +220,7 @@ def construct(ctx: Context, carry: Carry, pol: Policy) -> tuple[dict, list, dict
         if pol.feasible_only and d is not None and arrive > d:
             continue
         queues[s.rid].append(hid)
-        s.free_at, s.node = free, ctx.base_node
+        s.free_at, s.node = free, ctx.after_rescue(hid)
     return queues, protects, cancels
 
 
@@ -212,7 +228,8 @@ def assemble(ctx: Context, carry: Carry, queues: dict, protects: list, cancels: 
     t = ctx.t_now
     nb = t if t > 0 else None
     out = [dict(a, status="cancelled", cancelled_at_t_s=t) if a["id"] in cancels else a for a in carry.kept]
-    ids = {a["id"] for a in out}
+    pinned = carry.pinned or {}
+    ids = {a["id"] for a in out} | {a["id"] for a in pinned.values()}
 
     def new_id(base):
         i, k = base, 2
@@ -224,12 +241,29 @@ def assemble(ctx: Context, carry: Carry, queues: dict, protects: list, cancels: 
         out.append({"id": new_id(f"a-{rid}-{fid}"), "plan_version": version, "resource_id": rid, "task": "protect",
                     "target": {"facility_id": fid}, "dropoff_facility_id": None, "eta_s": 0.0, "status": "proposed",
                     "not_before_t_s": nb, "rationale": ""})
+    room = {k: float(ctx.fac[k].get("capacity_people", float("inf"))) for k in ctx.dropoffs}
+    for a in out:   # people already headed to a drop-off by kept work
+        if a["task"] == "rescue" and a.get("dropoff_facility_id") in room and cut_at(a) is None:
+            room[a["dropoff_facility_id"]] -= _people(ctx, a["target"]["household_id"])
+
+    def dropoff(hid):   # nearest drop-off with room; the nearest one if all are full
+        k = next((k for k in ctx.dropoff_order(hid) if room[k] >= _people(ctx, hid)), ctx.dropoff_for(hid))
+        room[k] -= _people(ctx, hid)
+        return k
     for rid, hids in queues.items():
         for hid in hids:
+            if (rid, hid) in pinned:
+                out.append(pinned[(rid, hid)])
+                continue
             out.append({"id": new_id(f"a-{rid}-{hid}"), "plan_version": version, "resource_id": rid, "task": "rescue",
-                        "target": {"household_id": hid}, "dropoff_facility_id": ctx.base, "eta_s": 0.0, "status": "proposed",
+                        "target": {"household_id": hid}, "dropoff_facility_id": dropoff(hid), "eta_s": 0.0, "status": "proposed",
                         "not_before_t_s": nb, "rationale": ""})
     return out
+
+
+def _people(ctx: Context, hid: int) -> int:
+    need = ctx.needs.get(hid)
+    return int(need["people"]) if isinstance(need, dict) else 0
 
 
 # ---------- search ----------
@@ -337,13 +371,14 @@ def allocate(world, scn: dict, reports=(), t_now: float = 0.0, prev: dict | None
 def _move(ctx: Context, carry: Carry, q: dict, rng: random.Random) -> bool:
     """One random neighbourhood move on the rescue queues (in place). False if nothing applicable."""
     vehicles = [k for k in q if carry.slots[k].available]
-    assigned = [(k, i) for k in q for i in range(len(q[k]))]
+    pin = {hid: rid for rid, hid in (carry.pinned or {})}
+    assigned = [(k, i) for k in q for i in range(len(q[k])) if q[k][i] not in pin]   # pinned: reorder only
     in_q = {h for v in q.values() for h in v}
     unserved = [h for h in ctx.hh if h not in carry.served and h not in in_q and ctx.needs[h] != "unknown"]
     kind = rng.choice(["relocate", "swap", "reorder", "insert", "drop"])
     if kind == "insert" and unserved:
         h = rng.choice(sorted(unserved))
-        ok = [k for k in vehicles if ctx.eligible(carry.slots[k].spec, h)]
+        ok = [k for k in vehicles if ctx.eligible(carry.slots[k].spec, h) and pin.get(h, k) == k]
         if not ok:
             return False
         k = rng.choice(ok)
