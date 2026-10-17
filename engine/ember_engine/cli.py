@@ -386,7 +386,8 @@ def cmd_diorama(a):
     v = town["venue"]
     bbox = rect_around(v["lon"], v["lat"], a.half_w, a.half_h, a.dx, a.dy)
     t0 = time.time()
-    out = build(bbox, DATA / "diorama_raw" / a.name, (v["lon"], v["lat"]))
+    key = "_".join(f"{x:.5f}" for x in bbox).replace("-", "m")  # raw downloads are per rectangle
+    out = build(bbox, DATA / "diorama_raw" / f"{a.name}_{key}", (v["lon"], v["lat"]))
     path = ROOT / "web" / "public" / "diorama" / f"{a.name}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(out, separators=(",", ":"), allow_nan=False))

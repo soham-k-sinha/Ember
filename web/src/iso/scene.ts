@@ -13,6 +13,7 @@ import { bakeGround, FOOT, groundMatrix, P, ROAD_W, SHADOW_P, type TreeSpot } fr
 import { hashN } from "./palette";
 import type { Projector } from "./project";
 import { GroundTiles } from "./tiles";
+import { buildProps } from "./props";
 
 const SLAB_M = 4.5;
 
@@ -304,6 +305,16 @@ export function buildStatic(data: Diorama, p: Projector): StaticScene {
     }
     return false;
   };
+
+  // parked cars, the construction site's fence, cabins, piles and cranes
+  const extra = buildProps(data, p, insideBuilding);
+  for (const prop of extra.props) {
+    prop.node.zIndex = depthFor(prop.a, prop.b, prop.node.x, prop.node.y, 2.5, 3);
+    objects.addChild(prop.node);
+    cullables.push({ node: prop.node, bounds: prop.bounds });
+    lit.push(prop.node);
+  }
+  labels.push(...extra.labels);
 
   const ensureFull = (rec: BuildingRec) => {
     if (rec.full) return rec.full;
