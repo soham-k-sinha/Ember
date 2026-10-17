@@ -269,8 +269,10 @@ def search(world, scn: dict, reports=(), t_now: float = 0.0, prev: dict | None =
     version = (prev.get("version", 0) + 1) if prev else 1
     moves = moves if moves is not None else (REPLAN_MOVES if prev else INITIAL_MOVES)
     pols = list(policies or POLICIES)
-    if carry.movable:
-        pols += [replace(p, move_generators=True) for p in pols[:2]] + [Policy(protect="critical_first", move_generators=True)]
+    if carry.movable:   # every rescue rule also gets a variant that may re-target generators already committed
+        pols += [replace(p, move_generators=True) for p in pols if p.protect != "none" and not p.move_generators]
+        pols.append(Policy(protect="critical_first", move_generators=True))
+        pols = list(dict.fromkeys(pols))
 
     def churn(q) -> int:
         if not carry.prev_pairs:

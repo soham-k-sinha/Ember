@@ -176,3 +176,11 @@ Run: backend + web, Live → Scatter → Optimize (verified: 100 runs local in 1
 Interfaces: none (reads existing plan.search.robust).
 Status: done. `npm run build` OK.
 Next: D50 visual pass (tilted camera, dark basemap, extruded buildings).
+
+## 2026-10-17 04:20 · allocator: generators re-targeted under every rescue rule + computed trade-off text · branch aryaman/generator-retarget-search · commit (this PR)
+What: found while checking the infrastructure beat. From minute 30 the plan left Mount Auburn without power (190 min outage) although moving Generator 1 there changed no rescue — strictly better under the lexicographic objective. Cause: the "re-target committed generators" variant existed only for the two previous-order policies and critical_first, whose rescue schedules are worse, so it never won on people. Now every generator-protecting rule gets a re-target variant (≈+16 candidates, replan 0.55 → 0.7 s). Explanations: an unprotected at-risk facility's `blocked_by` now carries a counterfactual sim ("sending Generator 1 here instead (rest of the plan unchanged, simulated): hospital outage 13 → 215 min, overflow 9,600 → 0 m³" + the ranking rule); a newly chosen protect rationale says "chosen over X: …"; a generator re-planned onto the same facility says "re-routed" / "replaces …, ETA 14 → 25 min (route changed: road reported closed)" instead of "re-targeted to cottage-farm". Judge beat: gen-1 now ETA 14 → 25 (was 32). Compare numbers unchanged (+50.6 people, −2,165 m³, −44 min).
+Files: engine/ember_engine/allocator/{search,explain}.py, engine/tests/test_demo_beats.py, docs/DEMO.md, docs/QA.md (corrected claims this makes false), docs/log/aryaman.md
+Run: uv run --project engine pytest -q engine/tests/test_demo_beats.py
+Interfaces: none (unresolved.blocked_by and rationale are free text). Daytona snapshot rebuilt → ember-engine-6a73b6188a; live robust: 100 runs, 8 sandboxes, 13.5 s.
+Status: done. 87 engine tests (new one fails on the old search); smoke OK; seed state unchanged.
+Next: more engine/product correctness (web lane is with the web-street-level session).

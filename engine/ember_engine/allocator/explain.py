@@ -45,9 +45,19 @@ def explain(ctx: Context, carry, assignments: list, res, reports, version: int, 
         if a.get("status") == "cancelled" and a.get("cancelled_at_t_s") == ctx.t_now:
             moved_to = [b["target"].get("facility_id") or b["target"].get("household_id") for b in assignments
                         if b["resource_id"] == a["resource_id"] and b.get("plan_version") == version and b.get("status") != "cancelled"]
+            own = a["target"].get("facility_id") or a["target"].get("household_id")
             a["rationale"] = (f"cancelled at {mins(ctx.t_now)} by plan v{version}"
-                              + (f": {res_name[a['resource_id']]} re-targeted to {moved_to[0]}" if moved_to else ": no longer feasible with the new facts")
+                              + (f": {res_name[a['resource_id']]} re-routed to the same target from where it is now" if moved_to and moved_to[0] == own
+                                 else f": {res_name[a['resource_id']]} re-targeted to {moved_to[0]}" if moved_to else ": no longer feasible with the new facts")
                               + f" (was: {a.get('rationale', '')})")
+        elif a["task"] == "protect" and a.get("plan_version") == version and prev:
+            # a generator re-planned onto the same facility: say what it replaces and why the ETA moved
+            old = next((b for b in prev.get("assignments", []) if b["resource_id"] == a["resource_id"] and b["task"] == "protect"
+                        and b["target"] == a["target"] and b.get("status") != "cancelled"), None)
+            if old is not None:
+                closed = any(r["kind"] == "closure_report" and float(r["observed_at_t_s"]) <= ctx.t_now for r in ctx.known_reports)
+                a["rationale"] += (f" · v{version}: replaces {old['id']}, ETA {mins(float(old['eta_s']))} → {mins(a['eta_s'])}"
+                                   + (" (route changed: road reported closed)" if closed else ""))
         final.append(a)
 
     # unmet needs + questions
@@ -81,10 +91,17 @@ def explain(ctx: Context, carry, assignments: list, res, reports, version: int, 
         gens = [x for x in scn["resources"] if x["kind"] == "generator"]
         fit = [x for x in gens if compatible(x, f)[0]]
         busy = [a for a in final if a["task"] == "protect" and a["resource_id"] in {x["id"] for x in fit} and a.get("status") != "cancelled"]
+        blocked = ("no compatible generator in the fleet" if not fit else
+                   f"the only compatible generator is protecting {busy[0]['target']['facility_id']}" if busy else
+                   "keeping a compatible generator in reserve scored better")
+        if busy:
+            alt = _swap_metrics(ctx, final, busy[0], k, reports, version)
+            blocked += (f"; sending {res_name[busy[0]['resource_id']]} here instead (rest of the plan unchanged, simulated): "
+                        f"{_deltas(res.metrics, alt)}. {RANKING}")
+            if busy[0].get("plan_version") == version:
+                busy[0]["rationale"] += f" · chosen over {f['name']}: sending it there instead would mean {_deltas(res.metrics, alt)}"
         unresolved.append({"target": {"facility_id": k}, "need": f"{f.get('power_kw_required', 0):.0f} kW on {f['connector']} before {mins(down_t)}",
-                           "blocked_by": ("no compatible generator in the fleet" if not fit else
-                                          f"the only compatible generator is protecting {busy[0]['target']['facility_id']}" if busy else
-                                          "keeping a compatible generator in reserve scored better"),
+                           "blocked_by": blocked,
                            "would_unblock": "a second compatible generator, or a longer backup endurance report from the operator"})
         if f.get("backup_endurance_s"):
             info.append({"id": f"q-{k}", "to": {"facility_id": k}, "question": "How many hours of backup power do you have on site right now?",
@@ -128,6 +145,34 @@ def _protect_why(ctx, a, o, assignments, res, reports, res_name) -> str:
     conn = f"connected {mins(o['complete_t'])}" if o["complete_t"] is not None else f"simulated outcome: {o['status']} ({o['reason']})"
     return (f"{res_name[a['resource_id']]} → {f['name']}: {risk}; " + ("; ".join(gains) or "no simulated benefit in this horizon")
             + f" (simulated with vs without); {conn}")
+
+
+RANKING = "The plan ranks people not reached first, then hospital outage, then overflow."
+
+
+def _swap_metrics(ctx, final: list, protect: dict, facility_id: str, reports, version: int) -> dict:
+    """Simulated metrics if `protect`'s generator went to `facility_id` instead, everything else unchanged.
+    A job new in this version is retargeted; a carried-over one is cancelled now and replaced, as a replan would."""
+    t = ctx.t_now
+    if protect.get("plan_version") == version:
+        alt = [dict(a, target={"facility_id": facility_id}) if a["id"] == protect["id"] else a for a in final]
+    else:
+        alt = [dict(a, status="cancelled", cancelled_at_t_s=t) if a["id"] == protect["id"] else a for a in final]
+        alt.append(dict(protect, id=f"{protect['id']}-swap", plan_version=version, target={"facility_id": facility_id},
+                        status="proposed", not_before_t_s=t if t > 0 else None, cancelled_at_t_s=None))
+    return simulate(ctx.world, ctx.scn, {"assignments": alt}, reports=reports, record=False).metrics
+
+
+def _deltas(now: dict, alt: dict) -> str:
+    """'people not reached 5 → 7, hospital outage 190 → 16 min, overflow 0 → 9,600 m³' (only what changes)."""
+    parts = []
+    if alt["people_unreached"] != now["people_unreached"]:
+        parts.append(f"people not reached {now['people_unreached']} → {alt['people_unreached']}")
+    if round(alt["hospital_outage_s"] / 60) != round(now["hospital_outage_s"] / 60):
+        parts.append(f"hospital outage {now['hospital_outage_s'] / 60:.0f} → {mins(alt['hospital_outage_s'])}")
+    if round(alt["overflow_m3"]) != round(now["overflow_m3"]):
+        parts.append(f"overflow {now['overflow_m3']:,.0f} → {alt['overflow_m3']:,.0f} m³")
+    return ", ".join(parts) or "no simulated difference"
 
 
 def _why_unmet(ctx, hid, need, d, o, out, final, held, res_name) -> dict:

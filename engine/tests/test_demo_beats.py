@@ -85,3 +85,22 @@ def test_operator_beat_at_minute_15_moves_the_generator_to_the_hospital(world, s
     m = plan["metrics"]
     assert m["hospital_outage_s"] < 1200 and m["overflow_m3"] > 1000
     assert any(u["target"].get("facility_id") == "cottage-farm" for u in plan["unresolved"])
+
+
+def test_late_operator_report_still_moves_the_generator_when_no_people_are_at_stake(world, scn):
+    """At minute 40 Generator 1 is already committed to Cottage Farm. Moving it to the hospital changes no rescue,
+    so the lexicographic objective (people, hospital outage, overflow) must pick the move, and the plan must say
+    what it costs."""
+    from ember_engine.api import EngineSession
+    s = EngineSession(SCN, world=world)
+    s.start()
+    out = s.add_report(s.make_report("facility_status", 2400, source="operator", facility_id="mt-auburn",
+                                     payload={"set": {"state": "backup", "backup_endurance_s": 600}}), 2400)
+    plan = out["plan"]
+    gen = [a for a in plan["assignments"] if a["task"] == "protect" and a.get("status") != "cancelled"]
+    assert [a["target"].get("facility_id") for a in gen] == ["mt-auburn"]
+    assert plan["metrics"]["hospital_outage_s"] < 1800
+    cf = next(u for u in plan["unresolved"] if u["target"].get("facility_id") == "cottage-farm")
+    assert "instead" in cf["blocked_by"] and "overflow" in cf["blocked_by"]
+    assert "chosen over" in gen[0]["rationale"]
+    assert plan["search"]["wall_s"] < 2.0
