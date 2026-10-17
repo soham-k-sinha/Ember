@@ -9,13 +9,14 @@ import { Application, Container, Graphics, Sprite, Text, type FederatedPointerEv
 import { loadDiorama, type Diorama } from "./data";
 import { agentWorld, buildAgents, waitLonLat, type AgentWorld } from "./agents";
 import { Crowd } from "./crowd";
+import { FloodWater } from "./water";
 import { clockLabel, lightAt, tint } from "./lighting";
 import { SKY_BG } from "./palette";
 import { scenario, town } from "../fixtures";
 import { householdColor, peopleCount, type LegendMode } from "../layers";
 import type { WalkerPlan } from "../people";
 import { pathAhead, type Playback } from "../playback";
-import type { Closure, FloodGeometry, Selection, StateFacility, StateResource, StateSnapshot } from "../types";
+import type { Closure, Selection, StateFacility, StateResource, StateSnapshot } from "../types";
 import { edgePoint, projector, type Projector } from "./project";
 import { buildStatic, type StaticScene } from "./scene";
 
@@ -66,7 +67,8 @@ type Ctx = {
   scene: StaticScene;
   world: Container;
   dyn: Container;
-  flood: Graphics;
+  flood: FloodWater;
+  floodTint: number;
   closed: Graphics;
   trails: Graphics;
   decals: Graphics; // selection rings on the ground
@@ -87,7 +89,6 @@ type Ctx = {
   hits: Container;
   pills: Map<string, Pill>;
   pillLayer: Container;
-  floodKey: unknown;
   closedKey: string;
   cam: { x: number; y: number; s: number };
   drag: { on: boolean; moved: boolean; x: number; y: number } ;
@@ -119,12 +120,12 @@ export function IsoView(props: IsoProps) {
       const scene = buildStatic(data, p);
       const world = new Container();
       const dyn = new Container();
-      const flood = new Graphics();
+      const flood = new FloodWater(p, scenario.hazard.keyframes);
       const closed = new Graphics();
       const trails = new Graphics();
       const decals = new Graphics();
       const marks = new Container();
-      dyn.addChild(flood, closed, trails, marks, decals);
+      dyn.addChild(flood.root, closed, trails, marks, decals);
       dyn.mask = scene.slabMask;
       const top = new Graphics();
       world.addChild(scene.slab, scene.ground, scene.tiles.ground, scene.shadow, scene.tiles.shadow, scene.pools, scene.slabMask, dyn, scene.objects, top);
@@ -141,8 +142,8 @@ export function IsoView(props: IsoProps) {
       const s = Math.min(app.screen.width / (b.width * 1.08), app.screen.height / (b.height * 1.12));
       const cam = { s, x: app.screen.width / 2 - (b.x + b.width / 2) * s, y: app.screen.height / 2 - (b.y + b.height / 2) * s };
       const ctx: Ctx = {
-        app, data, p, scene, world, dyn, flood, closed, trails, decals, marks, top, crowd, aw, awFor: propsRef.current.playback, lastT: propsRef.current.t, lastNow: performance.now() / 1000, vehicles: new Map(), lightKey: "", fitS: s, focusKey: 0, target: null, overlay, haze, hits, pills: new Map(), pillLayer,
-        floodKey: null, closedKey: "", cam, drag: { on: false, moved: false, x: 0, y: 0 },
+        app, data, p, scene, world, dyn, flood, floodTint: 0xffffff, closed, trails, decals, marks, top, crowd, aw, awFor: propsRef.current.playback, lastT: propsRef.current.t, lastNow: performance.now() / 1000, vehicles: new Map(), lightKey: "", fitS: s, focusKey: 0, target: null, overlay, haze, hits, pills: new Map(), pillLayer,
+        closedKey: "", cam, drag: { on: false, moved: false, x: 0, y: 0 },
       };
       ctxRef.current = ctx;
       if (import.meta.env.DEV) (window as unknown as { __iso?: { app: Application; ctx: Ctx; frame: () => void } }).__iso = { app, ctx, frame: () => frame(ctx, propsRef.current) };
@@ -282,7 +283,7 @@ function frame(ctx: Ctx, props: IsoProps) {
     ctx.scene.tiles.shadow.alpha = ctx.scene.shadow.alpha;
   }
 
-  drawFlood(ctx, props, pulse);
+  drawFlood(ctx, props, now);
   drawClosures(ctx, props);
   drawTrails(ctx, props, t);
   drawPeople(ctx, props, t, now);
@@ -310,33 +311,8 @@ function positionOf(state: StateSnapshot, selection: Selection): [number, number
   return null;
 }
 
-function polys(geometry: FloodGeometry | null): [number, number][][][] {
-  if (!geometry) return [];
-  if (geometry.type === "Polygon") return [geometry.coordinates as [number, number][][]];
-  return geometry.coordinates as [number, number][][][];
-}
-
-function drawFlood(ctx: Ctx, props: IsoProps, pulse: number) {
-  const geometry = props.state.hazard.geometry ?? activeFlood(props.t);
-  if (ctx.floodKey !== geometry) {
-    ctx.floodKey = geometry;
-    const g = ctx.flood;
-    g.clear();
-    for (const poly of polys(geometry)) {
-      const [outer, ...holes] = poly;
-      g.poly(outer.flatMap(([lon, lat]) => ctx.p.lonlat(lon, lat))).fill({ color: 0x2f86ff, alpha: 0.5 });
-      for (const hole of holes) g.poly(hole.flatMap(([lon, lat]) => ctx.p.lonlat(lon, lat))).cut();
-      g.poly(outer.flatMap(([lon, lat]) => ctx.p.lonlat(lon, lat))).stroke({ width: 1.6, color: 0x9fd0ff, alpha: 0.95 });
-    }
-  }
-  ctx.flood.alpha = 0.82 + 0.18 * pulse;
-}
-
-// scenario keyframes, for when the snapshot carries no geometry (the replay path)
-function activeFlood(t: number): FloodGeometry | null {
-  let g: FloodGeometry | null = null;
-  for (const frame of scenario.hazard.keyframes) if (frame.t_s <= t) g = frame.geometry;
-  return g;
+function drawFlood(ctx: Ctx, props: IsoProps, now: number) {
+  ctx.flood.update(props.t, now, props.state.hazard.geometry ?? null, ctx.floodTint);
 }
 
 const EDGE_BY_ID = new Map(town.edges.map((edge) => [edge.id, edge]));
@@ -445,7 +421,7 @@ function applyLight(ctx: Ctx, t: number) {
   ctx.app.renderer.background.color = L.sky;
   ctx.haze.tint = (Math.round(L.haze[0]) << 16) | (Math.round(L.haze[1]) << 8) | Math.round(L.haze[2]);
   ctx.haze.alpha = L.hazeAlpha;
-  ctx.flood.tint = tint([Math.min(1, L.world[0] * 0.5 + 0.5), Math.min(1, L.world[1] * 0.5 + 0.5), Math.min(1, L.world[2] * 0.4 + 0.6)]);
+  ctx.floodTint = tint([Math.min(1, L.world[0] * 0.5 + 0.5), Math.min(1, L.world[1] * 0.5 + 0.5), Math.min(1, L.world[2] * 0.4 + 0.6)]);
 }
 
 function drawPeople(ctx: Ctx, props: IsoProps, t: number, now: number) {
