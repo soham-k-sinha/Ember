@@ -41,6 +41,8 @@ def resolve_thread(store: Store, role: str, household_id: int | None = None,
 def phone_thread(store: Store, phone: dict) -> dict | None:
     """Bind legacy role-only rows once; never retarget an explicit binding after a scenario switch."""
     key = phone.get("thread_key")
+    if key is None and phone.get("scenario_id") is not None:
+        return None  # registered to be placed by its location text, not placed yet (see unplaced())
     if key is None:
         thread = resolve_thread(store, phone["role"])
         if thread is None:
@@ -57,6 +59,12 @@ def phone_thread(store: Store, phone: dict) -> dict | None:
                               facility_id=value if kind == "facility" else None)
     except ValueError:
         return None
+
+
+def unplaced(store: Store, phone: dict) -> bool:
+    """A resident phone registered with `locate`: it texts where it is before it has a household."""
+    return (phone.get("role") == "resident" and phone.get("thread_key") is None
+            and phone.get("scenario_id") is not None and phone.get("scenario_id") == store.meta().get("scenario_id"))
 
 
 def phone_for_thread(store: Store, thread: dict) -> dict | None:
@@ -80,7 +88,7 @@ def select_thread(store: Store, role: str, household_id: int | None = None,
 
 
 def normalize_handle(raw: str) -> str:
-    """'413 362 0520' / '4133620520' / '+1 (413) 362-0520' → '+14133620520' (US default). Emails pass through."""
+    """'617 555 0120' / '6175550120' / '+1 (617) 555-0120' → '+16175550120' (US default). Emails pass through."""
     raw = raw.strip()
     if "@" in raw:
         return raw.lower()

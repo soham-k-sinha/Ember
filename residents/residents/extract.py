@@ -27,7 +27,7 @@ MODEL = os.environ.get("EXTRACT_MODEL", "claude-opus-5-5")
 EFFORT = os.environ.get("EXTRACT_EFFORT", "low")
 CONFIDENCE_MIN = 0.6
 
-Kind = Literal["need", "closure_report", "facility_status", "confirm", "reject", "question", "other"]
+Kind = Literal["need", "closure_report", "facility_status", "location", "done", "confirm", "reject", "question", "other"]
 
 
 class Fact(BaseModel):
@@ -38,7 +38,9 @@ class Fact(BaseModel):
     accessible_vehicle: bool | None = Field(description="need: they need a wheelchair-accessible vehicle")
     medical: bool | None = Field(description="need: a medical condition needing care (oxygen, dialysis, insulin, injury)")
     road_hint: str | None = Field(description="closure_report: the blocked street's name as written, e.g. 'River St'; null if not named")
-    cross_street: str | None = Field(description="closure_report: a cross street or landmark that locates the blockage")
+    cross_street: str | None = Field(description="closure_report / location: a cross street or landmark that locates it")
+    address: str | None = Field(description="location: where the sender is, as written: a street address ('125 Western Ave'), "
+                                            "one street of an intersection ('Western Ave'), a landmark, or coordinates")
     endurance_min: float | None = Field(description="facility_status: MINUTES of backup power/fuel left, e.g. '10 minutes' = 10, '6 hours' = 360")
     facility_state: Literal["ok", "backup", "down"] | None = Field(
         description="facility_status: ok = on grid power, backup = running on backup/generator, down = no power / not operating")
@@ -57,6 +59,8 @@ Fact kinds:
 - need: who needs pickup and what they need (people count, mobility, wheelchair-accessible vehicle, medical).
 - closure_report: a road or street is flooded/blocked. Copy the street name as written into road_hint; a cross street or landmark into cross_street.
 - facility_status: an operator reports their site's power state or how long backup power/fuel lasts.
+- location: where the sender is right now (an address, an intersection, a landmark, coordinates). Copy it as written into address; for an intersection put one street in address and the other in cross_street.
+- done: they report finishing the step we last asked them to do ("done", "we're at the corner", "on the van", "we've arrived", "it's connected").
 - confirm: yes / accepting the instruction we last sent. reject: no / can't do it / declining it.
 - question: they ask something. other: anything else (greetings, thanks, chatter).
 
@@ -113,6 +117,8 @@ class Outcome:
     question_is_missing_info: bool = False             # True: a fact was incomplete; False: the model's own prompt
     pending: dict | None = None                        # partial need to remember for the next reply
     clear_pending: bool = False
+    location: dict | None = None                       # {"address", "cross_street"}: where they say they are
+    step_done: bool = False                            # they finished the step we last asked for
 
 
 RoadResolver = Callable[[str, str | None, int | None], list[int]]  # (road_hint, cross_street, household_id) → edge ids
@@ -178,6 +184,10 @@ def to_outcome(ex: Extraction, *, role: str, thread: dict, text: str, pending: d
                                 **({"household_id": hid} if hid is not None else {}),
                                 **({"facility_id": fid} if fid is not None else {}),
                                 "confidence": ex.confidence, "text": text})
+        elif f.kind == "location" and f.address:
+            out.location = {"address": f.address, "cross_street": f.cross_street}
+        elif f.kind == "done":
+            out.step_done = True
         elif f.kind == "question":
             out.reports.append({"source": source, "kind": "question", "confidence": ex.confidence, "text": text,
                                 **({"household_id": hid} if hid is not None else {}),

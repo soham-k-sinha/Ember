@@ -1,5 +1,5 @@
 {
- "_doc": "21 messages (the last is DEMO.md beat 4, verbatim) a resident or operator might text during the drill, with the expected extraction. `expect.kinds` = fact kinds in order; other keys are checked on the fact of that kind. `context` = what we last sent / what we're waiting on. Run: uv run python scripts/eval_extract.py",
+ "_doc": "27 messages (#21 is DEMO.md beat 4, verbatim; #22-27 are the drill's location and DONE replies) a resident or operator might text during the drill, with the expected extraction. `expect.kinds` = fact kinds in order; other keys are checked on the fact of that kind. `context` = what we last sent / what we're waiting on. Run: uv run python scripts/eval_extract.py",
  "samples": [
   {
    "role": "resident",
@@ -231,6 +231,100 @@
     ],
     "facility_state": "backup",
     "endurance_min": 10
+   }
+  },
+  {
+   "role": "resident",
+   "text": "I'm at 125 Western Ave",
+   "context": {
+    "last_outbound": "[EMBER drill] Welcome to the EMBER flood drill. Where are you right now? Reply with your street address (e.g. 125 Western Ave) or the nearest intersection (e.g. Western Ave and N Harvard St).",
+    "pending": {
+     "kind": "location",
+     "note": "we don't know where the sender is yet"
+    }
+   },
+   "expect": {
+    "kinds": [
+     "location"
+    ],
+    "address": "125 Western Ave"
+   }
+  },
+  {
+   "role": "resident",
+   "text": "corner of Putnam Ave and Western Ave",
+   "context": {
+    "last_outbound": "[EMBER drill] Welcome to the EMBER flood drill. Where are you right now? Reply with your street address (e.g. 125 Western Ave) or the nearest intersection (e.g. Western Ave and N Harvard St).",
+    "pending": {
+     "kind": "location",
+     "note": "we don't know where the sender is yet"
+    }
+   },
+   "expect": {
+    "kinds": [
+     "location"
+    ],
+    "address": "Putnam Ave",
+    "cross_street": "Western Ave"
+   }
+  },
+  {
+   "role": "resident",
+   "text": "125 Western Ave, my mom uses a wheelchair",
+   "context": {
+    "last_outbound": "[EMBER drill] Welcome to the EMBER flood drill. Where are you right now? Reply with your street address (e.g. 125 Western Ave) or the nearest intersection (e.g. Western Ave and N Harvard St).",
+    "pending": {
+     "kind": "location",
+     "note": "we don't know where the sender is yet"
+    }
+   },
+   "expect": {
+    "kinds": [
+     "location",
+     "need"
+    ],
+    "address": "125 Western Ave",
+    "accessible_vehicle": true
+   }
+  },
+  {
+   "role": "resident",
+   "text": "hi",
+   "context": {
+    "last_outbound": "[EMBER drill] Welcome to the EMBER flood drill. Where are you right now? Reply with your street address (e.g. 125 Western Ave) or the nearest intersection (e.g. Western Ave and N Harvard St).",
+    "pending": {
+     "kind": "location",
+     "note": "we don't know where the sender is yet"
+    }
+   },
+   "expect": {
+    "kinds": [
+     "other"
+    ]
+   }
+  },
+  {
+   "role": "resident",
+   "text": "we're at the corner now",
+   "context": {
+    "last_outbound": "[EMBER drill] Confirmed: Van 2 is coming to you. Step 1 of 4: Pack medications, ID, your phone and charger, then walk to the pickup point: the corner of Putnam Avenue and Western Avenue, about 90 m south of you (about 2 min on foot). Van 2 gets there in about 12 min. Reply DONE when you're there."
+   },
+   "expect": {
+    "kinds": [
+     "done"
+    ]
+   }
+  },
+  {
+   "role": "resident",
+   "text": "ok we're on the van",
+   "context": {
+    "last_outbound": "[EMBER drill] Step 2 of 4: Van 2 is at the corner of Putnam Avenue and Western Avenue now. Tell the driver your address and that you are 2, then get in. Reply DONE once everyone is aboard."
+   },
+   "expect": {
+    "kinds": [
+     "done"
+    ]
    }
   }
  ]

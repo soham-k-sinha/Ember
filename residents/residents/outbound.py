@@ -31,8 +31,9 @@ def _mins(eta_s: float, now: float) -> str:
 
 
 class Outbound:
-    def __init__(self, store: Store, messenger: Messenger):
+    def __init__(self, store: Store, messenger: Messenger, bridge=None):
         self.store, self.messenger = store, messenger
+        self.bridge = bridge  # for the pickup corner's name (engine_bridge.EngineBridge); optional
 
     def _names(self) -> tuple[dict, dict]:
         res = {r["id"]: r for r in self.store.snapshot()["resources"]}
@@ -60,8 +61,18 @@ class Outbound:
             return f"Update: {who} is now arriving {_mins(a['eta_s'], now)}. (plan v{version})"
         if "household_id" in thread:
             drop = fac.get(a.get("dropoff_facility_id") or "", {}).get("name")
-            return (f"{who} will pick you up at your address {_mins(a['eta_s'], now)}"
+            h = next((x for x in self.store.households() if x["household_id"] == thread["household_id"]), {})
+            needs = h.get("needs") if isinstance(h.get("needs"), dict) else {}
+            where = "at your address"
+            if needs.get("mobility") or needs.get("accessible_vehicle"):
+                where = "at your door"
+            elif self.bridge is not None and self.bridge.is_assisted(thread["household_id"]):
+                where = "at " + self.bridge.places.corner_label(self.bridge.household_node(thread["household_id"]))
+            out_by = h.get("deadline_s")
+            return (f"{who} will pick you up {where} {_mins(a['eta_s'], now)}"
                     + (f" and take you to {drop}" if drop else "")
+                    + (f". Plan to be out within about {round((out_by - now) / 60)} min, before the water reaches your street"
+                       if out_by is not None and out_by > now else "")
                     + f". Reply YES to confirm, or tell us what changed. (plan v{version})")
         return (f"{who} is on its way to you, arriving {_mins(a['eta_s'], now)}. "
                 f"Reply YES to confirm someone will meet it. (plan v{version})")
@@ -130,6 +141,8 @@ class Outbound:
                     "assignment": {**a, "status": "offered"}}, now)
             log.info("instruction v%s → %s (%s): %s", view["version"], key, delivery, a["id"])
             return msg
+        if last and last.get("assignment_id") and self._underway(view, thread, last):
+            return None  # it happened (picked up / connected): the step-by-step guide does the talking
         if last and last.get("assignment_id"):  # we told them someone is coming; no longer true
             res, _ = self._names()
             who = res.get(last["resource_id"], {}).get("name", last["resource_id"])
@@ -140,6 +153,23 @@ class Outbound:
                 self.store.kv_set(f"instr:{key}", json.dumps({"assignment_id": None, "plan_version": view["version"]}))
             return msg
         return None
+
+    @staticmethod
+    def _last_rescue(view: dict, thread: dict) -> dict | None:
+        """The rescue that picked this household up (working / done in the simulated view)."""
+        return next((a for a in view.get("assignments", []) if a["task"] == "rescue" and a["target"] == thread
+                     and a["status"] in ("working", "done")), None)
+
+    def _underway(self, view: dict, thread: dict, last: dict) -> bool:
+        """The instruction we texted is being carried out or is finished, so "no longer coming" would be
+        wrong: its assignment is working / done in the simulated view, or the household is picked up."""
+        prev = next((x for x in view.get("assignments", []) if x["id"] == last["assignment_id"]), None)
+        if prev is not None and prev["status"] in ("working", "done"):
+            return True
+        if "household_id" in thread:
+            h = next((x for x in self.store.households() if x["household_id"] == thread["household_id"]), None)
+            return bool(h and h["status"] in ("picked_up", "safe"))
+        return False
 
     async def mark_declined(self, view: dict) -> None:
         """The allocator doesn't know about declines yet: if it re-proposes a vehicle a thread rejected,
@@ -174,6 +204,15 @@ class Outbound:
         res, _ = self._names()
         a = self.instruction_for(view, thread, exclude=self.rejected(key))
         blocked = next((u for u in view.get("unresolved", []) if u["target"] == thread), None)
+        if "household_id" in thread:  # picked up / dropped off: say so, not "arriving"
+            h = next((x for x in self.store.households() if x["household_id"] == thread["household_id"]), None)
+            done = self._last_rescue(view, thread)
+            if h and h["status"] in ("picked_up", "safe") and done is not None:
+                who = res.get(done["resource_id"], {}).get("name", done["resource_id"])
+                drop = {f["id"]: f["name"] for f in self.store.facilities()}.get(done.get("dropoff_facility_id") or "", "the shelter")
+                return (f"You're with {who} on the way to {drop}. (plan v{v})" if h["status"] == "picked_up" else
+                        f"You're checked in at {drop}. Stay there until the all-clear; we'll text you if anything "
+                        f"changes. (plan v{v})")
         if a is not None:
             who = res.get(a["resource_id"], {}).get("name", a["resource_id"])
             if a["status"] == "confirmed":
@@ -187,13 +226,28 @@ class Outbound:
             need = self.describe_need(h["needs"]) if h else ""
             if not need:
                 return None
+            if blocked and h.get("deadline_s") is None:
+                return (f"We have your details ({need}). Your street is outside the forecast flood area, so no "
+                        f"pickup is planned: stay where you are, above the ground floor if you can. We'll text you "
+                        f"if that changes. (plan v{v})")
             if blocked:
+                # the engine's own fallbacks; walking only for people who can
+                alts = [x for x in blocked.get("alternatives", [])
+                        if not (("walk" in x) and isinstance(h.get("needs"), dict) and (h["needs"].get("mobility") or h["needs"].get("accessible_vehicle")))]
                 return (f"We have your details ({need}). No suitable vehicle is free yet: {blocked['blocked_by']}. "
-                        f"We'll text you as soon as one is assigned. (plan v{v})")
+                        + (f"Until one is: {' or '.join(alts)}. " if alts else "")
+                        + f"We'll text you as soon as one is assigned. (plan v{v})")
             return f"We have your details ({need}) and are arranging a pickup; we'll text you. (plan v{v})"
         if blocked:
             return f"No generator is free for you right now: {blocked['blocked_by']}. We'll text you if that changes. (plan v{v})"
-        return f"Noted. No generator is assigned to your site right now. (plan v{v})"
+        f = next((x for x in self.store.facilities() if x["id"] == thread.get("facility_id")), {})
+        if f.get("powered_by"):
+            gen = res.get(f["powered_by"], {}).get("name", f["powered_by"])
+            return f"{f.get('name', 'Your site')} is on {gen} power. Text us if anything changes (fuel, load, water). (plan v{v})"
+        power = {"ok": "on grid power", "backup": "on backup power", "down": "without power"}.get(f.get("state"), "")
+        return (f"Noted. No generator is assigned to your site right now"
+                + (f"; our plan has {f.get('name', 'your site')} {power}" if power else "")
+                + f". Text us if that changes, e.g. 'on backup, about 40 minutes of fuel left'. (plan v{v})")
 
     def next_info_request(self, view: dict, thread: dict) -> dict | None:
         return next((q for q in view.get("info_requests", []) if q["to"] == thread and not self.store.kv_get(f"asked:{q['id']}")), None)

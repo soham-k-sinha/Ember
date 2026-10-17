@@ -13,7 +13,7 @@ from tests.fake_photon import FakePhoton, received
 from tests.test_engine import JUDGE, SCENARIO, bridge  # noqa: F401
 from tests.test_extract import FakeLLM, ex, fact
 
-PHONE = "+14133620520"
+PHONE = "+16175550120"
 
 
 def iso(dt):
@@ -30,7 +30,7 @@ def live(settings, bridge, monkeypatch):  # noqa: F811
                    "new text": ex(fact("other"))})
     s = replace(settings, scenario=SCENARIO, extract_enabled=True, photon_enabled=True, photon_listen=False)
     with TestClient(create_app(s, photon_client=fp.client(), bridge=bridge, llm=llm)) as c:
-        c.post("/phones", json={"role": "resident", "handle": "4133620520"})
+        c.post("/phones", json={"role": "resident", "handle": "6175550120"})
         yield c, fp
 
 

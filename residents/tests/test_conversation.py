@@ -29,7 +29,7 @@ LIVE = {  # what claude-opus-5-5 returned for each text
 def judge_phone(settings, bridge):  # noqa: F811
     s = replace(settings, scenario=SCENARIO, extract_enabled=True)
     with TestClient(create_app(s, bridge=bridge, llm=FakeLLM(LIVE))) as c:
-        c.post("/phones", json={"role": "resident", "handle": "4133620520"})
+        c.post("/phones", json={"role": "resident", "handle": "6175550120"})
         c.post("/clock", json={"t_s": 3000})
         yield c
 
@@ -47,14 +47,14 @@ def judge(c):
 
 def test_partial_need_keeps_what_we_knew():
     o = to_outcome(Extraction(facts=[Fact(kind="need", people=2, mobility=None, accessible_vehicle=None, medical=None,
-                                          road_hint=None, cross_street=None, endurance_min=None, facility_state=None)],
+                                          road_hint=None, cross_street=None, address=None, endurance_min=None, facility_state=None)],
                               confidence=0.9, clarifying_question=None),
                    role="resident", thread=JT, text="Yes, 2 people", pending=None, resolve_road=lambda *a: [],
                    last_assignment_id=None, known_needs={"people": 2, "mobility": True, "accessible_vehicle": True})
     assert o.reports[0]["payload"] == {"people": 2, "mobility": True, "accessible_vehicle": True}
     # an explicit correction still wins
     o = to_outcome(Extraction(facts=[Fact(kind="need", people=3, mobility=False, accessible_vehicle=False, medical=None,
-                                          road_hint=None, cross_street=None, endurance_min=None, facility_state=None)],
+                                          road_hint=None, cross_street=None, address=None, endurance_min=None, facility_state=None)],
                               confidence=0.9, clarifying_question=None),
                    role="resident", thread=JT, text="actually 3, nobody needs a wheelchair", pending=None,
                    resolve_road=lambda *a: [], last_assignment_id=None, known_needs={"people": 2, "accessible_vehicle": True})
@@ -98,7 +98,7 @@ def test_question_goes_to_coordinators_with_status(settings, bridge):  # noqa: F
                    "is the western ave bridge open?": ex(fact("question"))})
     s = replace(settings, scenario=SCENARIO, extract_enabled=True)
     with TestClient(create_app(s, bridge=bridge, llm=llm)) as c:
-        c.post("/phones", json={"role": "resident", "handle": "4133620520"})
+        c.post("/phones", json={"role": "resident", "handle": "6175550120"})
         say(c, "2 of us, my mom uses a wheelchair")
         [r] = say(c, "is the western ave bridge open?")
         assert r.startswith("[EMBER drill] We've passed your question to the coordinators.")
@@ -113,7 +113,7 @@ def test_tuned_demo_beat_through_the_text_pipeline(settings, full_bridge):  # no
                             fact("closure_report", road_hint="River St"))})
     s = replace(settings, scenario=SCENARIO, extract_enabled=True)
     with TestClient(create_app(s, bridge=full_bridge, llm=llm)) as c:
-        c.post("/phones", json={"role": "resident", "handle": "4133620520"})
+        c.post("/phones", json={"role": "resident", "handle": "6175550120"})
         c.post("/clock", json={"t_s": 300})
         v1 = c.get("/plan/1").json()
         replies = say(c, text)

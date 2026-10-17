@@ -12,6 +12,7 @@ import logging
 
 from .db import Store, thread_key
 from .extract import LLM, Outcome, extract
+from .guide import STEP_DONE
 from .messaging import Messenger
 from .outbound import Outbound
 from .planner import Planner, ReportError
@@ -23,9 +24,11 @@ PLANNER_DOWN = "Got your message. Our planner hit a problem; a coordinator is lo
 
 
 class Intake:
-    def __init__(self, store: Store, messenger: Messenger, planner: Planner, llm: LLM, outbound: Outbound | None = None):
+    def __init__(self, store: Store, messenger: Messenger, planner: Planner, llm: LLM, outbound: Outbound | None = None,
+                 guide=None):
         self.store, self.messenger, self.planner, self.llm = store, messenger, planner, llm
         self.outbound = outbound
+        self.guide = guide  # step-by-step directions after a YES (guide.Guide), optional
         # one message at a time, end to end: the next text must see what the previous one changed
         # (known needs, pending questions, the new plan). Photon's worker is serial; HTTP isn't.
         self._lock = asyncio.Lock()
@@ -43,7 +46,9 @@ class Intake:
     async def _respond(self, rep: dict, thread: dict) -> None:
         """YES / NO to the last offered instruction → confirm / reject, or the latest instruction if stale."""
         async def ack(a: dict) -> None:
-            if self.outbound is not None:
+            if self.guide is not None and rep["kind"] == "confirm":
+                await self.guide.start(a, thread)  # "Confirmed: … Step 1 of 4: …"
+            elif self.outbound is not None:
                 await self.outbound.ack(a, rep["kind"], thread)
 
         res = await self.planner.respond(rep["assignment_id"], rep["kind"], rep.get("plan_version"), on_applied=ack)
@@ -61,6 +66,9 @@ class Intake:
     async def _on_inbound(self, msg: dict, role: str) -> Outcome | None:
         thread = msg["thread"]
         key = thread_key(thread)
+        if self.guide is not None and self.guide.awaiting_done(thread) and STEP_DONE.match(msg["text"]):
+            await self.guide.done(thread)  # "done" / "here" / "yes" while a step waits on them: no LLM needed
+            return None
         pending_raw = self.store.kv_get(f"pending:{key}")
         pending = json.loads(pending_raw) if pending_raw else None
         earlier = self.store.delivered_outbound(key)
@@ -75,6 +83,9 @@ class Intake:
             await self.messenger.send_message(thread, SORRY, self.store.meta().get("plan_version"))
             return None
 
+        if out.step_done and self.guide is not None and await self.guide.done(thread):  # "we're at the corner now"
+            if not out.reports and not out.question:
+                return out
         if out.pending is not None:
             self.store.kv_set(f"pending:{key}", json.dumps(out.pending))
         elif out.clear_pending:

@@ -11,6 +11,47 @@ uv run uvicorn residents.app:app --reload  # http://localhost:8000
 uv run pytest -q
 ```
 
+## The drill: a whole run on real phones, one process (D56)
+
+```bash
+cd residents && uv sync
+uv run ember-drill --resident 6175550101                     # your phone is a resident (real texts via Photon)
+uv run ember-drill --resident 6175550101 --resident 6175550102 --operator 6175550103@mt-auburn
+uv run ember-drill --dry                                     # no phones, nothing sent: type texts as @r1 …
+uv run ember-drill --crowded …                               # also the scenario's 40 synthetic households compete (default: only you)
+```
+Put real numbers in `residents/.env` instead of the command line if you like (`DRILL_RESIDENTS=…,…`,
+`DRILL_OPERATORS=PHONE@mt-auburn`); never commit them. One process runs the backend (planner, Photon listener,
+HTTP/WS on :8000 so the web map can watch), starts the run from scratch (`--keep` continues the last one; its
+own DB `residents/drill.db`, log `residents/drill.log`), registers the phones and prints every text in and out.
+It refuses to start while another EMBER backend with Photon on is running (both would answer every text).
+
+What happens, all by text:
+1. **Text HI** to the number the console prints (Photon only lets EMBER reply after you text first).
+2. EMBER asks **where you are**. Reply with an address ("125 Western Ave"), an intersection ("Putnam Ave and
+   Western Ave"), a landmark, or a maps link / coordinates. It's placed on the engine's map: coordinates →
+   street intersection in town.json → OSM Nominatim (bounded to the town). The nearest building nobody else has
+   becomes your household; you're told your pickup corner and when the water reaches your street (or that it
+   doesn't: then the plan says shelter in place). The console lists flood-zone corners to try.
+3. The **plan asks** its question ("How many people are with you, and does anyone need a wheelchair-accessible
+   vehicle?"). Answer in your own words; it replans and **offers** a vehicle: who, where, when, drop-off, and
+   how long you have.
+4. Reply **YES**. From then on one text per step, each computed from the plan's simulation (never the LLM):
+   *Step 1* get ready and walk to the pickup corner (distance, direction, minutes on foot), or stay inside if
+   someone needs help to walk (the crew comes to the door) → *Step 2* the vehicle is at the corner, board →
+   *Step 3* on the way to the drop-off → *Step 4* checked in. Reply **DONE** after each ("we're at the corner"
+   works too). Operators get the generator version: meet the crew → connecting → powered.
+5. **The clock moves one step at a time:** when everyone EMBER is waiting on has replied DONE, the sim clock
+   jumps to the next event (the vehicle arriving, the pickup, the drop-off). `--manual-clock` turns that off.
+
+Anything else you text goes through the same path as always: "my dad uses a wheelchair" or "the corner is
+flooded" → replan → changed instruction; "NO" → another vehicle; questions → "passed to the coordinators".
+Console: `status`, `next` (jump to the next step), `+10` (minutes), `@r1 <text>` (text as r1), `close <street>
+and <cross street>`, `plan`, `reset`, `quit`.
+
+API for the same flow: `POST /phones {role: "resident", handle, locate: true}` registers a phone with no household;
+`POST /dev/inbound {role, handle, text}` texts as that phone (also before it's placed).
+
 ## API (so far)
 | | |
 |---|---|
@@ -27,10 +68,10 @@ uv run pytest -q
 | `POST /clock {t_s}` | move the sim clock (play / scrub); broadcasts `state` |
 | `GET /comparison?seeds=5` | baseline vs EMBER on paired perturbations (`comparison.schema.json`), cached per plan version (~3 s first call) |
 | `POST /assignments/{id}/confirm`, `/reject` `{plan_version?}` | the person accepts / declines an offer (texts "yes"/"no" take the same path). Reject → replan; that vehicle is never re-offered to them. 409 if `plan_version` is older and the assignment changed since (stale) |
-| `GET /phones`, `POST /phones {role, handle, household_id?, facility_id?}` | one phone per household/facility, many residents/operators. Residents specify household_id, operators facility_id. Omission uses the original judge/hospital default. Occupied target or a phone bound elsewhere → 409; never silently replaces a registration. Returns thread, assigned_number, opted_in and action_needed. |
+| `GET /phones`, `POST /phones {role, handle, household_id?, facility_id?}` | one phone per household/facility, many residents/operators. Residents specify household_id, operators facility_id. Omission uses the original judge/hospital default. Occupied target or a phone bound elsewhere → 409; never silently replaces a registration. Returns thread, assigned_number, opted_in and action_needed. `locate: true` (resident, no household_id): the phone gets a household when it texts where it is (D56). |
 | `POST /messages {thread, text, plan_version?, assignment_id?}` | send on a thread (gets the `[EMBER drill]` prefix); returns `delivery`: `sent` / `failed` / `not_opted_in` / `no_phone` / `dev` |
 | `POST /dev/reset` | reseed from `SEED_STATE` and broadcast `state` (rehearsals; `DEV_ENDPOINTS=0` hides it) |
-| `POST /dev/inbound {role, text, household_id?, facility_id?}` | inject a message into a specific thread; role-only is rejected if ambiguous. Does not opt a real phone in. With Photon enabled, replies can still go to real phones. |
+| `POST /dev/inbound {role, text, household_id?, facility_id?, handle?}` | inject a message into a specific thread (or as a registered phone, `handle`, also before it has a household); role-only is rejected if ambiguous. Does not opt a real phone in. With Photon enabled, replies can still go to real phones. |
 
 ## Photon (2.0 Beta)
 1. `.env`: `PHOTON_ENABLED=1`, `PHOTON_API_KEY`, `PHOTON_PROJECT_ID` (key needs project:read/write, platforms:read/write).

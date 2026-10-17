@@ -18,7 +18,7 @@ def cc(settings, bridge):  # noqa: F811
     llm = FakeLLM({"yes": ex(fact("confirm")), "no thanks": ex(fact("reject")), "YES": ex(fact("confirm"))})
     s = replace(settings, scenario=SCENARIO, extract_enabled=True)
     with TestClient(create_app(s, bridge=bridge, llm=llm)) as c:
-        c.post("/phones", json={"role": "resident", "handle": "4133620520"})
+        c.post("/phones", json={"role": "resident", "handle": "6175550120"})
         c.post("/reports", json=judge_need())             # v2: Accessible Van 3 offered to the judge
         yield c
 
@@ -114,7 +114,7 @@ def test_api_errors_and_idempotence(cc):
 def test_confirmation_survives_restart(settings, bridge):  # noqa: F811
     s = replace(settings, scenario=SCENARIO)
     with TestClient(create_app(s, bridge=bridge)) as c:
-        c.post("/phones", json={"role": "resident", "handle": "4133620520"})
+        c.post("/phones", json={"role": "resident", "handle": "6175550120"})
         c.post("/reports", json=judge_need())
         aid = outs(c)[-1]["assignment_id"]
         c.post(f"/assignments/{aid}/confirm")
