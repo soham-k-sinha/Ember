@@ -33,6 +33,8 @@ def explain(ctx: Context, carry, assignments: list, res, reports, version: int, 
             a["deadline_s"], a["slack_s"] = d, (None if d is None else round(d - a["eta_s"], 1))
             if not a.get("rationale") or a.get("plan_version") == version:
                 a["rationale"] = _rescue_why(ctx, a, o, res_name, accessible, pol)
+                if o.get("shared_after") in out:
+                    a["rationale"] += f"; shares the trip with household #{out[o['shared_after']]['target']['household_id']} (collected before the drop-off)"
         elif a["task"] == "protect" and (not a.get("rationale") or a.get("plan_version") == version):
             a["deadline_s"] = ctx.power_risk.get(a["target"]["facility_id"], (None, None))[1]
             a["rationale"] = _protect_why(ctx, a, o, assignments, res, reports, res_name)

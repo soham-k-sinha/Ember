@@ -115,3 +115,44 @@ def test_a_full_shelter_spills_over_to_the_next_drop_off(world, scn):
     assert "ems14" in to and "treehouse-shelter" in to
     out = {o["assignment_id"]: o for o in simulate(world, small, plan, record=False).outcomes}
     assert any(o["status"] == "done" for o in out.values())
+
+
+def _two_neighbours(world, scn):
+    """Two households of the scenario that are close by road (the simulator pools those)."""
+    from ember_engine.allocator.context import Context
+    ctx = Context(world, scn, [], 0.0)
+    ids = [h for h in ctx.hh if ctx.needs[h] != "unknown" and not ctx.needs[h].get("mobility")
+           and not ctx.needs[h].get("accessible_vehicle")]
+    for a in ids:
+        for b in ids:
+            if a != b and ctx.needs[a]["people"] + ctx.needs[b]["people"] <= 6 and float(ctx.tf(ctx.hh_node[a])[ctx.hh_node[b]]) < 120:
+                return a, b
+    pytest.skip("no close pair")
+
+
+def _trip(rid, *hids):
+    return {"assignments": [{"id": f"a-{rid}-{h}", "resource_id": rid, "task": "rescue", "target": {"household_id": h},
+                             "dropoff_facility_id": "treehouse-shelter", "status": "proposed"} for h in hids]}
+
+
+def test_neighbours_share_a_trip_when_seats_allow(world, scn):
+    a, b = _two_neighbours(world, scn)
+    r = simulate(world, scn, _trip("van-2", a, b), record=False)
+    out = {o["assignment_id"]: o for o in r.outcomes}
+    first, second = out[f"a-van-2-{a}"], out[f"a-van-2-{b}"]
+    assert second["shared_after"] == f"a-van-2-{a}"
+    assert first["status"] == second["status"] == "done" and first["complete_t"] == second["complete_t"]   # one drop-off
+
+
+def test_no_shared_trip_without_seats(world, scn):
+    a, b = _two_neighbours(world, scn)
+    small = copy.deepcopy(scn)
+    for x in small["resources"]:
+        if x["id"] == "van-2":
+            x["capacity_people"] = max(small_need for small_need in (
+                next(h["needs"]["people"] for h in small["households"] if h["household_id"] == a),
+                next(h["needs"]["people"] for h in small["households"] if h["household_id"] == b)))
+    r = simulate(world, small, _trip("van-2", a, b), record=False)
+    out = {o["assignment_id"]: o for o in r.outcomes}
+    assert out[f"a-van-2-{b}"]["shared_after"] is None
+    assert out[f"a-van-2-{a}"]["complete_t"] < out[f"a-van-2-{b}"]["complete_t"]
