@@ -63,7 +63,7 @@ class Intake:
         key = thread_key(thread)
         pending_raw = self.store.kv_get(f"pending:{key}")
         pending = json.loads(pending_raw) if pending_raw else None
-        earlier = [m for m in self.store.thread_messages(key) if m["direction"] == "out"]
+        earlier = self.store.delivered_outbound(key)
         last_out = earlier[-1]["text"] if earlier else None
         last_assignment = next((m["assignment_id"] for m in reversed(earlier) if m.get("assignment_id")), None)
         try:
@@ -130,10 +130,11 @@ class Intake:
         own prompt. A resident's question is never answered by the LLM: we say it went to the coordinators."""
         view = self.store.plan_view()
         asked_q = any(r["kind"] == "question" for r in stored)
-        q = self.outbound.next_info_request(view, thread) if view else None
-        if q and not asked_q:
-            await self.outbound.sync(view, only=thread_key(thread))
-            return
+        if view and not asked_q:
+            # A newly opted-in phone may already have a computed assignment. Send the
+            # actual offer (with assignment_id) so its next YES can confirm that offer.
+            if await self.outbound.sync(view, only=thread_key(thread)):
+                return
         prefix = "We've passed your question to the coordinators. " if asked_q else ""
         if await self.outbound.send_status(thread, prefix=prefix):
             return

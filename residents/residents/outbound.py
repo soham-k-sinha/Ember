@@ -18,7 +18,7 @@ import logging
 
 from .db import Store, thread_key
 from .messaging import Messenger
-from .threads import ROLES, resolve_thread
+from .threads import phone_thread
 
 log = logging.getLogger("residents.outbound")
 
@@ -74,10 +74,8 @@ class Outbound:
         """Send what changed for every phone thread (or only thread key `only`). Returns sent messages."""
         sent: list[dict] = []
         now = float(self.store.meta().get("t_s", 0.0))
-        for role in ROLES:
-            if not self.store.phone(role=role):
-                continue
-            thread = resolve_thread(self.store, role)
+        for phone in self.store.phones():
+            thread = phone_thread(self.store, phone)
             if thread is None:
                 continue
             key = thread_key(thread)
@@ -99,20 +97,34 @@ class Outbound:
         a = self.instruction_for(view, thread, exclude=self.rejected(key))
         raw_last = self.store.kv_get(f"instr:{key}")
         last = json.loads(raw_last) if raw_last else None
+        if last and last.get("assignment_id") and not last.get("message_id"):
+            # Pre-migration instruction markers did not record their message ID.
+            prior = next((m for m in reversed(self.store.thread_messages(key))
+                          if m["direction"] == "out" and m.get("assignment_id") == last["assignment_id"]
+                          and m.get("plan_version") == last.get("plan_version")), None)
+            if prior:
+                last["message_id"] = prior["id"]
+        if last and last.get("assignment_id"):
+            if self.store.message_delivery(last.get("message_id", ""))[0] not in ("sent", "dev", "failed"):
+                last = None
         if a is not None:
             changed = force or (last is None or last.get("assignment_id") != a["id"] or last.get("resource_id") != a["resource_id"]
                                 or abs(float(last.get("eta_s", 0)) - a["eta_s"]) >= MATERIAL_ETA_S)
             if not changed:
                 # same instruction carried into a new version: the allocator rebuilds it as `proposed`,
                 # but the person already has it → keep it `offered` (no new text)
-                if a["status"] == "proposed":
+                delivery = self.store.message_delivery(last.get("message_id", ""))[0]
+                if a["status"] == "proposed" and delivery in ("sent", "dev"):
                     self.store.mark_offered(view["version"], a["id"])
                 return None
             text = self.compose(a, thread, now, view["version"])
             msg, delivery = await self.messenger.send_message(thread, text, view["version"], a["id"])
+            if delivery not in ("sent", "dev", "failed"):
+                return msg  # not opted in / no phone: the instruction has not been offered
             self.store.kv_set(f"instr:{key}", json.dumps({"assignment_id": a["id"], "resource_id": a["resource_id"],
-                                                           "eta_s": a["eta_s"], "plan_version": view["version"]}))
-            if self.store.mark_offered(view["version"], a["id"]):
+                                                           "eta_s": a["eta_s"], "plan_version": view["version"],
+                                                           "message_id": msg["id"]}))
+            if delivery in ("sent", "dev") and self.store.mark_offered(view["version"], a["id"]):
                 await self.messenger.hub.broadcast("assignment", {
                     "plan_version": view["version"], "change": "status_changed", "assignment_id": a["id"],
                     "assignment": {**a, "status": "offered"}}, now)
@@ -123,8 +135,9 @@ class Outbound:
             who = res.get(last["resource_id"], {}).get("name", last["resource_id"])
             text = (f"Change of plan: {who} is no longer coming to you. We're re-planning and will text you "
                     f"as soon as we have a new instruction. (plan v{view['version']})")
-            msg, _ = await self.messenger.send_message(thread, text, view["version"], last["assignment_id"])
-            self.store.kv_set(f"instr:{key}", json.dumps({"assignment_id": None, "plan_version": view["version"]}))
+            msg, delivery = await self.messenger.send_message(thread, text, view["version"], last["assignment_id"])
+            if delivery in ("sent", "dev", "failed"):
+                self.store.kv_set(f"instr:{key}", json.dumps({"assignment_id": None, "plan_version": view["version"]}))
             return msg
         return None
 
@@ -223,6 +236,7 @@ class Outbound:
         q = self.next_info_request(view, thread)  # one question at a time
         if q is None:
             return None
-        msg, _ = await self.messenger.send_message(thread, q["question"], view["version"])
-        self.store.kv_set(f"asked:{q['id']}", str(view["version"]))
+        msg, delivery = await self.messenger.send_message(thread, q["question"], view["version"])
+        if delivery in ("sent", "dev", "failed"):  # failed is queued for retry, not silently discarded
+            self.store.kv_set(f"asked:{q['id']}", str(view["version"]))
         return msg

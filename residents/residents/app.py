@@ -12,12 +12,12 @@ from typing import Literal
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from .bus import Hub
 from .config import CONTRACTS, Settings
-from .db import Store
+from .db import PhoneConflict, Store
 from .engine_bridge import EngineBridge
 from .extract import LLM, make_llm
 from .intake import Intake
@@ -76,8 +76,14 @@ class RespondIn(BaseModel):
     plan_version: int | None = Field(default=None, description="the plan version the person answered (stale check)")
 
 
-class AskIn(BaseModel):
+class TargetIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     role: Literal["resident", "operator"]
+    household_id: int | None = Field(default=None, ge=0)
+    facility_id: str | None = Field(default=None, min_length=1)
+
+
+class AskIn(TargetIn):
     question: str | None = Field(default=None, max_length=300,
                                  description="omit → the plan's open question for that thread, else a default")
 
@@ -98,8 +104,7 @@ class DisruptionIn(BaseModel):
     note: str | None = Field(default=None, max_length=300)
 
 
-class PhoneIn(BaseModel):
-    role: Literal["resident", "operator"]
+class PhoneIn(TargetIn):
     handle: str = Field(min_length=3, description="the tester's phone, e.g. 4135550100 or +14135550100")
 
 
@@ -120,8 +125,7 @@ class MessageIn(BaseModel):
     assignment_id: str | None = None
 
 
-class DevInboundIn(BaseModel):
-    role: Literal["resident", "operator"]
+class DevInboundIn(TargetIn):
     text: str = Field(min_length=1, max_length=1000)
 
 
@@ -281,8 +285,11 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
     async def post_ask(body: AskIn) -> dict:
         """Scripted prompt from the operator console (Task 6), e.g. "What's your backup endurance now?".
         The answer comes back as a text → extraction → facility_status report → replan."""
-        from .threads import resolve_thread
-        thread = resolve_thread(store(), body.role)
+        from .threads import select_thread
+        try:
+            thread = select_thread(store(), body.role, body.household_id, body.facility_id)
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from e
         if thread is None:
             raise HTTPException(409, f"no {body.role} thread in the current state")
         view = store().plan_view()
@@ -291,9 +298,10 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
             q = app.state.outbound.next_info_request(view, thread)
         text = body.question or (q["question"] if q else DEFAULT_ASK[body.role])
         msg, delivery = await messenger().send_message(thread, text, store().meta().get("plan_version"))
-        if q:
+        if q and delivery in ("sent", "dev", "failed"):
             store().kv_set(f"asked:{q['id']}", str(view["version"]))
-        return {"message": msg, "delivery": delivery, "info_request": q["id"] if q else None}
+        return {"message": msg, "delivery": delivery, "info_request": q["id"] if q else None,
+                **messenger().delivery_details(thread, delivery)}
 
     @app.post("/optimize", status_code=202)
     async def post_optimize(seeds: int = 20, k: int = 4) -> dict:
@@ -345,18 +353,20 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         """Register a tester phone for a role (and create its Photon shared-line assignment). The tester
         must then text anything to `assigned_number` before EMBER can message them (Photon opt-in rule)."""
         try:
-            await messenger().register_phone(body.role, body.handle)
+            phone = await messenger().register_phone(body.role, body.handle, body.household_id, body.facility_id)
+        except PhoneConflict as e:
+            raise HTTPException(409, str(e)) from e
         except ValueError as e:
             raise HTTPException(422, str(e)) from e
         except PhotonError as e:
             raise HTTPException(502, str(e)) from e
-        return next(p for p in messenger().phones_view() if p["role"] == body.role)
+        return phone
 
     @app.post("/messages")
     async def post_message(body: MessageIn) -> dict:
         """Send a message on a thread (operator console / scripted prompts). Text gets the drill prefix."""
         msg, delivery = await messenger().send_message(body.thread.as_thread(), body.text, body.plan_version, body.assignment_id)
-        return {"message": msg, "delivery": delivery}
+        return {"message": msg, "delivery": delivery, **messenger().delivery_details(msg["thread"], delivery)}
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket) -> None:
@@ -385,7 +395,10 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         @app.post("/dev/inbound")
         async def dev_inbound(body: DevInboundIn) -> dict:
             """Pretend a tester texted: same path as a real Photon message (store → WS → hooks)."""
-            msg = await messenger().simulate_inbound(body.role, body.text)
+            try:
+                msg = await messenger().simulate_inbound(body.role, body.text, body.household_id, body.facility_id)
+            except ValueError as e:
+                raise HTTPException(422, str(e)) from e
             if msg is None:
                 raise HTTPException(409, f"no {body.role} thread in the current state")
             return {"message": msg}
