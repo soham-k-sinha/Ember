@@ -157,6 +157,39 @@ def cmd_pin_town(a):
           "Commit it, then re-run `ember fixtures` and re-validate scenarios: ids may have changed.")
 
 
+def cmd_simulate(a):
+    """Run a plan on a scenario with the plan simulator; print metrics, outcomes and key events."""
+    import collections
+
+    from .scenario import load_scenario
+    from .sim import example_plan, simulate
+    w = _load_world()
+    scn = load_scenario(a.scenario)
+    plan = example_plan(w, scn) if a.plan == "example" else json.loads(Path(a.plan).read_text())
+    reports = [r for p in (a.report or []) for r in (lambda d: d if isinstance(d, list) else [d])(json.loads(Path(p).read_text()))]
+    t0 = time.time()
+    res = simulate(w, scn, plan, reports=reports)
+    wall = time.time() - t0
+    print(f"[simulate] {scn['scenario_id']} · plan {plan.get('planner', '?')} v{plan.get('version', 1)} · "
+          f"{len(plan.get('assignments', []))} assignments · {len(reports)} report(s) · {wall:.2f}s")
+    print(json.dumps(res.metrics, indent=2))
+    print("outcomes:", dict(collections.Counter(f"{o['task']}:{o['status']}" for o in res.outcomes)))
+    why = collections.Counter(o["reason"] for o in res.outcomes if o["status"] != "done")
+    for r, n in why.most_common(5):
+        print(f"   {n:>3} × {r}")
+    for e in res.events:
+        if e["kind"] in ("generator_connected", "overflow_started", "facility_state", "resource_failed", "road_cleared"):
+            print(f"  t={e['t_s']/60:6.1f} min  {e['kind']}  " + " ".join(f"{k}={v}" for k, v in e.items() if k not in ("t_s", "kind")))
+    if a.out:
+        Path(a.out).write_text(json.dumps({"metrics": res.metrics, "outcomes": res.outcomes, "events": res.events,
+                                           "timeline": res.timeline}, separators=(",", ":")))
+        print(f"[simulate] wrote {a.out}")
+    if a.state_at is not None:
+        out = Path(a.state_out or DATA / "state.json")
+        out.write_text(json.dumps(res.state_at(a.state_at), indent=1))
+        print(f"[simulate] state at {a.state_at/60:.0f} min → {out}")
+
+
 def cmd_validate_state(a):
     """Check a state snapshot (e.g. the backend's GET /state) against state.schema.json and town ids."""
     from .scenario import load_scenario
@@ -209,6 +242,13 @@ def main(argv=None):
     v.add_argument("path"); v.add_argument("--town", default=None, help="town.json to check ids against (default data/town.json)")
     v.add_argument("--deadlines", action="store_true", help="also print per-household deadlines")
     v.set_defaults(f=cmd_validate_scenario)
+    sm = sp.add_parser("simulate", help="run a plan on a scenario (plan simulator)")
+    sm.add_argument("--scenario", required=True); sm.add_argument("--plan", default="example", help="'example' or a plan JSON file")
+    sm.add_argument("--report", action="append", help="report JSON (object or list); repeatable")
+    sm.add_argument("--out", default=None, help="write metrics + outcomes + events + timeline JSON here")
+    sm.add_argument("--state-at", type=float, default=None, help="also write a state snapshot at this sim time (s)")
+    sm.add_argument("--state-out", default=None)
+    sm.set_defaults(f=cmd_simulate)
     vs = sp.add_parser("validate-state", help="check a state snapshot against state.schema.json and town/scenario ids")
     vs.add_argument("path"); vs.add_argument("--scenario", default=None); vs.add_argument("--town", default=None)
     vs.set_defaults(f=cmd_validate_state)

@@ -36,7 +36,7 @@ uv run --project engine ember validate-state contracts/fixtures/state.fixture.js
 ```
 Schema (state + embedded assignment/report) then references: closed edges, households, facilities, resources and assignment ids all exist and agree with each other and with the scenario. Soham: run it on your `GET /state` output.
 
-The state fixture is computed, not hand-typed: flood and closures from the keyframes, facility states from events and dependencies, wastewater integrated per tick, and a deadline-ordered example dispatch with real routes and ETAs. `plan.planner = "example"` until the allocator lands; `synthetic[]` lists what's illustrative.
+The state fixture is simulator output (D32): the example planner's plan run through the plan simulator to 80 min, then snapshotted. `plan.planner = "example"` until the allocator lands; `synthetic[]` lists what's illustrative. Any time: `uv run --project engine ember simulate --scenario <scenario.json> --state-at <t_s>` writes `data/state.json`.
 
 ## Vehicle states (`trajectories.trips[].final`, engine snapshots)
 `0 waiting · 1 moving · 2 queued · 3 exited · 4 exposed · 5 stuck`
