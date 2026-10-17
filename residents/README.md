@@ -101,8 +101,9 @@ Console: `call r1`, `calls`. API: `POST /calls {handle}`, `GET /calls`.
 | `POST /ask {role, household_id?, facility_id?, question?}` | prompt a specific household/facility. A role alone works with at most one active registration of that role; multiple matches → 422. Returns delivery status, assigned_number and action_needed; blocked sends do not consume the plan's question. |
 | `POST /clock {t_s}` | move the sim clock (play / scrub); broadcasts `state` |
 | `GET /comparison?seeds=5` | baseline vs EMBER on paired perturbations (`comparison.schema.json`), cached per plan version (~3 s first call) |
+| `GET /playback?which=ember\|baseline` | the current plan or the baseline on the same reports, simulated over the whole horizon (`playback.schema.json`) for the map's replay; cached per plan version and report count (~4 s first call) |
 | `POST /assignments/{id}/confirm`, `/reject` `{plan_version?}` | the person accepts / declines an offer (texts "yes"/"no" take the same path). Reject → replan; that vehicle is never re-offered to them. 409 if `plan_version` is older and the assignment changed since (stale) |
-| `GET /phones`, `POST /phones {role, handle, household_id?, facility_id?}` | one phone per household/facility, many residents/operators. Residents specify household_id, operators facility_id. Omission uses the original judge/hospital default. Occupied target or a phone bound elsewhere → 409; never silently replaces a registration. Returns thread, assigned_number, opted_in and action_needed. `locate: true` (resident, no household_id): the phone gets a household when it texts where it is (D56). |
+| `GET /phones`, `POST /phones {role, handle, household_id?, facility_id?}` | one phone per household/facility, many residents/operators. Residents specify household_id, operators facility_id. Omission uses the original judge/hospital default. Occupied target or a phone bound elsewhere → 409; never silently replaces a registration. Returns thread, assigned_number, opted_in and action_needed. `locate: true` (resident, no household_id): the phone gets a household when it texts where it is (D56). Each item also has `household_id` and `player` (join order of drill players, else null). |
 | `POST /messages {thread, text, plan_version?, assignment_id?}` | send on a thread (gets the `[EMBER drill]` prefix); returns `delivery`: `sent` / `failed` / `not_opted_in` / `no_phone` / `dev` |
 | `GET /questions?open_only=` | questions the plan couldn't answer (D60): `{report_id, thread, handle, text, t_s, answer}`; each person already got their situation |
 | `POST /questions/{report_id}/answer {text}` | a coordinator's reply, texted on that thread as written (drill prefix); marks it answered. 404 if not in this run |
@@ -114,6 +115,11 @@ Console: `call r1`, `calls`. API: `POST /calls {handle}`, `GET /calls`.
 2. `curl -X POST localhost:8000/phones -H 'content-type: application/json' -d '{"role":"resident","handle":"4135550100"}'` (and `operator`).
 3. Each tester texts anything to their `assigned_number` (Photon's opt-in rule: a shared line can't text first). `GET /phones` then shows `opted_in: true`.
 4. `GET /health` → `photon_listener.socket` should be `subscribed`; if the socket is down for 5 s, the backend polls `GET /messages` every 2 s instead.
+
+**Join by QR (D78):** a phone we don't know that texts "JOIN EMBER" to `JOIN_NUMBER` (default `PHOTON_VOICE_NUMBER`,
+the SMS number: a shared iMessage line only delivers assigned handles) becomes Player N, up to `MAX_PLAYERS` (30), on a
+free building in the forecast flood that we choose; the plan then asks its own question. Over the cap: "the drill is
+full". `/dev/reset` places players again. Replies on the SMS number need the line's SMS campaign (Photon).
 
 Inbound texts are deduped by Photon message id; the event cursor is saved after each handled event and survives restarts and `/dev/reset`.
 

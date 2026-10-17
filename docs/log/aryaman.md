@@ -253,3 +253,10 @@ What: verified the web chat's #47 independently before merging (Aryaman OK'd the
 Files: docs/DEMO.md, docs/QA.md, docs/devpost/README.md, docs/HANDOFF.md, docs/log/aryaman.md
 Interfaces: none. Soham: please add `GET /playback?planner=ember|baseline` → `EngineSession.playback(planner)` (contracts/playback.schema.json); the website's Live mode calls it.
 Status: done.
+
+## 2026-10-17 23:30 · residents: multiplayer join by text + GET /playback (D78–D79) · branch aryaman/multiplayer
+What: Photon docs checked (read-only): a shared iMessage line only delivers assigned handles; the SMS number delivers `message.received` from any sender, so it is the join line (replies there need the line's SMS campaign). Unknown phone texts "JOIN EMBER" → Player N (cap MAX_PLAYERS=30, else "drill is full") → a free flood-zone town building chosen by us (deadline > now + 20 min, emptiest corner first, earliest flood) labelled "Player N", needs unknown; joins < 2 s apart share one replan; /dev/reset places players again. GET /phones adds `player`, `household_id`; GET /health adds `join_number`. GET /playback?which=ember|baseline, cached per plan version. Cleanups: `Messenger._route` replaces the 4× delivery chain; removed `PhotonClient.list_assignments`, `EngineSession.edges_at_household`.
+Files: residents/residents/{messaging,locate,engine_bridge,planner,app,config,photon,threads,db}.py, residents/tests/{test_drill,test_engine,test_api,conftest}.py, residents/README.md, engine/ember_engine/api.py, engine/tests/test_api.py, docs/DECISIONS.md
+Run: cd residents && uv run pytest -q; cd engine && uv run pytest -q
+Interfaces: GET /playback?which=…; GET /phones items gain `player`, `household_id`; env JOIN_NUMBER, MAX_PLAYERS. No contract change.
+Status: done, pushed, not merged.

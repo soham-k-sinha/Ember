@@ -48,6 +48,7 @@ class Planner:
         self.plan_hooks: list[PlanHook] = []
         self.clock_hooks: list[ClockHook] = []
         self._comparison: tuple[tuple, dict] | None = None
+        self._playback: dict[str, tuple[tuple, dict]] = {}
         self._optimizing = False
         self.last_optimize: dict | None = None
 
@@ -67,6 +68,7 @@ class Planner:
             plan = await run_in_threadpool(self.bridge.plan, [], 0.0, None, None, "initial plan")
             self.store.add_plan(plan, reports_used=[])
             self._comparison = None
+            self._playback.clear()
             state = await self._refresh(t_s)
         await self._run_hooks(state["plan"])
         return self.store.snapshot()
@@ -346,4 +348,18 @@ class Planner:
             known = [r for r in self.store.reports() if r["observed_at_t_s"] <= self.now()]
             result = await run_in_threadpool(self.bridge.compare, known, seeds)
         self._comparison = (key, result)
+        return result
+
+    # ---------- playback (map replay, D70) ----------
+    async def playback(self, which: str) -> dict:
+        """The current plan ("ember") or the baseline on the same reports, simulated over the whole horizon
+        (contracts/playback.schema.json). Cached per plan version and report count."""
+        key = (self.store.meta().get("plan_version"), len(self.store.reports()))
+        hit = self._playback.get(which)
+        if hit and hit[0] == key:
+            return hit[1]
+        async with self.lock:
+            _, current, known, _ = self._known()
+            result = await run_in_threadpool(self.bridge.playback, which, current, known)
+        self._playback[which] = (key, result)
         return result
