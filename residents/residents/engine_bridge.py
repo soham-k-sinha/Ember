@@ -28,12 +28,16 @@ class EngineBridge:
         self.scenario = load_scenario(self.scenario_path)
         town_file = Path(town_path) if town_path else self._unpacked_town()
         self.town = json.loads(town_file.read_text())
+        self.town_file = town_file
         self.world = World.load(town_file)
         self.seed = seed
         from ember_engine.api import EngineSession
         # moves = allocator local-search budget per (re)plan; None = engine's default (production)
         self.session = EngineSession(self.scenario_path, world=self.world, seed=seed, moves=moves)
+        self.moves = moves
         self._lock = threading.Lock()
+        self._opt_session = None
+        self._opt_lock = threading.Lock()
         self._edges = {e["id"]: e for e in self.town["edges"]}
         self._reverse = {(e["u"], e["v"]): e["id"] for e in self.town["edges"]}
         self._facility_ids = {f["id"] for f in self.scenario["facilities"]}
@@ -87,10 +91,30 @@ class EngineBridge:
             return self.session.state_at(min(max(t_s, 0.0), self.t_end_s))
 
     def optimize(self, reports: list[dict], t_now: float, prev: dict | None, on_point, seeds: int = 20, k: int = 4) -> dict:
-        """Robust fan-out (Daytona if engine/.env has a key, else local processes)."""
+        """Robust fan-out (Daytona if engine/.env has a key, else local processes). Runs on its own
+        EngineSession and lock, so replans / state_at (the main session) aren't blocked for its duration."""
+        from ember_engine.api import EngineSession
+        from ember_engine.world import World
+        with self._opt_lock:
+            if self._opt_session is None:
+                # its own World: World's routing caches are plain dicts that get cleared when they grow, so
+                # sharing one World between this thread and replans/state_at could raise KeyError mid-read
+                self._opt_session = EngineSession(self.scenario_path, world=World.load(self.town_file),
+                                                  seed=self.seed, moves=self.moves)
+            self._opt_session.resume(prev, self.engine_reports(reports))
+            return self._opt_session.optimize(on_point=on_point, t_now=t_now, seeds=seeds, k=k)["plan"]
+
+    def simulate(self, planner: str, plan: dict | None, reports: list[dict]) -> dict:
+        """Projected metrics over the whole horizon for `planner` = "ember" (the current plan) or
+        "baseline" (incident-by-incident dispatch on the same reports)."""
+        from ember_engine.baseline import baseline_plan
+        from ember_engine.sim import simulate
+        rep = self.engine_reports(reports)
         with self._lock:
-            self.session.resume(prev, self.engine_reports(reports))
-            return self.session.optimize(on_point=on_point, t_now=t_now, seeds=seeds, k=k)["plan"]
+            p = plan if planner == "ember" else baseline_plan(self.world, self.scenario, rep)
+            metrics = dict(simulate(self.world, self.scenario, p, reports=rep, record=False).metrics)
+        metrics["projected"] = True
+        return metrics
 
     def compare(self, reports: list[dict], seeds: int = 5) -> dict:
         with self._lock:

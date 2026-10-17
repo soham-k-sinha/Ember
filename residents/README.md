@@ -21,7 +21,9 @@ uv run pytest -q
 | `POST /reports` | a structured fact (`report.schema.json`; `id`/`observed_at_t_s` default to new/the clock). `need` / `closure_report` / `facility_status` → replan → WS `report`, `plan`, one `assignment` per change, `metrics` |
 | `POST /disruption` | judge's map controls: `{"close_edges": [edge ids]}` (reverse direction closed too) or `{"facility_id", "set": {...}}` → report → replan |
 | `POST /replan` | replan now (no new fact) |
-| `POST /optimize?seeds=20&k=4` → 202 | robust fan-out (top-k candidates × perturbed worlds + baseline; Daytona if engine/.env has a key, else local processes). Streams WS `scatter_point`, then `plan`. 409 while running; `GET /optimize` = `{running, last}` |
+| `POST /optimize?seeds=20&k=4` → 202 | robust fan-out (top-k candidates × perturbed worlds + baseline; Daytona if engine/.env has a key, else local processes). Streams WS `scatter_point`, then `plan`. Runs outside the planner lock on its own engine session + World (clock / texts / replans keep flowing); if a replan lands meanwhile the result is discarded as superseded. 409 while running; `GET /optimize` = `{running, last}` |
+| `POST /simulate {planner: ember\|baseline}` | projected metrics over the horizon for the current plan or the incident-by-incident baseline, with every report known by the clock |
+| `POST /ask {role, question?}` | scripted prompt to the resident/operator thread (operator console); default = the plan's open question for that thread, else a role default. The reply comes back through extraction (e.g. → `facility_status` → replan) |
 | `POST /clock {t_s}` | move the sim clock (play / scrub); broadcasts `state` |
 | `GET /comparison?seeds=5` | baseline vs EMBER on paired perturbations (`comparison.schema.json`), cached per plan version (~3 s first call) |
 | `POST /assignments/{id}/confirm`, `/reject` `{plan_version?}` | the person accepts / declines an offer (texts "yes"/"no" take the same path). Reject → replan; that vehicle is never re-offered to them. 409 if `plan_version` is older and the assignment changed since (stale) |

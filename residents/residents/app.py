@@ -27,6 +27,9 @@ from .photon import PhotonClient, PhotonError, PhotonListener
 from .planner import Planner, ReportError
 
 log = logging.getLogger("residents")
+
+DEFAULT_ASK = {"operator": "How many hours of backup power do you have left on site?",
+               "resident": "How many people are with you, and does anyone need a wheelchair-accessible vehicle?"}
 if not logging.getLogger().handlers:  # uvicorn only configures its own loggers; make ours visible too
     logging.basicConfig(level=logging.INFO, format="%(levelname)s:     [%(name)s] %(message)s")
 
@@ -71,6 +74,16 @@ async def start_engine(settings: Settings, store: Store, planner: Planner) -> No
 class RespondIn(BaseModel):
     # module level, not inside create_app: with postponed annotations FastAPI resolves hints by name
     plan_version: int | None = Field(default=None, description="the plan version the person answered (stale check)")
+
+
+class AskIn(BaseModel):
+    role: Literal["resident", "operator"]
+    question: str | None = Field(default=None, max_length=300,
+                                 description="omit → the plan's open question for that thread, else a default")
+
+
+class SimulateIn(BaseModel):
+    planner: Literal["ember", "baseline"] = "ember"
 
 
 class ClockIn(BaseModel):
@@ -257,6 +270,29 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
     async def reject(assignment_id: str, body: RespondIn | None = None) -> dict:
         """The person declined: status `rejected`, replan; that vehicle is never re-offered to them."""
         return await respond(assignment_id, "reject", body)
+
+    @app.post("/simulate")
+    async def post_simulate(body: SimulateIn) -> dict:
+        """Projected outcome of the current plan ("ember") or the incident-by-incident baseline."""
+        return await planner().simulate(body.planner)
+
+    @app.post("/ask")
+    async def post_ask(body: AskIn) -> dict:
+        """Scripted prompt from the operator console (Task 6), e.g. "What's your backup endurance now?".
+        The answer comes back as a text → extraction → facility_status report → replan."""
+        from .threads import resolve_thread
+        thread = resolve_thread(store(), body.role)
+        if thread is None:
+            raise HTTPException(409, f"no {body.role} thread in the current state")
+        view = store().plan_view()
+        q = None
+        if body.question is None and app.state.outbound is not None and view:
+            q = app.state.outbound.next_info_request(view, thread)
+        text = body.question or (q["question"] if q else DEFAULT_ASK[body.role])
+        msg, delivery = await messenger().send_message(thread, text, store().meta().get("plan_version"))
+        if q:
+            store().kv_set(f"asked:{q['id']}", str(view["version"]))
+        return {"message": msg, "delivery": delivery, "info_request": q["id"] if q else None}
 
     @app.post("/optimize", status_code=202)
     async def post_optimize(seeds: int = 20, k: int = 4) -> dict:
