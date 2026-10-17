@@ -25,6 +25,16 @@ class Intake:
         self.store, self.messenger, self.planner, self.llm = store, messenger, planner, llm
         self.outbound = outbound
 
+    async def _respond(self, rep: dict, thread: dict) -> None:
+        """YES / NO to the last offered instruction → confirm / reject, or the latest instruction if stale."""
+        async def ack(a: dict) -> None:
+            if self.outbound is not None:
+                await self.outbound.ack(a, rep["kind"], thread)
+
+        res = await self.planner.respond(rep["assignment_id"], rep["kind"], rep.get("plan_version"), on_applied=ack)
+        if res["stale"] and self.outbound is not None:
+            await self.outbound.latest(thread)
+
     def _record(self, thread: dict) -> dict:
         """What the model may know about the sender (no routes, no plan)."""
         if "household_id" in thread:
@@ -63,6 +73,8 @@ class Intake:
                 stored.append(rep)
             except ReportError as e:
                 log.warning("extracted report rejected (%s): %s", e, r)
+        for rep in [r for r in stored if r["kind"] in ("confirm", "reject")]:
+            await self._respond(rep, thread)
         if stored:
             self.store.set_message_report(msg["id"], stored[0]["id"])
             msg = {**msg, "report_id": stored[0]["id"]}
@@ -71,6 +83,8 @@ class Intake:
             if facts:
                 await self.planner.replan(trigger="; ".join(self.planner._trigger(r) for r in facts))
                 replanned = True  # the plan hook already texted any changed instruction
+        if any(r["kind"] in ("confirm", "reject") for r in stored):
+            replanned = True  # the answer (ack / latest instruction / new plan) was already texted
         if out.question:
             await self.messenger.send_message(thread, out.question, self.store.meta().get("plan_version"))
         elif not replanned and self.outbound is not None and (view := self.store.plan_view()):
