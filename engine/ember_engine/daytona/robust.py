@@ -45,9 +45,11 @@ def robust_rank(points: list[dict], exclude=("baseline",)) -> list[dict]:
 
 def robust_plan(world, scn: dict, reports=(), t_now: float = 0.0, prev: dict | None = None, prev_reports=None,
                 k: int = 4, seeds: int = 20, pool=None, on_point=None, seed: int = 0, trigger: str | None = None,
-                include_baseline: bool = True, moves: int | None = None) -> tuple[dict, list]:
+                include_baseline: bool = True, moves: int | None = None, version: int | None = None) -> tuple[dict, list]:
     t0 = time.time()
     s = search(world, scn, reports, t_now, prev, prev_reports, seed, moves)
+    if version is not None:   # a fresh plan that replaces an existing version (optimize at t=0): tag points with it
+        s.version = version
     cands = {c.cid: c for c in s.ranked[:k]}
     plans = {cid: {"assignments": c.assignments} for cid, c in cands.items()}
     if include_baseline:

@@ -67,10 +67,15 @@ class Context:
         self.fac = {f["id"]: f for f in scn["facilities"]}
         assets = {a["id"]: a for a in w.assets}
         self.fac_node = {k: w.node_index(f["node"] if "node" in f else assets[f["asset_id"]]["node"]) for k, f in self.fac.items()}
-        self.base = next(k for k, f in self.fac.items() if f["type"] in ("response_base", "shelter"))
+        self.base = next(k for k, f in self.fac.items() if f["type"] in ("response_base", "shelter"))   # where the fleet stages
         self.base_node = self.fac_node[self.base]
+        # drop-off points: shelters first on a tie, then response bases (DECISIONS: nearest open drop-off)
+        self.dropoffs = sorted((k for k, f in self.fac.items() if f["type"] in ("shelter", "response_base")),
+                               key=lambda k: (self.fac[k]["type"] != "shelter", k))
+        self._drop: dict = {}
         self.power_risk = self._power_risk()
         self.res = {x["id"]: x for x in scn["resources"]}
+        self.banned: set = set()      # (resource id, household id | facility id) a person declined (set by carry_over)
         self._tf, self._tb = {}, {}
 
     # ---------- facilities ----------
@@ -118,15 +123,30 @@ class Context:
 
     def eligible(self, spec: dict, hid: int) -> bool:
         need = self.needs[hid]
-        if need == "unknown" or spec["kind"] not in VEHICLES:
+        if need == "unknown" or spec["kind"] not in VEHICLES or (spec["id"], hid) in self.banned:
             return False
         if (need.get("mobility") or need.get("accessible_vehicle")) and not spec.get("accessible"):
             return False
         return spec.get("capacity_people", 0) >= need["people"]
 
-    def rescue_cycle(self, slot: Slot, hid: int) -> tuple[float, float]:
-        """(estimated arrival at the household, time the vehicle is free again at the base)."""
+    def dropoff_order(self, hid: int) -> list[str]:
+        """Drop-off points by drive time from the household on today's open roads (unreachable ones last)."""
+        if hid not in self._drop:
+            node = self.hh_node[hid]
+            self._drop[hid] = sorted(self.dropoffs, key=lambda k: float(self.tb(self.fac_node[k])[node]))
+        return self._drop[hid]
+
+    def dropoff_for(self, hid: int) -> str:
+        return self.dropoff_order(hid)[0]
+
+    def rescue_cycle(self, slot: Slot, hid: int, dropoff: str | None = None) -> tuple[float, float]:
+        """(estimated arrival at the household, time the vehicle is free again at the drop-off)."""
         node = self.hh_node[hid]
         arrive = slot.free_at + self.travel(slot.spec, slot.node, node)
-        back = float(self.tb(self.base_node)[node]) / float(slot.spec.get("speed_factor", 1.0))
+        to = self.fac_node[dropoff or self.dropoff_for(hid)]
+        back = float(self.tb(to)[node]) / float(slot.spec.get("speed_factor", 1.0))
         return arrive, arrive + float(slot.spec.get("service_s", 300)) + back + UNLOAD_S
+
+    def after_rescue(self, hid: int, dropoff: str | None = None) -> int:
+        """Where the vehicle is once it has unloaded this household."""
+        return self.fac_node[dropoff or self.dropoff_for(hid)]

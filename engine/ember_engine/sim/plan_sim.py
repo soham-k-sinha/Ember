@@ -120,6 +120,20 @@ def _report_events(scn: dict, reports, delay_s: float) -> list[dict]:
     return sorted(ev, key=lambda e: e["t_s"])
 
 
+LIVE_STATUSES = ("proposed", "offered", "confirmed")
+
+
+def cut_at(a: dict) -> float | None:
+    """When an assignment stops counting: its cancel time, or −1 for a decline with no time (never dispatched).
+    A live status wins over a stale cancel time (a decline the person took back)."""
+    status = a.get("status")
+    if status in LIVE_STATUSES:
+        return None
+    if a.get("cancelled_at_t_s") is not None:
+        return float(a["cancelled_at_t_s"])
+    return -1.0 if status == "rejected" else None
+
+
 def simulate(world, scn: dict, plan: dict, reports=(), perturbation: dict | None = None,
              t0: float = 0.0, t_end: float | None = None, dt: float | None = None, record: bool = True) -> SimResult:
     """record=False skips the per-tick replay (state_at unavailable): use it for candidate scoring."""
@@ -170,7 +184,7 @@ def simulate(world, scn: dict, plan: dict, reports=(), perturbation: dict | None
     queues = {x["id"]: [a for a in assigns if a["resource_id"] == x["id"]] for x in scn["resources"]}
     out = {a["id"]: Outcome(a["id"], a["resource_id"], a["task"], a["target"]) for a in assigns}
     for a in assigns:
-        if "household_id" in a["target"] and a["target"]["household_id"] in hh:
+        if "household_id" in a["target"] and a["target"]["household_id"] in hh and cut_at(a) is None:
             h = hh[a["target"]["household_id"]]
             h["assignment"] = h["assignment"] or a["id"]
             if h["status"] == "needs":
@@ -239,7 +253,7 @@ def simulate(world, scn: dict, plan: dict, reports=(), perturbation: dict | None
                 continue
             spec, mv = r["spec"], r["mv"]
             cur = r["cur"]
-            if cur is not None and cur.get("cancelled_at_t_s") is not None and float(cur["cancelled_at_t_s"]) <= t \
+            if cur is not None and cut_at(cur) is not None and cut_at(cur) <= t \
                     and r["phase"] in ("to_target", "service", "working") and r["on_board"] == 0:
                 if r["phase"] == "working" and cur["task"] == "protect":   # connected generator moves on
                     fm.disconnect_generator(cur["target"]["facility_id"])
@@ -249,8 +263,7 @@ def simulate(world, scn: dict, plan: dict, reports=(), perturbation: dict | None
                     finish(out[cur["id"]], "incomplete", t, "cancelled by replan")
                 mv.dest, mv.route = None, []
                 r["phase"], r["cur"], r["last"] = "idle", None, None
-            while r["phase"] == "idle" and queues[rid] and queues[rid][0].get("cancelled_at_t_s") is not None \
-                    and float(queues[rid][0]["cancelled_at_t_s"]) <= t:
+            while r["phase"] == "idle" and queues[rid] and cut_at(queues[rid][0]) is not None and cut_at(queues[rid][0]) <= t:
                 finish(out[queues[rid].pop(0)["id"]], "incomplete", t, "cancelled by replan")
             if r["phase"] == "idle" and queues[rid] and float(queues[rid][0].get("not_before_t_s") or 0.0) <= t:
                 a = queues[rid].pop(0)

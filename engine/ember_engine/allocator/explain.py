@@ -11,6 +11,7 @@ from ..sim.plan_sim import simulate
 from .context import VEHICLES, Context
 
 mins = lambda t: f"{t/60:.0f} min"  # noqa: E731
+DEAD = ("cancelled", "rejected")   # assignments that no longer run (history)
 
 
 def explain(ctx: Context, carry, assignments: list, res, reports, version: int, prev: dict | None, pol) -> dict:
@@ -36,7 +37,7 @@ def explain(ctx: Context, carry, assignments: list, res, reports, version: int, 
             a["deadline_s"] = ctx.power_risk.get(a["target"]["facility_id"], (None, None))[1]
             a["rationale"] = _protect_why(ctx, a, o, assignments, res, reports, res_name)
         old = {b["id"]: b for b in (prev or {}).get("assignments", [])}.get(a["id"])
-        if old is not None and a.get("status") != "cancelled" and a.get("plan_version") != version \
+        if old is not None and a.get("status") not in DEAD and a.get("plan_version") != version \
                 and abs(float(a["eta_s"]) - float(old.get("eta_s") or 0)) > 120:
             base_why = a.get("rationale", "").split(" · v")[0]
             a["rationale"] = (f"{base_why} · v{version}: ETA {mins(float(old['eta_s']))} → {mins(a['eta_s'])}"
@@ -44,7 +45,7 @@ def explain(ctx: Context, carry, assignments: list, res, reports, version: int, 
                                  float(r["observed_at_t_s"]) <= ctx.t_now for r in ctx.known_reports) else ""))
         if a.get("status") == "cancelled" and a.get("cancelled_at_t_s") == ctx.t_now:
             moved_to = [b["target"].get("facility_id") or b["target"].get("household_id") for b in assignments
-                        if b["resource_id"] == a["resource_id"] and b.get("plan_version") == version and b.get("status") != "cancelled"]
+                        if b["resource_id"] == a["resource_id"] and b.get("plan_version") == version and b.get("status") not in DEAD]
             own = a["target"].get("facility_id") or a["target"].get("household_id")
             a["rationale"] = (f"cancelled at {mins(ctx.t_now)} by plan v{version}"
                               + (f": {res_name[a['resource_id']]} re-routed to the same target from where it is now" if moved_to and moved_to[0] == own
@@ -53,7 +54,7 @@ def explain(ctx: Context, carry, assignments: list, res, reports, version: int, 
         elif a["task"] == "protect" and a.get("plan_version") == version and prev:
             # a generator re-planned onto the same facility: say what it replaces and why the ETA moved
             old = next((b for b in prev.get("assignments", []) if b["resource_id"] == a["resource_id"] and b["task"] == "protect"
-                        and b["target"] == a["target"] and b.get("status") != "cancelled"), None)
+                        and b["target"] == a["target"] and b.get("status") not in DEAD), None)
             if old is not None:
                 closed = any(r["kind"] == "closure_report" and float(r["observed_at_t_s"]) <= ctx.t_now for r in ctx.known_reports)
                 a["rationale"] += (f" · v{version}: replaces {old['id']}, ETA {mins(float(old['eta_s']))} → {mins(a['eta_s'])}"
@@ -63,7 +64,7 @@ def explain(ctx: Context, carry, assignments: list, res, reports, version: int, 
     # unmet needs + questions
     unresolved, info = [], []
     picked = {o["target"].get("household_id"): o for o in res.outcomes if o["task"] == "rescue" and o["pickup_t"] is not None}
-    active = {a["target"].get("household_id") for a in final if a["task"] == "rescue" and a.get("status") != "cancelled"}
+    active = {a["target"].get("household_id") for a in final if a["task"] == "rescue" and a.get("status") not in DEAD}
     held = _held(ctx, carry.slots, pol)
     for hid, h in ctx.hh.items():
         need = ctx.needs[hid]
@@ -83,14 +84,14 @@ def explain(ctx: Context, carry, assignments: list, res, reports, version: int, 
         if d is None and hid in active:
             continue
         unresolved.append(_why_unmet(ctx, hid, need, d, o, out, final, held, res_name))
-    protected = {a["target"]["facility_id"] for a in final if a["task"] == "protect" and a.get("status") != "cancelled"}
+    protected = {a["target"]["facility_id"] for a in final if a["task"] == "protect" and a.get("status") not in DEAD}
     for k, (_, down_t) in ctx.power_risk.items():
         f = ctx.fac[k]
         if down_t is None or k in protected or f["type"] not in ("pumping_station", "hospital", "clinic") or not f.get("connector"):
             continue
         gens = [x for x in scn["resources"] if x["kind"] == "generator"]
         fit = [x for x in gens if compatible(x, f)[0]]
-        busy = [a for a in final if a["task"] == "protect" and a["resource_id"] in {x["id"] for x in fit} and a.get("status") != "cancelled"]
+        busy = [a for a in final if a["task"] == "protect" and a["resource_id"] in {x["id"] for x in fit} and a.get("status") not in DEAD]
         blocked = ("no compatible generator in the fleet" if not fit else
                    f"the only compatible generator is protecting {busy[0]['target']['facility_id']}" if busy else
                    "keeping a compatible generator in reserve scored better")
@@ -108,7 +109,7 @@ def explain(ctx: Context, carry, assignments: list, res, reports, version: int, 
                          "why": f"decides whether a generator should move to {f['name']}"})
 
     plan = {"version": version, "parent_version": prev.get("version") if prev else None, "created_at_t_s": float(ctx.t_now),
-            "planner": "ember", "reserved": sorted(r for r in held if not any(a["resource_id"] == r and a.get("status") != "cancelled" for a in final)),
+            "planner": "ember", "reserved": sorted(r for r in held if not any(a["resource_id"] == r and a.get("status") not in DEAD for a in final)),
             "assignments": final, "changes": _diff(prev, final), "unresolved": unresolved, "info_requests": info,
             "metrics": dict(res.metrics)}
     return plan
@@ -177,31 +178,41 @@ def _deltas(now: dict, alt: dict) -> str:
 
 def _why_unmet(ctx, hid, need, d, o, out, final, held, res_name) -> dict:
     mob = need.get("mobility") or need.get("accessible_vehicle")
-    txt = f"{need['people']} people" + (", wheelchair-accessible vehicle" if mob else "") + (f" before {mins(d)}" if d is not None else "")
-    mine = [a for a in final if a["task"] == "rescue" and a["target"].get("household_id") == hid and a.get("status") != "cancelled"]
+    txt = (f"{need['people']} {'person' if need['people'] == 1 else 'people'}" + (", wheelchair-accessible vehicle" if mob else "")
+           + (f" before {mins(d)}" if d is not None else ""))
+    mine = [a for a in final if a["task"] == "rescue" and a["target"].get("household_id") == hid and a.get("status") not in DEAD]
     elig = [s for s in ctx.fleet().values() if ctx.eligible(s.spec, hid)]
     if mine:
         oo = out[mine[-1]["id"]]
         blocked = (f"assigned to {res_name[mine[-1]['resource_id']]} but simulated pickup at {mins(oo['pickup_t'])}, after the deadline"
                    if oo["pickup_t"] is not None else f"assigned to {res_name[mine[-1]['resource_id']]}: {oo['reason'] or oo['status']}")
+    elif not elig and any((r, hid) in ctx.banned for r in res_name):
+        declined = sorted(res_name[r] for r in res_name if (r, hid) in ctx.banned)
+        blocked = (f"declined {', '.join(declined)}; no other " +
+                   ("wheelchair-accessible vehicle" if mob else f"vehicle with capacity ≥ {need['people']}"))
     elif not elig:
         blocked = "no wheelchair-accessible vehicle with room" if mob else f"no vehicle with capacity ≥ {need['people']}"
     elif d is not None and ctx.tf(ctx.base_node)[ctx.hh_node[hid]] == float("inf"):
         blocked = "no open route: flooded or reported-closed roads cut the household off"
+    elif d is None:
+        blocked = ("outside the forecast flood: households the water will reach go first, and no eligible vehicle "
+                   "is free before the end of the horizon")
     else:
         blocked = "every eligible vehicle is committed to earlier deadlines"
     spare = sorted(r for r in held if any(s.rid == r for s in elig))
     unblock = (f"release reserve {', '.join(res_name[r] for r in spare)}" if spare else
                "another eligible vehicle, a closer drop-off point, or a road report that reopens access")
+    alternatives = (["stay where you are: the forecast flood does not reach you", "a vehicle is sent if one frees up"]
+                    if d is None else ["shelter in place above ground floor", "walk to the nearest dry pickup point if able"])
     return {"target": {"household_id": hid}, "need": txt, "blocked_by": blocked, "would_unblock": unblock,
-            "alternatives": ["shelter in place above ground floor", "walk to the nearest dry pickup point if able"]}
+            "alternatives": alternatives}
 
 
 def _diff(prev: dict | None, final: list) -> list:
     if not prev:
         return []
-    before = {a["id"]: a for a in prev.get("assignments", []) if a.get("status") != "cancelled"}
-    after = {a["id"]: a for a in final if a.get("status") != "cancelled"}
+    before = {a["id"]: a for a in prev.get("assignments", []) if a.get("status") not in DEAD}
+    after = {a["id"]: a for a in final if a.get("status") not in DEAD}
     by_target_before = {_tkey(a): a for a in before.values()}
     ch = []
     for i, a in after.items():

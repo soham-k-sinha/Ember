@@ -67,6 +67,9 @@ def test_compare_and_optimize(session):
     out = session.optimize(on_point=pts.append, seeds=3, k=2, pool=LocalPool(1, world=session.world))
     assert len(pts) == 9 and out["plan"]["search"]["robust"]["jobs"] == 9
     assert all(p["n_total"] == 9 for p in pts)
+    v = out["plan"]["version"]   # optimize at t=0 replaces the current version: points carry the new one
+    assert all(p["plan_version"] == v and p["batch_id"] == f"v{v}" for p in pts)
+    assert out["plan"]["search"]["robust"]["batch_id"] == f"v{v}"
 
 
 def test_resume_after_restart(session, town):

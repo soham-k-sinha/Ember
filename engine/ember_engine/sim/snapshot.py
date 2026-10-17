@@ -6,8 +6,8 @@ import numpy as np
 
 
 def _assignment_status(o: dict, t: float, planned: str) -> str:
-    if planned == "cancelled":
-        return "cancelled"
+    if planned in ("cancelled", "rejected"):
+        return planned
     if o["start_t"] is None or t < o["start_t"]:
         return planned
     if o["status"] == "infeasible" and (o["arrive_t"] is None or t >= o["arrive_t"]):

@@ -133,11 +133,13 @@ class EngineSession:
         from .daytona.robust import robust_plan
         with self.lock:
             known = [r for r in self.reports if float(r["observed_at_t_s"]) <= t_now]
+            fresh = self.plan is not None and t_now <= 0
             plan, _ = robust_plan(self.world, self.scn, known, t_now=t_now, prev=self.plan if t_now > 0 else None,
                                   prev_reports=known, k=k, seeds=seeds, pool=pool, on_point=on_point, seed=self.seed,
-                                  moves=self.moves, trigger="robust optimization")
-            if self.plan is not None and t_now <= 0:
-                plan["version"], plan["parent_version"] = self.plan["version"] + 1, self.plan["version"]
+                                  moves=self.moves, trigger="robust optimization",
+                                  version=self.plan["version"] + 1 if fresh else None)
+            if fresh:
+                plan["parent_version"] = self.plan["version"]
             self.plan = plan
             self.versions.append(plan)
             return {"plan": plan, "assignment_events": assignment_events(plan), "state": self._state(t_now)}
