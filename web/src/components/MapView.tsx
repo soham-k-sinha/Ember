@@ -10,6 +10,7 @@ import { buildLayers, NEEDS_COLOR, STATUS_COLOR, type LegendMode } from "../laye
 import { countWalking, type BgHousehold, type WalkerPlan } from "../people";
 import type { Playback } from "../playback";
 import { dioramaScene, loadDiorama, type Diorama } from "../diorama";
+import { IsoView } from "../iso/IsoView";
 import type { Closure, HouseholdStatus, LngLat, Selection, StateSnapshot } from "../types";
 
 const DARK = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
@@ -164,7 +165,7 @@ function positionOf(state: StateSnapshot, selection: Selection | null): LngLat |
   return null;
 }
 
-type Basemap = "model" | "night" | "day";
+type Basemap = "iso" | "model" | "night" | "day";
 
 const MODEL_VIEW = new DeckMapView({ id: "model", repeat: false, orthographic: true });
 const MODEL_TILT = { pitch: 52, bearing: -32 };
@@ -193,7 +194,7 @@ export function MapView(props: MapViewProps) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const size = useSize(wrapRef);
   const [camera, setCamera] = useState<Camera>({ longitude: town.venue.lon, latitude: town.venue.lat, zoom: 14.6, ...TILTED });
-  const [basemap, setBasemap] = useState<Basemap>("model");
+  const [basemap, setBasemap] = useState<Basemap>("iso");
   const [diorama, setDiorama] = useState<Diorama | null>(null);
   const [loaded, setLoaded] = useState(false);
   const photo = basemap === "model";
@@ -205,7 +206,7 @@ export function MapView(props: MapViewProps) {
       if (data) {
         const [w, s, e, n] = data.bbox;
         setCamera({ longitude: (w + e) / 2, latitude: (s + n) / 2, zoom: 15.4, ...MODEL_TILT });
-      } else setBasemap("night");
+      } else setBasemap((current) => (current === "model" ? "night" : current));
     });
     return () => {
       alive = false;
@@ -312,7 +313,21 @@ export function MapView(props: MapViewProps) {
 
   return (
     <div className="map-wrap" ref={wrapRef}>
-      {photo ? (
+      {basemap === "iso" ? (
+        <IsoView
+          state={props.state}
+          t={props.t}
+          closures={props.closures}
+          playback={props.playback}
+          walkers={props.walkers}
+          showWalkers={props.showWalkers}
+          legend={props.legend}
+          selection={props.selection}
+          follow={props.follow}
+          onSelect={props.onSelect}
+          onFollow={props.onFollow}
+        />
+      ) : photo ? (
         <DeckGL
           ref={(instance) => {
             if (import.meta.env.DEV && instance) (window as unknown as { __emberDeck?: unknown }).__emberDeck = instance.deck;
@@ -381,6 +396,9 @@ export function MapView(props: MapViewProps) {
           ))}
         </div>
         <div className="segmented small" role="group" aria-label="Background">
+          <button className={basemap === "iso" ? "on" : ""} onClick={() => setBasemap("iso")} title="Isometric stage (PixiJS prototype)">
+            Iso stage
+          </button>
           {diorama ? (
             <button className={photo ? "on" : ""} onClick={() => setBasemap("model")} title="Real buildings and trees as a 3D model">
               Model

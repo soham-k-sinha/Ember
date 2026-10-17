@@ -125,6 +125,8 @@ h3 { font-size: 11px; margin-top: 10px; letter-spacing: 0.08em; text-transform: 
 
 .map-wrap { position: relative; min-height: 280px; background: #0d1118; }
 .map-wrap > div:first-child { position: absolute !important; inset: 0; }
+.iso-host { position: absolute; inset: 0; overflow: hidden; }
+.iso-host canvas { display: block; }
 
 .map-tools {
   position: absolute;
