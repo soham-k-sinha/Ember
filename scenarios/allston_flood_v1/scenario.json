@@ -415,7 +415,7 @@
    "asset_id": 0,
    "power_kw_required": 350,
    "connector": "camlock-400a",
-   "connect_s": 1200,
+   "connect_s": 1800,
    "backup_endurance_s": 1800,
    "depends_on": [
     "putnam-ave-sub",
@@ -542,7 +542,7 @@
    "id": "truck-1",
    "kind": "truck",
    "name": "Generator truck",
-   "at_facility": "treehouse-shelter",
+   "at_facility": "ems14",
    "capacity_people": 2,
    "fuel_l": 150,
    "fuel_l_per_km": 0.35,
@@ -562,21 +562,21 @@
    "id": "gen-1",
    "kind": "generator",
    "name": "Generator 1 (500 kW, camlock)",
-   "at_facility": "treehouse-shelter",
+   "at_facility": "ems14",
    "kw": 500,
    "connector": "camlock-400a",
    "fuel_l": 400,
-   "speed_factor": 0.8
+   "speed_factor": 0.25
   },
   {
    "id": "gen-2",
    "kind": "generator",
    "name": "Generator 2 (150 kW, twist-lock)",
-   "at_facility": "treehouse-shelter",
+   "at_facility": "ems14",
    "kw": 150,
    "connector": "l21-30-twistlock",
    "fuel_l": 150,
-   "speed_factor": 0.8
+   "speed_factor": 0.25
   }
  ],
  "households": [
