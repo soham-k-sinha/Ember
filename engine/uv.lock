@@ -419,11 +419,13 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "geopandas" },
+    { name = "jsonschema" },
     { name = "matplotlib" },
     { name = "networkx" },
     { name = "numpy" },
     { name = "osmnx" },
     { name = "pyproj" },
+    { name = "referencing" },
     { name = "scipy" },
     { name = "shapely" },
 ]
@@ -433,23 +435,21 @@ daytona = [
     { name = "daytona" },
 ]
 dev = [
-    { name = "jsonschema" },
     { name = "pytest" },
-    { name = "referencing" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "daytona", marker = "extra == 'daytona'", specifier = ">=0.200" },
     { name = "geopandas", specifier = ">=1.0" },
-    { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4.21" },
+    { name = "jsonschema", specifier = ">=4.21" },
     { name = "matplotlib", specifier = ">=3.8" },
     { name = "networkx", specifier = ">=3.2" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "osmnx", specifier = ">=2.0" },
     { name = "pyproj", specifier = ">=3.6" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
-    { name = "referencing", marker = "extra == 'dev'", specifier = ">=0.35" },
+    { name = "referencing", specifier = ">=0.35" },
     { name = "scipy", specifier = ">=1.12" },
     { name = "shapely", specifier = ">=2.0" },
 ]

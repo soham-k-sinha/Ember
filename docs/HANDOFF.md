@@ -19,7 +19,7 @@ Last updated: 2026-10-16, Friday 23:00 (hacking started ~4 PM; venue closes 8 PM
 ## Immediate next steps, in order
 1. **Hand-curate exits** (`build_town.py`). Several current exits are residential side streets that just cross the box edge (Gardner Terrace, President Terrace). Replace them with the real ones: Charles River bridges (River St, Western Ave, Anderson/JFK, Eliot), Soldiers Field Rd / Storrow both ways, Memorial Dr both ways, Mass Pike ramps, Cambridge St, N Harvard St, Mass Ave. Then re-run smoke + gate-a + fixtures.
 2. Rebuild with walk network + live assets when Overpass recovers: `rm engine/cache/layers/assets_*; uv run ember build`.
-3. Then the coordination layer per **`docs/team/aryaman.md`** (flood is locked, D17): task 1 `scenario.schema.json` + `ember validate-scenario`, task 2 `state.schema.json` + fixture. These unblock three people.
+3. Then the coordination layer per **`docs/team/aryaman.md`** (flood is locked, D17). Task 1 (`scenario.schema.json` + `ember validate-scenario`) is **done** (D28). Next: task 2 `state.schema.json` + fixture (unblocks Arnav and Soham), then task 3 (flood deadlines into state; `scenario.deadlines()` already computes them).
 4. Trajectories are sampled every 60 s (`snapshot_every=6`), so TripsLayer cuts corners. Use `snapshot_every=1` for the demo file if it looks bad.
 
 ## After the sim-env works (Saturday)

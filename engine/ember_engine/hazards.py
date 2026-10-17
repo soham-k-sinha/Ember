@@ -119,4 +119,9 @@ def hazard_from_scenario(world, scenario: dict) -> Hazard:
                                     heading_deg=h.get("heading_deg", 90.0), ratio=h.get("ratio", 2.5))
     if typ == "keyframes":
         return KeyframePolygonHazard(world, h["keyframes"])
+    if typ == "flood_keyframes":   # scenario.schema.json: [{t_s, geometry: GeoJSON Polygon|MultiPolygon}]
+        from .scenario import flood_keyframes
+        hz = KeyframePolygonHazard(world, [])
+        hz.frames = flood_keyframes(scenario, world)
+        return hz
     return NoHazard()

@@ -12,10 +12,12 @@ dependencies = [
     "shapely>=2.0",
     "pyproj>=3.6",
     "matplotlib>=3.8",
+    "jsonschema>=4.21",   # validate-scenario
+    "referencing>=0.35",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "jsonschema>=4.21", "referencing>=0.35"]
+dev = ["pytest>=8"]
 daytona = ["daytona>=0.200"]
 
 [project.scripts]

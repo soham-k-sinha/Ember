@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ember/scenario.schema.json",
+  "title": "Ember flood scenario",
+  "description": "The concrete situation the planner runs on: district, flood timeline, facilities, resources, assisted households. Authored in scenarios/<name>/scenario.json; checked by `uv run --project engine ember validate-scenario <path>`. Coordinates [lon, lat]; times in seconds since simulation start; ids refer to data/town.json. Every assumed number belongs in assumptions.md.",
+  "type": "object",
+  "required": ["version", "scenario_id", "name", "t_end_s", "district", "hazard", "facilities", "resources", "households", "reserve"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {"const": "0.1"},
+    "scenario_id": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+    "name": {"type": "string"},
+    "description": {"type": "string"},
+    "synthetic": {"type": "array", "items": {"type": "string"}, "description": "What in this file is assumed rather than observed (mirrors assumptions.md). Shown in the UI."},
+    "t_end_s": {"type": "number", "exclusiveMinimum": 0, "description": "Simulated horizon (e.g. 10800 = 3 h)."},
+    "tick_s": {"type": "number", "exclusiveMinimum": 0, "default": 60},
+    "deadline_margin_s": {"type": "number", "minimum": 0, "default": 900, "description": "A household's deadline = first keyframe time whose flood covers its node, minus this margin."},
+    "district": {
+      "type": "object", "required": ["name", "geometry"], "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string"},
+        "geometry": {"$ref": "#/$defs/area", "description": "Must lie inside the town box; should contain the venue."}
+      }
+    },
+    "hazard": {
+      "type": "object", "required": ["type"], "additionalProperties": false,
+      "description": "Flood extent over time. Give `keyframes` inline or `keyframes_file` (a GeoJSON FeatureCollection next to scenario.json whose features carry properties.t_s). The latest keyframe with t_s <= t applies; an edge is closed when its line intersects the extent.",
+      "properties": {
+        "type": {"const": "flood_keyframes"},
+        "source": {"type": "string", "description": "Where the extents come from (e.g. FEMA NFHL via MassGIS, Boston Climate Ready) and how they were scaled in time."},
+        "keyframes": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "required": ["t_s", "geometry"], "additionalProperties": false,
+            "properties": {
+              "t_s": {"type": "number", "minimum": 0},
+              "label": {"type": "string"},
+              "geometry": {"$ref": "#/$defs/area"}
+            }
+          }
+        },
+        "keyframes_file": {"type": "string", "description": "Path relative to scenario.json."}
+      },
+      "oneOf": [{"required": ["keyframes"]}, {"required": ["keyframes_file"]}]
+    },
+    "facilities": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "required": ["id", "type", "name"], "additionalProperties": false,
+        "description": "Place with `asset_id` (a town.json asset) or `node` (an OSM node id in town.json, with synthetic: true and a reason in assumptions.md).",
+        "properties": {
+          "id": {"$ref": "#/$defs/id"},
+          "type": {"enum": ["hospital", "clinic", "pumping_station", "substation", "outfall", "response_base", "shelter"]},
+          "name": {"type": "string"},
+          "asset_id": {"type": "integer", "description": "town.json assets[].id"},
+          "node": {"type": "integer", "description": "OSM node id in town.json"},
+          "synthetic": {"type": "boolean", "default": false},
+          "critical": {"type": "boolean", "default": false, "description": "Counts toward hospital/critical-service outage in the objective."},
+          "state0": {"enum": ["ok", "backup", "down"], "default": "ok"},
+          "power_kw_required": {"type": "number", "minimum": 0},
+          "connector": {"type": "string", "description": "Generator hookup type; a generator must match exactly."},
+          "connect_s": {"type": "number", "minimum": 0, "default": 900, "description": "Time to hook up a generator once on site."},
+          "backup_endurance_s": {"type": "number", "minimum": 0, "description": "Own backup power after a dependency fails; 0 = none."},
+          "depends_on": {"type": "array", "items": {"$ref": "#/$defs/id"}, "description": "Facility ids this one needs (substation → pumping_station; pumping_station → outfall)."},
+          "consequence": {"type": "string", "description": "One line shown in the UI: what happens if this goes down."},
+          "capacity_people": {"type": "integer", "minimum": 0, "description": "response_base / shelter: people it can take."},
+          "wastewater": {
+            "type": "object", "required": ["storage_m3", "storage_max_m3", "inflow_m3ph", "pump_m3ph"], "additionalProperties": false,
+            "description": "pumping_station only. Per tick: pumped = pump_m3ph if powered and downstream ok else 0; storage += (inflow - pumped)*dt; spill above storage_max counts as overflow_m3.",
+            "properties": {
+              "storage_m3": {"type": "number", "minimum": 0},
+              "storage_max_m3": {"type": "number", "exclusiveMinimum": 0},
+              "inflow_m3ph": {
+                "oneOf": [
+                  {"type": "number", "minimum": 0},
+                  {"type": "array", "minItems": 1, "description": "[[t_s, m3ph], ...] step function (rises with the storm).",
+                   "items": {"type": "array", "prefixItems": [{"type": "number", "minimum": 0}, {"type": "number", "minimum": 0}], "minItems": 2, "maxItems": 2}}
+                ]
+              },
+              "pump_m3ph": {"type": "number", "minimum": 0},
+              "downstream_ok": {"type": "boolean", "default": true}
+            }
+          },
+          "events": {
+            "type": "array", "description": "Scheduled state changes that are part of the scenario (e.g. the substation trips at t=4500).",
+            "items": {
+              "type": "object", "required": ["t_s", "state"], "additionalProperties": false,
+              "properties": {"t_s": {"type": "number", "minimum": 0}, "state": {"enum": ["ok", "backup", "down"]}, "note": {"type": "string"}}
+            }
+          }
+        },
+        "oneOf": [{"required": ["asset_id"]}, {"required": ["node"]}]
+      }
+    },
+    "resources": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "required": ["id", "kind", "name"], "additionalProperties": false,
+        "description": "Start at `node` (OSM id) or at facility `at_facility`.",
+        "properties": {
+          "id": {"$ref": "#/$defs/id"},
+          "kind": {"enum": ["van", "accessible_van", "truck", "crew", "generator"]},
+          "name": {"type": "string"},
+          "node": {"type": "integer"},
+          "at_facility": {"$ref": "#/$defs/id"},
+          "capacity_people": {"type": "integer", "minimum": 0},
+          "accessible": {"type": "boolean", "default": false},
+          "kw": {"type": "number", "minimum": 0, "description": "generator only"},
+          "connector": {"type": "string", "description": "generator only"},
+          "fuel_l": {"type": "number", "minimum": 0},
+          "fuel_l_per_km": {"type": "number", "minimum": 0},
+          "service_s": {"type": "number", "minimum": 0, "description": "Time spent at a target (pickup / setup)."},
+          "speed_factor": {"type": "number", "exclusiveMinimum": 0, "default": 1.0, "description": "Multiplier on edge free-flow speed (a towed generator is slower)."},
+          "reserved": {"type": "boolean", "default": false, "description": "Never assigned (held back by policy)."}
+        },
+        "oneOf": [{"required": ["node"]}, {"required": ["at_facility"]}]
+      }
+    },
+    "households": {
+      "type": "array", "minItems": 1,
+      "description": "The assisted households (the rescue problem). Everyone else in town.json stays on the map as background.",
+      "items": {
+        "type": "object", "required": ["household_id", "needs"], "additionalProperties": false,
+        "properties": {
+          "household_id": {"type": "integer", "description": "town.json households[].id"},
+          "label": {"type": "string", "description": "Display name, e.g. '14 Elm St (2F)'."},
+          "needs": {
+            "oneOf": [
+              {"const": "unknown", "description": "Not known until a report arrives. The planner must ask or plan for the range, never invent."},
+              {
+                "type": "object", "required": ["people"], "additionalProperties": false,
+                "properties": {
+                  "people": {"type": "integer", "minimum": 1},
+                  "mobility": {"type": "boolean", "default": false},
+                  "accessible_vehicle": {"type": "boolean", "default": false},
+                  "medical": {"type": "boolean", "default": false},
+                  "note": {"type": "string"}
+                }
+              }
+            ]
+          },
+          "judge": {"type": "boolean", "default": false, "description": "The household a judge plays. Exactly one; needs must start 'unknown'."},
+          "phone_role": {"enum": ["resident", "none"], "default": "none", "description": "resident = a real phone talks for this household over Photon."}
+        }
+      }
+    },
+    "reserve": {
+      "type": "object", "additionalProperties": false,
+      "description": "Keep at least this many unassigned when feasible.",
+      "properties": {"vans": {"type": "integer", "minimum": 0}, "generators": {"type": "integer", "minimum": 0}}
+    },
+    "scripted_reports": {
+      "type": "array",
+      "description": "Reports that are part of the scenario script (so baseline vs EMBER is reproducible without phones). Live reports come from the backend.",
+      "items": {
+        "type": "object", "required": ["t_s", "kind"], "additionalProperties": false,
+        "properties": {
+          "t_s": {"type": "number", "minimum": 0},
+          "kind": {"enum": ["need", "closure_report", "facility_status"]},
+          "household_id": {"type": "integer"},
+          "facility_id": {"$ref": "#/$defs/id"},
+          "edge_ids": {"type": "array", "items": {"type": "integer"}, "description": "closure_report: town.json edge ids"},
+          "needs": {"type": "object"},
+          "set": {"type": "object", "description": "facility_status: fields to set, e.g. {\"backup_endurance_s\": 1800}"},
+          "note": {"type": "string"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9_-]+$"},
+    "lonlat": {"type": "array", "prefixItems": [{"type": "number", "minimum": -180, "maximum": 180}, {"type": "number", "minimum": -90, "maximum": 90}], "minItems": 2, "maxItems": 2},
+    "ring": {"type": "array", "minItems": 4, "items": {"$ref": "#/$defs/lonlat"}, "description": "Closed ring: first point == last point."},
+    "area": {
+      "description": "GeoJSON Polygon or MultiPolygon (what geojson.io exports).",
+      "oneOf": [
+        {"type": "object", "required": ["type", "coordinates"], "properties": {"type": {"const": "Polygon"}, "coordinates": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/ring"}}}},
+        {"type": "object", "required": ["type", "coordinates"], "properties": {"type": {"const": "MultiPolygon"}, "coordinates": {"type": "array", "minItems": 1, "items": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/ring"}}}}}
+      ]
+    }
+  }
+}
