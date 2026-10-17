@@ -1,7 +1,8 @@
 /**
- * Time-of-day lighting for the stage. The flood clock (t_s from 0) maps onto a late afternoon
- * in October: golden hour at the start, dusk as the river crests, night by the end, so windows,
- * street lamps and light bars come on as the water rises. Every channel eases between keys.
+ * Time-of-day lighting for the stage. The flood clock (t_s from 0) maps onto an October afternoon:
+ * clear daylight at the start (the city reads at its best while the plan is laid out), golden hour
+ * as the river crests, dusk by the end, so windows, street lamps and light bars come on as the water
+ * rises. Every channel eases between keys.
  * Labelled in the UI: the clock time is illustrative; the simulation runs in seconds.
  */
 
@@ -16,15 +17,16 @@ export type Light = {
   hazeAlpha: number;
 };
 
-export const START_HOUR = 16.4;
+export const START_HOUR = 14.0;
 
 type Key = { h: number; world: [number, number, number]; shadow: number; lights: number; sky: [number, number, number]; haze: [number, number, number]; hazeA: number };
 
 const KEYS: Key[] = [
-  { h: 15.0, world: [1.0, 0.97, 0.9], shadow: 0.46, lights: 0, sky: [16, 20, 28], haze: [255, 222, 176], hazeA: 0.06 },
-  { h: 16.6, world: [1.0, 0.91, 0.76], shadow: 0.52, lights: 0.06, sky: [18, 18, 26], haze: [255, 176, 100], hazeA: 0.16 },
-  { h: 17.6, world: [0.9, 0.74, 0.66], shadow: 0.42, lights: 0.38, sky: [16, 14, 24], haze: [246, 134, 86], hazeA: 0.18 },
-  { h: 18.4, world: [0.6, 0.52, 0.68], shadow: 0.22, lights: 0.78, sky: [12, 11, 22], haze: [150, 104, 186], hazeA: 0.12 },
+  { h: 13.0, world: [1.0, 1.0, 0.97], shadow: 0.44, lights: 0, sky: [176, 208, 228], haze: [255, 248, 230], hazeA: 0.05 },
+  { h: 15.2, world: [1.0, 0.97, 0.9], shadow: 0.47, lights: 0, sky: [184, 208, 224], haze: [255, 222, 176], hazeA: 0.08 },
+  { h: 16.6, world: [1.0, 0.91, 0.76], shadow: 0.5, lights: 0.06, sky: [208, 196, 184], haze: [255, 176, 100], hazeA: 0.18 },
+  { h: 17.5, world: [0.9, 0.75, 0.67], shadow: 0.4, lights: 0.36, sky: [166, 138, 152], haze: [246, 134, 86], hazeA: 0.2 },
+  { h: 18.4, world: [0.6, 0.52, 0.68], shadow: 0.22, lights: 0.78, sky: [36, 30, 56], haze: [150, 104, 186], hazeA: 0.13 },
   { h: 19.3, world: [0.4, 0.42, 0.64], shadow: 0.1, lights: 1, sky: [9, 11, 20], haze: [72, 84, 160], hazeA: 0.08 },
   { h: 24.0, world: [0.34, 0.38, 0.6], shadow: 0.06, lights: 1, sky: [7, 9, 18], haze: [44, 60, 120], hazeA: 0.05 },
 ];

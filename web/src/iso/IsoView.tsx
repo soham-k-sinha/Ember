@@ -83,6 +83,7 @@ type Ctx = {
   focusKey: number;
   target: { x: number; y: number; s: number } | null;
   overlay: Graphics;
+  haze: Sprite;
   hits: Container;
   pills: Map<string, Pill>;
   pillLayer: Container;
@@ -126,20 +127,21 @@ export function IsoView(props: IsoProps) {
       dyn.addChild(flood, closed, trails, marks, decals);
       dyn.mask = scene.slabMask;
       const top = new Graphics();
-      world.addChild(scene.slab, scene.ground, scene.shadow, scene.pools, scene.slabMask, dyn, scene.objects, top);
+      world.addChild(scene.slab, scene.ground, scene.tiles.ground, scene.shadow, scene.tiles.shadow, scene.pools, scene.slabMask, dyn, scene.objects, top);
       const crowd = new Crowd(scene.objects, marks, scene.atlas, p, scene.depthFor);
       const aw = agentWorld(p, scene.insideBuilding, scene.onRoad, propsRef.current.playback);
       const overlay = new Graphics();
       const hits = new Container();
       const pillLayer = new Container();
-      app.stage.addChild(world, overlay, pillLayer, hits);
+      const haze = hazeSprite();
+      app.stage.addChild(world, haze, overlay, pillLayer, hits);
 
       // camera: fit the stage
       const b = scene.slab.getLocalBounds();
       const s = Math.min(app.screen.width / (b.width * 1.08), app.screen.height / (b.height * 1.12));
       const cam = { s, x: app.screen.width / 2 - (b.x + b.width / 2) * s, y: app.screen.height / 2 - (b.y + b.height / 2) * s };
       const ctx: Ctx = {
-        app, data, p, scene, world, dyn, flood, closed, trails, decals, marks, top, crowd, aw, awFor: propsRef.current.playback, lastT: propsRef.current.t, lastNow: performance.now() / 1000, vehicles: new Map(), lightKey: "", fitS: s, focusKey: 0, target: null, overlay, hits, pills: new Map(), pillLayer,
+        app, data, p, scene, world, dyn, flood, closed, trails, decals, marks, top, crowd, aw, awFor: propsRef.current.playback, lastT: propsRef.current.t, lastNow: performance.now() / 1000, vehicles: new Map(), lightKey: "", fitS: s, focusKey: 0, target: null, overlay, haze, hits, pills: new Map(), pillLayer,
         floodKey: null, closedKey: "", cam, drag: { on: false, moved: false, x: 0, y: 0 },
       };
       ctxRef.current = ctx;
@@ -212,6 +214,23 @@ export function IsoView(props: IsoProps) {
   return <div className="iso-host" ref={host} />;
 }
 
+/** Screen-space atmospheric haze falling in from the upper left (additive; tinted and faded by the light). */
+function hazeSprite(): Sprite {
+  const c = document.createElement("canvas");
+  c.width = c.height = 128;
+  const g2 = c.getContext("2d")!;
+  const grad = g2.createRadialGradient(0, 0, 0, 0, 0, 128);
+  grad.addColorStop(0, "rgba(255,255,255,1)");
+  grad.addColorStop(0.55, "rgba(255,255,255,0.35)");
+  grad.addColorStop(1, "rgba(255,255,255,0)");
+  g2.fillStyle = grad;
+  g2.fillRect(0, 0, 128, 128);
+  const sprite = Sprite.from(c);
+  sprite.blendMode = "add";
+  sprite.eventMode = "none";
+  return sprite;
+}
+
 // ---------------------------------------------------------------------------------------------
 
 function frame(ctx: Ctx, props: IsoProps) {
@@ -232,9 +251,16 @@ function frame(ctx: Ctx, props: IsoProps) {
   // presets: ease to the requested place (zoom 14.3 ≈ the whole stage, each level doubles)
   if (props.focus && props.focus.key !== ctx.focusKey) {
     ctx.focusKey = props.focus.key;
-    const s = Math.min(9, ctx.fitS * 2 ** (props.focus.zoom - 14.3));
-    const [x, y] = p.lonlat(props.focus.lon, props.focus.lat);
-    ctx.target = { s, x: ctx.app.screen.width * 0.45 - x * s, y: ctx.app.screen.height * 0.55 - y * s };
+    if (props.focus.zoom <= 14.4) {
+      // the district preset: the whole stage, fitted and centred
+      const bb = ctx.scene.slab.getLocalBounds();
+      const s = Math.min(ctx.app.screen.width / (bb.width * 1.06), ctx.app.screen.height / (bb.height * 1.1));
+      ctx.target = { s, x: ctx.app.screen.width / 2 - (bb.x + bb.width / 2) * s, y: ctx.app.screen.height / 2 - (bb.y + bb.height / 2) * s };
+    } else {
+      const s = Math.min(9, ctx.fitS * 2 ** (props.focus.zoom - 14.3));
+      const [x, y] = p.lonlat(props.focus.lon, props.focus.lat);
+      ctx.target = { s, x: ctx.app.screen.width * 0.5 - x * s, y: ctx.app.screen.height * 0.5 - y * s };
+    }
   }
   if (ctx.target && !followAt) {
     const k = 0.1;
@@ -245,8 +271,16 @@ function frame(ctx: Ctx, props: IsoProps) {
   }
   ctx.world.position.set(cam.x, cam.y);
   ctx.world.scale.set(cam.s);
+  ctx.haze.width = ctx.app.screen.width * 1.25;
+  ctx.haze.height = ctx.app.screen.height * 1.1;
   cull(ctx);
   applyLight(ctx, t);
+  {
+    const view = { x0: -cam.x / cam.s, y0: -cam.y / cam.s, x1: (ctx.app.screen.width - cam.x) / cam.s, y1: (ctx.app.screen.height - cam.y) / cam.s };
+    const sharp = ctx.scene.tiles.update(view, cam.s, ctx.scene.light.tint);
+    ctx.scene.shadow.visible = !sharp;
+    ctx.scene.tiles.shadow.alpha = ctx.scene.shadow.alpha;
+  }
 
   drawFlood(ctx, props, pulse);
   drawClosures(ctx, props);
@@ -409,6 +443,8 @@ function applyLight(ctx: Ctx, t: number) {
   }
   for (const g of ctx.scene.lampGlows) g.alpha = ((g as Sprite & { base?: number }).base ?? 1) * L.lights;
   ctx.app.renderer.background.color = L.sky;
+  ctx.haze.tint = (Math.round(L.haze[0]) << 16) | (Math.round(L.haze[1]) << 8) | Math.round(L.haze[2]);
+  ctx.haze.alpha = L.hazeAlpha;
   ctx.flood.tint = tint([Math.min(1, L.world[0] * 0.5 + 0.5), Math.min(1, L.world[1] * 0.5 + 0.5), Math.min(1, L.world[2] * 0.4 + 0.6)]);
 }
 
