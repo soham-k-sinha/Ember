@@ -1,5 +1,5 @@
 /**
- * The stage's real-world data (engine `ember diorama` → public/diorama/<name>.json, D52): city
+ * The stage's real-world data (engine `ember diorama` → public/diorama/<name>.json, D71): city
  * building footprints and heights, roof type, LiDAR tree crowns, land use, the Charles, paths.
  */
 

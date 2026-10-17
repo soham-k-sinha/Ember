@@ -1,4 +1,4 @@
-"""The diorama: the real district as a stylised 3D model's data (D52).
+"""The diorama: the real district as a stylised 3D model's data (D71).
 
 Pulls the most accurate open data for a rectangle around the Treehouse and writes one compact JSON the
 web renders (web/public/diorama/<name>.json):

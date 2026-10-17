@@ -124,7 +124,7 @@ class EngineSession:
 
     def playback(self, planner: str = "ember") -> dict:
         """GET /playback: the current plan ("ember") or the incident-by-incident baseline on the same
-        reports, simulated over the whole horizon as contracts/playback.schema.json (map replay, D51)."""
+        reports, simulated over the whole horizon as contracts/playback.schema.json (map replay, D70)."""
         from .baseline import baseline_plan
         from .playback import playback
         from .sim import simulate
