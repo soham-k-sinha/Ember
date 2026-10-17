@@ -11,7 +11,7 @@ jsonschema = pytest.importorskip("jsonschema")
 from referencing import Registry, Resource  # noqa: E402
 
 CONTRACTS = Path(__file__).resolve().parents[2] / "contracts"
-PAIRS = ["town", "plan", "job", "metrics", "trajectories", "scenario", "state", "comparison"]
+PAIRS = ["town", "plan", "job", "metrics", "trajectories", "scenario", "state", "comparison", "playback"]
 
 
 def _registry() -> Registry:

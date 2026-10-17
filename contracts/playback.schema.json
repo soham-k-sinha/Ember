@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ember.local/contracts/playback.schema.json",
+  "title": "Playback v0.1",
+  "description": "One plan simulated over the whole horizon, as a replay the map can scrub (D51). Produced by engine `ember_engine.playback.playback(SimResult)` (`ember playback`, EngineSession.playback). Times are seconds since sim start; a sample labelled t is the state at the end of the tick that starts at t (the label events carry). `[t, value]` lists are run-length encoded: the value holds from t until the next entry.",
+  "type": "object",
+  "required": ["version", "scenario_id", "planner", "t0", "dt", "t_end_s", "t_s", "tracks", "households", "facilities", "wastewater", "closures", "events", "outcomes", "plan", "metrics"],
+  "$defs": {
+    "lonlat": {"type": "array", "prefixItems": [{"type": "number"}, {"type": "number"}], "minItems": 2, "maxItems": 2},
+    "change": {"type": "array", "prefixItems": [{"type": "number"}, {}], "minItems": 2, "maxItems": 2},
+    "changes": {"type": "array", "items": {"$ref": "#/$defs/change"}, "minItems": 1}
+  },
+  "properties": {
+    "version": {"const": "0.1"},
+    "scenario_id": {"type": "string"},
+    "planner": {"type": "string", "description": "ember | baseline | example"},
+    "plan_version": {"type": ["integer", "null"]},
+    "t0": {"type": "number"},
+    "dt": {"type": "number", "exclusiveMinimum": 0},
+    "t_end_s": {"type": "number"},
+    "synthetic": {"type": "array", "items": {"type": "string"}},
+    "t_s": {"type": "array", "items": {"type": "number"}, "description": "Tick labels; wastewater and on_site arrays align with it."},
+    "tracks": {
+      "type": "array",
+      "description": "One per resource. path/t: positions along the roads it drove (rebuilt between tick samples from town geometry), t non-decreasing. Interpolate linearly between consecutive points.",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "name", "path", "t", "status", "on_board", "assignment"],
+        "properties": {
+          "id": {"type": "string"},
+          "kind": {"type": "string"},
+          "name": {"type": "string"},
+          "path": {"type": "array", "items": {"$ref": "#/$defs/lonlat"}, "minItems": 1},
+          "t": {"type": "array", "items": {"type": "number"}, "minItems": 1},
+          "status": {"$ref": "#/$defs/changes", "description": "available | en_route | working | returning | reserved | stalled | out_of_service"},
+          "on_board": {"$ref": "#/$defs/changes"},
+          "assignment": {"$ref": "#/$defs/changes", "description": "assignment id or null"}
+        }
+      }
+    },
+    "households": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["household_id", "status"],
+        "properties": {
+          "household_id": {"type": "integer"},
+          "deadline_s": {"type": ["number", "null"], "description": "First flood keyframe covering the household's node − deadline_margin_s; null = never flooded."},
+          "status": {"$ref": "#/$defs/changes"}
+        }
+      }
+    },
+    "facilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "state", "generator"],
+        "properties": {"id": {"type": "string"}, "state": {"$ref": "#/$defs/changes"}, "generator": {"$ref": "#/$defs/changes"}}
+      }
+    },
+    "wastewater": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["storage_m3", "overflow_m3"],
+        "properties": {
+          "storage_m3": {"type": "array", "items": {"type": "number"}},
+          "overflow_m3": {"type": "array", "items": {"type": "number"}, "description": "Cumulative."}
+        }
+      }
+    },
+    "on_site": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "integer"}}},
+    "closures": {
+      "type": "array",
+      "description": "[edge_id, closed_from_t_s, reopened_t_s | null] for every edge closed during the run (hazard or report).",
+      "items": {"type": "array", "prefixItems": [{"type": "integer"}, {"type": "number"}, {"type": ["number", "null"]}], "minItems": 3, "maxItems": 3}
+    },
+    "events": {
+      "type": "array",
+      "description": "Simulator events: dispatch, arrive, pickup, dropoff, assignment_*, report, facility_state, generator_connected, overflow_started, deadline_missed, resource_failed, road_cleared, ...",
+      "items": {"type": "object", "required": ["t_s", "kind"], "properties": {"t_s": {"type": "number"}, "kind": {"type": "string"}}}
+    },
+    "reports": {"type": "array", "items": {"type": "object"}, "description": "Reports the run applied (scripted + live), as the simulator saw them."},
+    "outcomes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["assignment_id", "resource_id", "task", "target", "status"],
+        "properties": {
+          "assignment_id": {"type": "string"}, "resource_id": {"type": "string"}, "task": {"type": "string"},
+          "target": {"type": "object"}, "status": {"type": "string"}, "reason": {"type": "string"},
+          "arrive_t": {"type": ["number", "null"]}, "pickup_t": {"type": ["number", "null"]}, "complete_t": {"type": ["number", "null"]},
+          "deadline_s": {"type": ["number", "null"]}, "met_deadline": {"type": ["boolean", "null"]}, "people": {"type": "integer"}
+        }
+      }
+    },
+    "plan": {
+      "type": "object",
+      "required": ["assignments"],
+      "description": "The plan that was simulated, trimmed to what the map shows (assignments with rationale, unresolved, info requests, metrics).",
+      "properties": {"assignments": {"type": "array", "items": {"type": "object", "required": ["id", "resource_id", "task", "target"]}}}
+    },
+    "metrics": {"type": "object"}
+  }
+}
