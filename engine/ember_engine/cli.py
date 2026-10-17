@@ -366,7 +366,7 @@ def cmd_playback(a):
         scn = load_scenario(ROOT / "scenarios" / "allston_flood_v1" / "scenario.json")
         for which, name in (("ember", "playback.fixture.json"), ("baseline", "playback.baseline.fixture.json")):
             pb = playback(simulate(w, scn, _make_plan(w, scn, which, [])), which)
-            (fx / name).write_text(json.dumps(pb, separators=(",", ":")))
+            (fx / name).write_text(json.dumps(pb, separators=(",", ":"), allow_nan=False))
             print(f"[playback] {which}: {len(pb['tracks'])} tracks, overflow {pb['metrics'].get('overflow_m3')} m³ → {fx / name}")
         return
     if not a.scenario:
@@ -375,7 +375,7 @@ def cmd_playback(a):
     reports = _read_reports(a.report)
     pb = playback(simulate(w, scn, _make_plan(w, scn, a.plan, reports), reports=reports), a.plan)
     out = Path(a.out or DATA / f"playback.{a.plan}.json")
-    out.write_text(json.dumps(pb, separators=(",", ":")))
+    out.write_text(json.dumps(pb, separators=(",", ":"), allow_nan=False))
     print(f"[playback] {a.plan}: {sum(len(t['path']) for t in pb['tracks'])} track points → {out}")
 
 

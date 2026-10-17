@@ -384,7 +384,8 @@ export type Selection =
   | { kind: "household"; id: number }
   | { kind: "facility"; id: string }
   | { kind: "resource"; id: string }
-  | { kind: "edge"; id: number };
+  | { kind: "edge"; id: number }
+  | { kind: "walker"; id: number };
 
 export type JudgeClosure = {
   edge_id: number;
