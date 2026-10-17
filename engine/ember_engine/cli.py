@@ -115,7 +115,30 @@ def cmd_fixtures(a):
     j = default_job(w, staged=True)
     (fx / "job.fixture.json").write_text(json.dumps(j, indent=2))
     (fx / "plan.fixture.json").write_text(json.dumps(j["plan"], indent=2))
+    from .scenario import example_scenario
+    (fx / "scenario.fixture.json").write_text(json.dumps(example_scenario(town), indent=1))
     print(f"[fixtures] wrote to {fx}")
+
+
+def cmd_validate_scenario(a):
+    """Schema + referential checks against town.json; one-line summary; exit 1 on errors."""
+    from .scenario import load_scenario, validate
+    town_path = Path(a.town) if a.town else TOWN
+    if not town_path.exists():
+        sys.exit(f"{town_path} not found. Run `uv run --project engine ember build` first (or pass --town).")
+    scn = load_scenario(a.path)
+    rep = validate(scn, json.loads(town_path.read_text()))
+    for e in rep.errors:
+        print(f"ERROR   {e}")
+    for w in rep.warnings:
+        print(f"warning {w}")
+    if a.deadlines and rep.deadlines:
+        for hid, d in sorted(rep.deadlines["households"].items(), key=lambda kv: (kv[1] is None, kv[1] or 0)):
+            print(f"  household {hid:>6}: deadline {'-' if d is None else f'{d/60:5.0f} min'}")
+        for fid, d in rep.deadlines["facilities"].items():
+            print(f"  facility {fid:>14}: flooded {'never' if d is None else f'at {d/60:.0f} min'}")
+    print(rep.summary)
+    sys.exit(0 if rep.ok else 1)
 
 
 def main(argv=None):
@@ -127,6 +150,10 @@ def main(argv=None):
     r = sp.add_parser("render"); r.add_argument("--t", type=float, default=None); r.add_argument("--plain", action="store_true"); r.set_defaults(f=cmd_render)
     g = sp.add_parser("gate-a"); g.add_argument("--heading", type=float, default=90.0); g.add_argument("--speed", type=float, default=0.6); g.add_argument("--T", type=float, default=7200.0); g.set_defaults(f=cmd_gate_a)
     f = sp.add_parser("fixtures"); f.set_defaults(f=cmd_fixtures)
+    v = sp.add_parser("validate-scenario", help="check a scenario.json against the schema and town.json")
+    v.add_argument("path"); v.add_argument("--town", default=None, help="town.json to check ids against (default data/town.json)")
+    v.add_argument("--deadlines", action="store_true", help="also print per-household deadlines")
+    v.set_defaults(f=cmd_validate_scenario)
     a = p.parse_args(argv)
     a.f(a)
 

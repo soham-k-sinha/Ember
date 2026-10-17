@@ -8,6 +8,7 @@ The interface between `engine/`, `web/` and `residents/`. Build against the fixt
 | Plan (what the planner controls) | `plan.schema.json` | `fixtures/plan.fixture.json` | planner / web | engine (`run_job`) |
 | Job = plan + scenario (hazard, compliance, seed, horizon) | `job.schema.json` | `fixtures/job.fixture.json` | planner / Daytona fan-out | engine (`run_job`) |
 | Metrics (one run's outcome) | `metrics.schema.json` | `fixtures/metrics.fixture.json` | `run_job` (return value; Daytona returns it as `run_code` output) | web (scatter / comparison), residents |
+| Scenario (district, flood keyframes, facilities, resources, assisted households, judge, reserve, scripted reports) | `scenario.schema.json` | `fixtures/scenario.fixture.json` (engine-generated example; placeholder numbers) | Anshuman → `scenarios/<name>/scenario.json` | engine (hazard, deadlines, simulator, allocator), backend, web |
 | Trajectories (sampled vehicles for TripsLayer) | `trajectories.schema.json` | `fixtures/trajectories.fixture.json` (200 trips) | `ember smoke` → `data/trajectories.json` | web (deck.gl `TripsLayer`) |
 
 ## Conventions (same as CLAUDE.md)
@@ -17,6 +18,14 @@ The interface between `engine/`, `web/` and `residents/`. Build against the fixt
 - Node and edge references: `edges[].u/v`, `households[].node`, `exits[]`, `venue.node` are **OSM node ids**. `edges[].id` is a dense `0..E-1` index; closures (`metrics.closure_order`, `plan.closed_edges`) use it.
 - Edges are directed; a two-way street is two edges.
 - Anything listed in `town.meta.synthetic` is generated (household counts, vehicles, flags, imputed lanes, capacities, exits). Say so in the UI.
+
+## Checking a scenario
+```bash
+uv run --project engine ember validate-scenario scenarios/allston_flood_v1/scenario.json [--deadlines] [--town data/town.json]
+```
+Schema errors, then referential checks against `town.json` (household / asset / node / edge ids exist, depends_on targets exist and have no cycles, exactly one judge with needs `unknown`, generators have kw + connector, reserve ≤ fleet, keyframes sorted), then warnings (district misses the venue, households outside the district, no generator fits a facility, flood recedes). Prints a one-line summary; exit 1 on errors. `--deadlines` lists each household's deadline (first keyframe that covers its node − `deadline_margin_s`).
+
+Household ids come from **your** `data/town.json`; validate against the same town the engine runs on.
 
 ## Vehicle states (`trajectories.trips[].final`, engine snapshots)
 `0 waiting · 1 moving · 2 queued · 3 exited · 4 exposed · 5 stuck`
