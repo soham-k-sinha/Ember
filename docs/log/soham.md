@@ -135,3 +135,7 @@ Run: cd residents && uv run pytest -q → 173 passed. 10 mutations of the new gu
 Interfaces: D56. POST /phones gains `locate`; POST /dev/inbound gains `handle`; Planner.clock_hooks; Settings GEOCODE / DRILL_SOLO / AUTO_CLOCK. Contracts unchanged (added households are ordinary scenario/state rows).
 Status: on soham/drill, stacked on #38. Not run end to end on real phones yet: an older backend (pre-#38 code, Photon on) is still running on :8000 and must be stopped first.
 Next: Soham runs `uv run ember-drill --resident <phone>` from a flood-zone corner. Aryaman: unthreatened households get no vehicle in solo but do in the full scenario (see HANDOFF §10).
+
+## 2026-10-17 · fix: ember-drill crashed when a phone changed part between runs · branch soham/drill
+What: live, `ember-drill --resident A --resident B` crashed with PhoneConflict because B had been the hospital operator in the previous run (drill.db keeps phones). A fresh run now takes the command line as the truth: listed phones are re-bound to their new part (Photon line + opt-in kept), phones not listed are dropped; a phone listed twice or two phones for one facility → one-line error (SetupError), and a failed start shuts the server down cleanly instead of a traceback.
+Run: 175 passed (2 new regression tests); the exact failing command replayed in --dry on a copy of the live drill.db → both registered as residents, opt-in kept.
