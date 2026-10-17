@@ -10,7 +10,7 @@ import {
   scenario,
 } from "./fixtures";
 import { formatSim } from "./format";
-import { asComparison, asState, getJson, openSocket, postJson, type LiveStatus } from "./live";
+import { asComparison, asState, getJson, openSocket, postJson, robustOf, type LiveStatus } from "./live";
 import { activeKeyframe, closedEdges } from "./model";
 import type {
   AssignmentEvent,
@@ -470,6 +470,59 @@ export function App() {
     }
   }
 
+  async function optimize() {
+    if (model.mode !== "live") {
+      dispatch({ type: "notice", notice: "Optimize runs on the backend (Daytona or the local pool). Switch to Live first." });
+      dispatch({ type: "tab", tab: "scatter" });
+      return;
+    }
+    dispatch({ type: "busy", busy: "optimize" });
+    dispatch({ type: "tab", tab: "scatter" });
+    const root = model.apiBase.replace(/\/$/, "");
+    try {
+      try {
+        await postJson(`${root}/optimize?seeds=20&k=4`, {}, 15000);
+      } catch (error) {
+        // 409 = one is already running: watch that one instead of failing
+        if (!(error instanceof Error && error.message.startsWith("409"))) throw error;
+      }
+      const deadline = Date.now() + 300_000;
+      let last: unknown = null;
+      for (;;) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        const body = await getJson(`${root}/optimize`);
+        if (typeof body === "object" && body !== null && (body as { running?: unknown }).running === false) {
+          last = (body as { last?: unknown }).last ?? null;
+          break;
+        }
+        if (Date.now() > deadline) throw new Error("still running after 5 min");
+      }
+      const snapshot = asState(await getJson(`${root}/state`));
+      if (snapshot) dispatch({ type: "state", state: snapshot });
+      const robust = robustOf(snapshot?.plan) ?? null;
+      const error = typeof last === "object" && last !== null ? (last as { error?: unknown }).error : undefined;
+      dispatch({
+        type: "notice",
+        notice: typeof error === "string"
+          ? `Optimize failed: ${error}`
+          : robust
+            ? `${robust.jobs} runs on ${robust.pool}${robust.workers ? ` (${robust.workers} workers)` : ""}` +
+              `${robust.fanout_wall_s != null ? ` in ${robust.fanout_wall_s.toFixed(1)} s` : ""}. ` +
+              (robust.chosen !== robust.nominal_best
+                ? `Chose ${robust.chosen} over the nominal best ${robust.nominal_best}: better in the worst 20% of worlds.`
+                : `Kept ${robust.chosen}: the nominal best is also the most robust.`)
+            : "Optimize finished.",
+      });
+    } catch (error) {
+      dispatch({
+        type: "notice",
+        notice: error instanceof Error ? `Optimize failed: ${error.message}` : "Optimize failed.",
+      });
+    } finally {
+      dispatch({ type: "busy", busy: null });
+    }
+  }
+
   async function compare() {
     if (model.mode !== "live") {
       dispatch({
@@ -500,7 +553,11 @@ export function App() {
     }
   }
 
-  const metrics = model.snapshot.metrics;
+  // KPIs show what the current plan is projected to achieve over the whole horizon; "so far" is the outcome at the clock
+  const soFar = model.snapshot.metrics;
+  const projected = model.snapshot.plan?.metrics;
+  const metrics = projected ?? soFar;
+  const planVersion = model.snapshot.plan?.version ?? model.snapshot.plan_version;
   const hospital = model.snapshot.facilities.find((facility) => facility.type === "hospital");
 
   return (
@@ -562,14 +619,36 @@ export function App() {
           </p>
         </div>
       </header>
-      <section className="kpis" aria-label="Snapshot metrics">
-        <Kpi label="Reached" value={metrics.people_reached_before_deadline} />
-        <Kpi label="Unreached" value={metrics.people_unreached} />
-        <Kpi label="Unresolved" value={metrics.unresolved_needs} />
-        <Kpi label="Overflow m³" value={metrics.overflow_m3} digits={1} />
+      <section className="kpis" aria-label="Plan metrics">
+        <p className="kpi-caption">
+          <span>{projected ? "Projected" : "So far"}</span>
+          <strong>plan v{planVersion ?? "—"}</strong>
+        </p>
+        <Kpi
+          label="Reached by deadline"
+          value={metrics?.people_reached_before_deadline}
+          sub={projected && soFar ? `${soFar.people_reached_before_deadline ?? 0} so far` : undefined}
+        />
+        <Kpi label="Not reached" value={metrics?.people_unreached} tone={(metrics?.people_unreached ?? 0) > 0 ? "bad" : undefined} />
+        <Kpi label="Unresolved needs" value={metrics?.unresolved_needs} />
+        <Kpi
+          label="Overflow to the Charles"
+          value={metrics?.overflow_m3}
+          unit="m³"
+          tone={(metrics?.overflow_m3 ?? 0) > 0 ? "bad" : "good"}
+          sub={projected && soFar ? `${Math.round(soFar.overflow_m3 ?? 0).toLocaleString("en-US")} m³ so far` : undefined}
+        />
+        <Kpi
+          label="Hospital outage"
+          value={metrics?.hospital_outage_s != null ? Math.round(metrics.hospital_outage_s / 60) : undefined}
+          unit="min"
+          tone={(metrics?.hospital_outage_s ?? 0) > 0 ? "bad" : "good"}
+          sub={hospital ? `now: ${hospital.state}` : undefined}
+        />
         <Kpi label="Roads closed" value={closures.length} />
-        <Kpi label="Hospital" text={hospital?.state ?? "—"} />
+        <Kpi label="Vehicle-km" value={metrics?.vehicle_km} digits={0} />
       </section>
+      <main className="workspace">
       {awayFromSnapshot ? (
         <p className="banner">
           Flood extent and road closures follow the clock. Household status, facility state,
@@ -577,7 +656,6 @@ export function App() {
           {model.snapshot.source === "scenario" ? "scenario picture" : "snapshot"} until a newer state arrives.
         </p>
       ) : null}
-      <main className="workspace">
         <MapView
           state={model.snapshot}
           previous={model.previous}
@@ -605,6 +683,7 @@ export function App() {
           onUndoClosure={(edgeId) => dispatch({ type: "undo", edgeId })}
           onReplan={() => void replan()}
           onCompare={() => void compare()}
+          onOptimize={() => void optimize()}
         />
       </main>
       <footer className="foot">
@@ -648,15 +727,19 @@ function ApiField(props: { value: string; onCommit: (value: string) => void }) {
   );
 }
 
-function Kpi(props: { label: string; value?: number; digits?: number; text?: string }) {
+function Kpi(props: { label: string; value?: number; digits?: number; text?: string; unit?: string; sub?: string; tone?: "good" | "bad" }) {
   const text = props.text ?? (props.value == null ? "—" : props.value.toLocaleString("en-US", {
     maximumFractionDigits: props.digits ?? 0,
     minimumFractionDigits: props.digits ?? 0,
   }));
   return (
-    <p>
+    <p className={props.tone ? `kpi ${props.tone}` : "kpi"}>
       <span>{props.label}</span>
-      <strong>{text}</strong>
+      <strong>
+        {text}
+        {props.unit && props.value != null ? <small> {props.unit}</small> : null}
+      </strong>
+      {props.sub ? <em>{props.sub}</em> : null}
     </p>
   );
 }

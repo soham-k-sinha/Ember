@@ -334,6 +334,31 @@ export type Comparison = {
   metrics: ComparisonMetric[];
 };
 
+/** plan.search.robust after a robustness fan-out (engine ember_engine.daytona.robust). */
+export type RobustRanking = {
+  candidate: string;
+  runs: number;
+  eligible: boolean;
+  worst20_people_unreached: number;
+  worst20_overflow_m3: number;
+  mean_people_unreached: number;
+  mean_overflow_m3: number;
+  max_people_unreached: number;
+};
+
+export type RobustSummary = {
+  batch_id: string;
+  jobs: number;
+  seeds: number;
+  pool: string;
+  workers?: number;
+  fanout_wall_s?: number;
+  rule: string;
+  chosen: string;
+  nominal_best: string;
+  ranking?: RobustRanking[];
+};
+
 /** One robustness run from contracts/ws-events.schema.json scatter_point (D38, still proposed). */
 export type ScatterPoint = {
   runId: string;

@@ -168,3 +168,11 @@ Run: print docs/QA.md at 8 PM.
 Interfaces: none.
 Status: done. Gap found: the web has no Optimize button (beat 5 uses the curl until HANDOFF issue 6 adds it).
 Next: Devpost draft (docs/devpost/).
+
+## 2026-10-17 03:30 · web: layout fix, projected KPIs, Optimize button, readable scatter · branch aryaman/web-optimize-layout · commit (this PR)
+What: HANDOFF issue 6. (1) The "big empty area": `.app` had five fixed grid rows, so without the banner the footer took the 1fr row; and `section.kpis` inherited `flex-direction: column` from the global `section` rule, so the KPIs stacked. Now 4 rows, KPIs in one row, the clock banner is an overlay on the map. (2) KPIs show the current plan's projection (reached by deadline, not reached, unresolved, overflow m³, hospital outage min, roads closed, vehicle-km) with "so far" sub-lines; before they showed state.metrics (outcome at the clock: 0/0 at t=0). (3) Scatter tab: Optimize button → POST /optimize, polls GET /optimize, refreshes state, notice says pool/workers/time and which candidate won over the nominal best. (4) Scatter colours by candidate (chosen from plan.search.robust.chosen, other candidates, baseline), axes + key, ranking table (worst-20%/mean/max unreached, overflow). Before, "chosen" was `candidate === "ember"`, which the engine never emits, so nothing was highlighted.
+Files: web/src/{App.tsx,live.ts,types.ts,styles.css}, web/src/components/Panels.tsx, docs/log/aryaman.md
+Run: backend + web, Live → Scatter → Optimize (verified: 100 runs local in 1.5 s, c03 over c00, chart + ranking render).
+Interfaces: none (reads existing plan.search.robust).
+Status: done. `npm run build` OK.
+Next: D50 visual pass (tilted camera, dark basemap, extruded buildings).

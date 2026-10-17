@@ -5,6 +5,7 @@ import type {
   PlanMetrics,
   PlanSnapshot,
   Report,
+  RobustSummary,
   ScatterPoint,
   StateSnapshot,
 } from "./types";
@@ -41,6 +42,14 @@ export function asState(value: unknown): StateSnapshot | null {
   if (!Array.isArray(value.resources) || !Array.isArray(value.closures)) return null;
   if (typeof value.t_s !== "number") return null;
   return value as StateSnapshot;
+}
+
+export function robustOf(plan: { search?: unknown } | null | undefined): RobustSummary | null {
+  const search = plan?.search;
+  if (!isRecord(search) || !isRecord(search.robust)) return null;
+  const robust = search.robust;
+  if (typeof robust.chosen !== "string" || typeof robust.batch_id !== "string") return null;
+  return robust as RobustSummary;
 }
 
 export function asComparison(value: unknown): Comparison | null {
