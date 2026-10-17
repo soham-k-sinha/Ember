@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ember/ws-events.schema.json",
+  "title": "Ember WS events (DRAFT, residents/ → contracts/ via Aryaman)",
+  "description": "Every message on WS /ws is one envelope. `seq` increases by 1 per broadcast; a client that sees a gap re-fetches GET /state. The `state` event sent on connect carries the current seq (state as of event N); the next broadcast is N+1. `t_s` = sim clock when the event was emitted.",
+  "type": "object",
+  "required": ["type", "seq", "t_s", "data"],
+  "additionalProperties": false,
+  "properties": {
+    "type": {"enum": ["state", "plan", "assignment", "message", "report", "scatter_point", "metrics"]},
+    "seq": {"type": "integer", "minimum": 0},
+    "t_s": {"type": "number", "minimum": 0},
+    "data": {}
+  },
+  "allOf": [
+    {"if": {"properties": {"type": {"const": "state"}}}, "then": {"properties": {"data": {"$ref": "state.schema.json"}}}},
+    {"if": {"properties": {"type": {"const": "plan"}}}, "then": {"properties": {"data": {"$ref": "state.schema.json#/properties/plan/oneOf/1"}}}},
+    {"if": {"properties": {"type": {"const": "report"}}}, "then": {"properties": {"data": {"$ref": "report.schema.json"}}}},
+    {"if": {"properties": {"type": {"const": "message"}}}, "then": {"properties": {"data": {"$ref": "state.schema.json#/properties/messages/items"}}}},
+    {"if": {"properties": {"type": {"const": "metrics"}}}, "then": {"properties": {"data": {"$ref": "state.schema.json#/$defs/plan_metrics"}}}},
+    {"if": {"properties": {"type": {"const": "assignment"}}}, "then": {"properties": {"data": {"$ref": "#/$defs/assignment_event"}}}},
+    {"if": {"properties": {"type": {"const": "scatter_point"}}}, "then": {"properties": {"data": {"$ref": "#/$defs/scatter_point"}}}}
+  ],
+  "$defs": {
+    "assignment_event": {
+      "type": "object",
+      "description": "One changed assignment in a new plan version (one event per entry of plan.changes). `assignment` is null when change = removed.",
+      "required": ["plan_version", "change", "assignment_id", "assignment"],
+      "additionalProperties": false,
+      "properties": {
+        "plan_version": {"type": "integer", "minimum": 1},
+        "change": {"enum": ["added", "removed", "retargeted", "eta_changed", "resource_changed", "status_changed"]},
+        "assignment_id": {"type": "string"},
+        "assignment": {"oneOf": [{"type": "null"}, {"$ref": "assignment.schema.json"}]},
+        "note": {"type": "string"}
+      }
+    },
+    "scatter_point": {
+      "type": "object",
+      "description": "One robustness run (candidate plan × perturbation) as it comes back from Daytona. TO AGREE WITH ARYAMAN.",
+      "required": ["run_id", "candidate", "perturbation", "metrics"],
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {"type": "string"},
+        "candidate": {"type": "string", "description": "candidate plan id, or 'baseline'"},
+        "perturbation": {"type": "object"},
+        "metrics": {"$ref": "state.schema.json#/$defs/plan_metrics"},
+        "worker": {"type": "string", "description": "sandbox id / 'local'"}
+      }
+    }
+  }
+}
