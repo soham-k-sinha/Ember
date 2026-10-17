@@ -139,7 +139,6 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         if engine_mode:
             b = bridge or await run_in_threadpool(EngineBridge, settings.scenario, None, 0, settings.engine_moves)
             app.state.planner = Planner(app.state.store, app.state.hub, b)
-            await start_engine(settings, app.state.store, app.state.planner)
         photon = photon_client
         if photon is None and settings.photon_enabled:
             photon = PhotonClient(settings.photon_api_key, settings.photon_project_id)
@@ -153,6 +152,8 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
             app.state.intake = Intake(app.state.store, app.state.messenger, app.state.planner,
                                       llm or make_llm(settings.anthropic_api_key), app.state.outbound)
             app.state.messenger.inbound_hooks.append(app.state.intake.on_inbound)
+        if app.state.planner is not None:  # after messenger + hooks exist: a fresh plan v1 texts its open questions
+            await start_engine(settings, app.state.store, app.state.planner)
         app.state.listener = None
         if photon is not None and settings.photon_listen:
             app.state.listener = PhotonListener(photon, app.state.store, app.state.messenger.handle_inbound)

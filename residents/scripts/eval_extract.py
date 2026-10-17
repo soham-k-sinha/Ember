@@ -39,8 +39,8 @@ def check(sample: dict, ex) -> list[str]:
         got = getattr(facts[0], key, None) if facts else None
         if key in ("road_hint", "cross_street") and got is not None and want is not None:
             ok = normalize_street(want) in normalize_street(got) or normalize_street(got) in normalize_street(want)
-        elif isinstance(want, float) or key == "endurance_h":
-            ok = got is not None and abs(float(got) - float(want)) < 0.01
+        elif isinstance(want, float) or key == "endurance_min":
+            ok = got is not None and abs(float(got) - float(want)) < 0.5
         else:
             ok = got == want
         if not ok:

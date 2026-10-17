@@ -218,8 +218,20 @@ def test_restart_keeps_plans_reset_replans(esettings, bridge):
         assert c.get("/health").json()["plan_version"] == 2 and len(c.get("/state").json()["reports"]) == 1
         assert c.post("/dev/reset").json()["plan_version"] == 1
         st = c.get("/state").json()
-        assert st["reports"] == [] and st["messages"] == []
+        assert st["reports"] == []
+        q = next(q for q in st["plan"]["info_requests"] if q["to"] == {"household_id": JUDGE})
+        # the only message after a reset: v1's open question to the (still registered) judge phone (DEMO.md step 6)
+        assert [(m["direction"], m["text"]) for m in st["messages"]] == [("out", f"[EMBER drill] {q['question']}")]
         assert c.get("/phones").json()[0]["thread"] == {"household_id": JUDGE}  # phones survive, resolve to the Allston judge
+
+
+def test_fresh_start_asks_the_judge(esettings, bridge):
+    from dataclasses import replace as _r
+    with TestClient(create_app(esettings, bridge=bridge)) as c:
+        c.post("/phones", json={"role": "resident", "handle": "4133620520"})
+    with TestClient(create_app(_r(esettings, reset_on_start=True), bridge=bridge)) as c:  # RESET_ON_START=1 (DEMO.md)
+        outs = [m for m in c.get("/state").json()["messages"] if m["direction"] == "out"]
+        assert len(outs) == 1 and "wheelchair-accessible vehicle" in outs[0]["text"] and outs[0]["thread"] == {"household_id": JUDGE}
 
 
 def test_switching_scenario_reseeds(settings, esettings, bridge):

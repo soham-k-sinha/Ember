@@ -8,7 +8,7 @@ Everything after the model is deterministic code:
 - confidence < CONFIDENCE_MIN, or a fact missing what the planner needs → one clarifying question,
   never a guess (e.g. a need without a head count is held as `pending` until the reply);
 - street names → town edge ids near the household (`resolve_closure`); no match → ask which street;
-- endurance hours → backup_endurance_s.
+- endurance minutes → backup_endurance_s (minutes, not hours: 10 min as hours rounds to 0.17 h = 612 s).
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ class Fact(BaseModel):
     medical: bool | None = Field(description="need: a medical condition needing care (oxygen, dialysis, insulin, injury)")
     road_hint: str | None = Field(description="closure_report: the blocked street's name as written, e.g. 'River St'; null if not named")
     cross_street: str | None = Field(description="closure_report: a cross street or landmark that locates the blockage")
-    endurance_h: float | None = Field(description="facility_status: hours of backup power/fuel left, e.g. '90 minutes' = 1.5")
+    endurance_min: float | None = Field(description="facility_status: MINUTES of backup power/fuel left, e.g. '10 minutes' = 10, '6 hours' = 360")
     facility_state: Literal["ok", "backup", "down"] | None = Field(
         description="facility_status: ok = on grid power, backup = running on backup/generator, down = no power / not operating")
 
@@ -162,8 +162,8 @@ def to_outcome(ex: Extraction, *, role: str, thread: dict, text: str, pending: d
                                             **({"cross_street": f.cross_street} if f.cross_street else {})}})
         elif f.kind == "facility_status" and fid is not None:
             fields: dict[str, Any] = {}
-            if f.endurance_h is not None and f.endurance_h >= 0:
-                fields["backup_endurance_s"] = round(f.endurance_h * 3600)
+            if f.endurance_min is not None and f.endurance_min >= 0:
+                fields["backup_endurance_s"] = round(f.endurance_min * 60)
             if f.facility_state is not None:
                 fields["state"] = f.facility_state
             if not fields:

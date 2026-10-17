@@ -52,13 +52,25 @@ class Planner:
         return float(self.store.meta().get("t_s", 0.0))
 
     async def bootstrap(self, t_s: float = 0.0) -> dict:
-        """Fresh scenario: plan v1 at t=0 with no live reports, state at `t_s`."""
+        """Fresh scenario: plan v1 at t=0 with no live reports, state at `t_s`. Plan hooks run too, so
+        opted-in phones get v1's open questions (the judge's phone shows EMBER's question right after a
+        reset, as DEMO.md expects)."""
         async with self.lock:
             self.store.clear_scenario()
             plan = await run_in_threadpool(self.bridge.plan, [], 0.0, None, None, "initial plan")
             self.store.add_plan(plan, reports_used=[])
             self._comparison = None
-            return await self._refresh(t_s)
+            state = await self._refresh(t_s)
+        await self._run_hooks(state["plan"])
+        return self.store.snapshot()
+
+    async def _run_hooks(self, view: dict) -> None:
+        raw = self.store.current_plan()
+        for hook in self.plan_hooks:
+            try:
+                await hook(view, raw)
+            except Exception:  # noqa: BLE001 - a messaging failure must not undo a plan
+                log.exception("plan hook failed for v%s", view["version"])
 
     async def _refresh(self, t_s: float) -> dict:
         """Recompute the engine-derived state at t_s from the current plan + live reports (lock held)."""
@@ -170,12 +182,7 @@ class Planner:
                 "assignment": None if ch["change"] == "removed" else by_id.get(ch["assignment_id"]),
                 **({"note": ch["note"]} if ch.get("note") else {})}, state["t_s"])
         await self.hub.broadcast("metrics", state["metrics"], state["t_s"])
-        raw = self.store.current_plan()
-        for hook in self.plan_hooks:
-            try:
-                await hook(view, raw)
-            except Exception:  # noqa: BLE001 - a messaging failure must not undo a plan
-                log.exception("plan hook failed for v%s", view["version"])
+        await self._run_hooks(view)
         return view
 
     # ---------- confirm / reject (Task 5) ----------
