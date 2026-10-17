@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from ember_engine.state import validate_state
 from residents.app import create_app
-from residents.drill import Drill, main as drill_main
+from residents.drill import Drill, SetupError, main as drill_main
 from residents.engine_bridge import EngineBridge
 from residents.extract import to_outcome
 from residents.guide import STEP_DONE
@@ -491,3 +491,44 @@ def test_blocked_status_uses_the_engines_alternatives(needs, deadline, want, not
         "alternatives": ["shelter in place above ground floor", "walk to the nearest dry pickup point if able"]}]}
     text = Outbound(_Store(needs, deadline), messenger=None).status_text(view, {"household_id": 7})
     assert want in text and (not_want is None or not_want not in text), text
+
+
+# ---------- a new run: the command line decides who plays what ----------
+def _drill_for(c, residents=(), operators=(), keep=False):
+    import argparse
+    d = Drill(argparse.Namespace(dry=True, crowded=False, keep=keep, manual_clock=False, port=0, db="x.db",
+                                 resident=list(residents), operator=list(operators)))
+    d.app = c.app
+    return d
+
+
+def test_new_run_rebinds_phones_from_the_last_run(drill, capsys):
+    """Regression (live, 2026-10-17): R2 was the hospital operator last run and a resident now → PhoneConflict crash."""
+    store = drill.app.state.store
+    assert drill.post("/phones", json={"role": "operator", "handle": R2, "facility_id": "mt-auburn"}).status_code == 200
+    register(drill, R1)
+    register(drill, OP)                           # in the last run, not in this one
+    store.upsert_phone(R2, "operator", space_id="sp", agent_user_id="ag", last_inbound_at="2026-10-17T10:00:00Z")
+    d = _drill_for(drill, residents=[R1, R2])
+    drill.portal.call(d.register)
+    phones = {p["handle"]: p for p in drill.get("/phones").json()}
+    assert set(phones) == {R1, R2}                # OP dropped: it gets nothing this run
+    assert phones[R2]["role"] == "resident" and phones[R2]["thread"] is None and phones[R2]["opted_in"]  # opt-in kept
+    assert d.names == {R1: "r1", R2: "r2"}
+    tap = Tap(drill)
+    text(drill, R2, PUTNAM)                       # and it can be placed like any resident
+    assert thread_of(drill, R2) is not None and tap.outs(R2)[-1].startswith("How many people")
+    # and back: a resident from the last run plays the hospital now
+    d = _drill_for(drill, residents=[R1], operators=[f"{R2}@mt-auburn"])
+    drill.portal.call(d.register)
+    phones = {p["handle"]: p for p in drill.get("/phones").json()}
+    assert phones[R2]["role"] == "operator" and phones[R2]["thread"] == {"facility_id": "mt-auburn"}
+
+
+def test_same_phone_twice_is_a_clear_error(drill):
+    d = _drill_for(drill, residents=[R1], operators=[f"{R1}@mt-auburn"])
+    with pytest.raises(SetupError, match="listed more than once"):
+        drill.portal.call(d.register)
+    d = _drill_for(drill, operators=[f"{R1}@mt-auburn", f"{R2}@mt-auburn"])
+    with pytest.raises(SetupError, match="Can't register the phones"):
+        drill.portal.call(d.register)

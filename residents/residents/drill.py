@@ -38,6 +38,10 @@ HELP = """commands:
   help | quit"""
 
 
+class SetupError(Exception):
+    """Why the drill can't start; printed as one line (no traceback)."""
+
+
 def _fmt_t(t_s: float) -> str:
     return f"t={t_s / 60:5.1f} min"
 
@@ -75,7 +79,7 @@ class Drill:
         s = self.settings()
         problems = self.check(s)
         if problems:
-            raise SystemExit("\n".join(problems))
+            raise SetupError("\n".join(problems))
         self.app = create_app(s)
         cfg = uvicorn.Config(self.app, host="127.0.0.1", port=self.args.port, log_level="warning", lifespan="on")
         self.server = uvicorn.Server(cfg)
@@ -86,25 +90,73 @@ class Drill:
               flush=True)
         while not self.server.started:
             if self._serve.done():
-                raise SystemExit(f"backend didn't start (is port {self.args.port} in use?)")
+                raise SetupError(f"backend didn't start (is port {self.args.port} in use?)")
             await asyncio.sleep(0.1)
         st = self.app.state
         st.messenger.taps.append(self.on_message)
         await self.register()
         await st.locator.welcome()
 
-    async def register(self) -> None:
-        st = self.app.state
-        rows = []
-        for i, raw in enumerate(self.args.resident, 1):
-            p = await st.messenger.register_phone("resident", raw, locate=True)
-            self.names[p["handle"]] = f"r{i}"
-            rows.append((f"r{i}", "resident", p))
-        for i, spec in enumerate(self.args.operator, 1):
+    def wanted(self) -> list[tuple[str, str, str | None]]:
+        """(handle, role, facility_id) for every phone on the command line, in order."""
+        from .threads import normalize_handle
+        out = [(normalize_handle(raw), "resident", None) for raw in self.args.resident]
+        for spec in self.args.operator:
             raw, _, fid = spec.partition("@")
-            p = await st.messenger.register_phone("operator", raw, facility_id=fid or None)
-            self.names[p["handle"]] = f"op{i}"
-            rows.append((f"op{i}", f"operator of {p.get('facility_id')}", p))
+            out.append((normalize_handle(raw), "operator", fid or None))
+        handles = [h for h, *_ in out]
+        dupes = sorted({h for h in handles if handles.count(h) > 1})
+        if dupes:
+            raise SetupError(f"Each phone can play one part per run; listed more than once: {', '.join(dupes)}")
+        return out
+
+    def fit_phones(self, wanted: list[tuple[str, str, str | None]]) -> None:
+        """Fresh run: the command line decides who plays what. Phones from earlier runs that aren't listed are
+        dropped (they get nothing); listed phones in a different part are re-bound, keeping their Photon opt-in."""
+        from .db import thread_key
+        from .threads import resolve_thread
+        store = self.app.state.store
+        scenario = store.meta().get("scenario_id")
+        want = {h: (role, fid) for h, role, fid in wanted}
+        for p in store.phones():
+            if p["handle"] not in want:
+                store.delete_phone(p["handle"])
+        for p in store.phones():
+            role, fid = want[p["handle"]]
+            if role == "resident":
+                key = None
+            else:
+                t = resolve_thread(store, "operator", facility_id=fid)
+                key = thread_key(t) if t else None
+            if (p["role"], p["thread_key"]) != (role, key):
+                store.rebind_phone(p["handle"], role, None, scenario)  # free its old target first
+        for p in store.phones():
+            role, fid = want[p["handle"]]
+            if role == "operator":
+                t = resolve_thread(store, "operator", facility_id=fid)
+                store.rebind_phone(p["handle"], role, thread_key(t) if t else None, scenario)
+
+    async def register(self) -> None:
+        from .db import PhoneConflict
+        st = self.app.state
+        wanted = self.wanted()
+        try:
+            if not self.args.keep:
+                self.fit_phones(wanted)
+            rows = []
+            n = {"resident": 0, "operator": 0}
+            for handle, role, fid in wanted:
+                n[role] += 1
+                name = f"r{n[role]}" if role == "resident" else f"op{n[role]}"
+                if role == "resident":
+                    p = await st.messenger.register_phone("resident", handle, locate=True)
+                else:
+                    p = await st.messenger.register_phone("operator", handle, facility_id=fid)
+                self.names[p["handle"]] = name
+                rows.append((name, "resident" if role == "resident" else f"operator of {p.get('facility_id')}", p))
+        except (PhoneConflict, ValueError) as e:
+            raise SetupError(f"Can't register the phones: {e}"
+                             + (" (--keep continues the last run with its phones as they were)" if self.args.keep else ""))
         print("\nparticipants:")
         for name, role, p in rows:
             line = f"  {name:4} {role:28} {p['handle']}"
@@ -260,12 +312,13 @@ class Drill:
                 break
 
     async def run(self) -> None:
-        await self.start()
         try:
+            await self.start()
             await self.repl()
         finally:
-            self.server.should_exit = True
-            await self._serve
+            if self.server is not None and not self._serve.done():
+                self.server.should_exit = True  # a clean shutdown (lifespan closes Photon + the DB)
+                await self._serve
 
 
 def preflight(port: int, photon: bool) -> list[str]:
@@ -322,6 +375,8 @@ def main(argv: list[str] | None = None) -> None:
     setup_logging(Path(args.db).with_suffix(".log"))
     try:
         asyncio.run(Drill(args).run())
+    except SetupError as e:
+        raise SystemExit(str(e)) from None
     except KeyboardInterrupt:
         pass
 

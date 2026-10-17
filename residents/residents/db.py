@@ -448,6 +448,20 @@ class Store:
     def phones(self) -> list[dict]:
         return [dict(r) for r in self._rows("SELECT * FROM phones ORDER BY role, thread_key, handle")]
 
+    def rebind_phone(self, handle: str, role: str, thread_key: str | None, scenario_id: str | None) -> None:
+        """Give a known phone a new role/target, keeping its Photon line and opt-in (the drill's command
+        line decides who plays what in a fresh run). Raises PhoneConflict if the target has another phone."""
+        with self._tx() as db:
+            if thread_key and db.execute("SELECT 1 FROM phones WHERE thread_key = ? AND handle != ?", (thread_key, handle)).fetchone():
+                raise PhoneConflict(f"{thread_key} already has another phone in this run.")
+            db.execute("UPDATE phones SET role = ?, thread_key = ?, scenario_id = ? WHERE handle = ?",
+                       (role, thread_key, scenario_id, handle))
+
+    def delete_phone(self, handle: str) -> None:
+        with self._tx() as db:
+            db.execute("DELETE FROM phones WHERE handle = ?", (handle,))
+            db.execute("DELETE FROM kv WHERE key = ? OR key LIKE ?", (f"located:{handle}", f"lobby:{handle}%"))
+
     def unplace_phone(self, handle: str) -> None:
         """Back to waiting for a location (thread_key NULL, scenario kept so it isn't legacy-bound)."""
         with self._tx() as db:
