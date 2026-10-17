@@ -38,7 +38,7 @@ data/town.json                                (engine)    roads, footways, build
 └──────────────────────────────────────────────────────────────┘     └──────────────────────────────┘
 ```
 
-Hard rules (from `CLAUDE.md`): no LLM in the simulation or allocator; the only LLM call turns free text into a structured report. Agents are rows. 2D map only. Unknowns stay unknown (asked or enumerated), never invented.
+Hard rules (from `CLAUDE.md`): no LLM in the simulation or allocator; the only LLM call turns free text into a structured report. Agents are rows. 2D simulation, 2.5D map view (tilted camera + extruded buildings, D50). Unknowns stay unknown (asked or enumerated), never invented.
 
 ---
 
