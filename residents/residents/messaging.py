@@ -24,6 +24,7 @@ from .threads import ROLES, normalize_handle, resolve_thread, role_for_thread
 log = logging.getLogger("residents.messaging")
 
 DRILL = "[EMBER drill]"
+RUN_STARTED_KEY = "run_started_at"  # wall-clock UTC ISO of the last bootstrap (startup reseed / reset)
 
 # Called after a new inbound message is stored: (message, role). Task 3/4 hang extraction + replan here.
 InboundHook = Callable[[dict, str], Awaitable[Any]]
@@ -77,12 +78,27 @@ class Messenger:
         if phone is None:
             log.warning("text from unregistered handle %s ignored", handle)
             return None
-        if self.store.has_external_id(inbound.external_id):
+        if self.store.has_external_id(inbound.external_id) or self.store.inbound_seen(inbound.external_id):
+            return None
+        self.store.mark_inbound_seen(inbound.external_id)
+        if self._before_this_run(inbound.created_at):
+            log.warning("ignoring %s from %s: sent %s, before this run started (%s)", inbound.external_id, handle,
+                        inbound.created_at, self.store.kv_get(RUN_STARTED_KEY))
             return None
         # learned from the first text: what we need to reply on this line (and the opt-in timestamp)
         self.store.upsert_phone(handle, phone["role"], peer_user_id=inbound.peer_user_id, agent_user_id=inbound.agent_user_id,
                                 space_id=inbound.space_id, last_inbound_at=inbound.created_at or datetime.now(timezone.utc).isoformat())
         return await self._store_inbound(phone["role"], inbound.text, external_id=inbound.external_id)
+
+    def _before_this_run(self, created_at: str | None) -> bool:
+        """A text sent before the last reset/bootstrap belongs to an earlier run; never answer it."""
+        started = self.store.kv_get(RUN_STARTED_KEY)
+        if not (started and created_at):
+            return False
+        try:
+            return datetime.fromisoformat(created_at.replace("Z", "+00:00")) < datetime.fromisoformat(started)
+        except ValueError:
+            return False
 
     async def simulate_inbound(self, role: str, text: str) -> dict | None:
         """Dev / stage fallback: the same path as a real text, without a phone."""
