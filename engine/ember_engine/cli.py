@@ -354,6 +354,31 @@ def cmd_simulate(a):
         print(f"[simulate] state at {a.state_at/60:.0f} min → {out}")
 
 
+def cmd_playback(a):
+    """A plan simulated over the whole horizon as contracts/playback.schema.json (the map's replay).
+    --fixtures writes EMBER and baseline for allston_flood_v1 into contracts/fixtures/."""
+    from .playback import playback
+    from .scenario import load_scenario
+    from .sim import simulate
+    w = _load_world()
+    if a.fixtures:
+        fx = ROOT / "contracts" / "fixtures"
+        scn = load_scenario(ROOT / "scenarios" / "allston_flood_v1" / "scenario.json")
+        for which, name in (("ember", "playback.fixture.json"), ("baseline", "playback.baseline.fixture.json")):
+            pb = playback(simulate(w, scn, _make_plan(w, scn, which, [])), which)
+            (fx / name).write_text(json.dumps(pb, separators=(",", ":")))
+            print(f"[playback] {which}: {len(pb['tracks'])} tracks, overflow {pb['metrics'].get('overflow_m3')} m³ → {fx / name}")
+        return
+    if not a.scenario:
+        raise SystemExit("--scenario is required (or --fixtures)")
+    scn = load_scenario(a.scenario)
+    reports = _read_reports(a.report)
+    pb = playback(simulate(w, scn, _make_plan(w, scn, a.plan, reports), reports=reports), a.plan)
+    out = Path(a.out or DATA / f"playback.{a.plan}.json")
+    out.write_text(json.dumps(pb, separators=(",", ":")))
+    print(f"[playback] {a.plan}: {sum(len(t['path']) for t in pb['tracks'])} track points → {out}")
+
+
 def cmd_validate_state(a):
     """Check a state snapshot (e.g. the backend's GET /state) against state.schema.json and town ids."""
     from .scenario import load_scenario
@@ -414,6 +439,11 @@ def main(argv=None):
     sm.add_argument("--state-at", type=float, default=None, help="also write a state snapshot at this sim time (s)")
     sm.add_argument("--state-out", default=None)
     sm.set_defaults(f=cmd_simulate)
+    pb = sp.add_parser("playback", help="simulate a plan and write the map replay (contracts/playback.schema.json)")
+    pb.add_argument("--scenario", default=None); pb.add_argument("--plan", default="ember", help="ember | baseline | example | a plan JSON file")
+    pb.add_argument("--report", action="append"); pb.add_argument("--out", default=None)
+    pb.add_argument("--fixtures", action="store_true", help="write contracts/fixtures/playback{,.baseline}.fixture.json for allston_flood_v1")
+    pb.set_defaults(f=cmd_playback)
     al = sp.add_parser("allocate", help="EMBER plan (initial + replan at every report)")
     al.add_argument("--scenario", required=True); al.add_argument("--report", action="append"); al.add_argument("--seed", type=int, default=0)
     al.add_argument("--out", default=None); al.add_argument("--versions-out", default=None); al.set_defaults(f=cmd_allocate)

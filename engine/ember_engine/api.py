@@ -122,6 +122,19 @@ class EngineSession:
             self._need_plan()
             return self._state(t_s)
 
+    def playback(self, planner: str = "ember") -> dict:
+        """GET /playback: the current plan ("ember") or the incident-by-incident baseline on the same
+        reports, simulated over the whole horizon as contracts/playback.schema.json (map replay, D51)."""
+        from .baseline import baseline_plan
+        from .playback import playback
+        from .sim import simulate
+        if planner not in ("ember", "baseline"):
+            raise ValueError("planner must be ember or baseline")
+        with self.lock:
+            self._need_plan()
+            plan = self.plan if planner == "ember" else baseline_plan(self.world, self.scn, list(self.reports))
+            return playback(simulate(self.world, self.scn, plan, reports=self.reports), planner)
+
     def compare(self, seeds: int = 5) -> dict:
         from .compare import compare
         with self.lock:
