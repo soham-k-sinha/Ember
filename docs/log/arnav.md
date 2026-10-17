@@ -15,3 +15,11 @@ Run: cd web && npm run dev
 Interfaces: consumes state v0.1; changed: none
 Status: done
 Next: same as above
+
+## 2026-10-17 04:24 · comparison panel and WS envelopes · branch arnav/operator-ui · commit c2640c8
+What: the comparison table reads nominal.baseline and nominal.ember from comparison.fixture.json; B−A is EMBER minus baseline, with the seed spread labeled as spread rather than confidence bounds. The plan timeline lists plans.ember.versions and shows plan.changes for the matching version. The WebSocket client follows contracts/ws-events.schema.json on aryaman/ws-events (PR #11): every message is {type, seq, t_s, data}, and a skipped seq drops the stream and reloads GET /state. scatter_point is drawn as provisional until Soham signs off. State v0.2 fields stay optional.
+Files: web/src/live.ts, web/src/components/Panels.tsx, web/src/App.tsx, web/src/types.ts, web/src/fixtures.ts, web/scripts/check-ws.ts
+Run: cd web && npm run dev
+Interfaces: consumes comparison v0.1 and state v0.2; consumes the proposed ws-events envelope (not merged; not residents/ws-events.schema.json). changed: none
+Status: done. scatter_point shape is provisional.
+Next: switch the client comment to contracts/ws-events.schema.json on main once PR #11 merges.
