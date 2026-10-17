@@ -153,6 +153,7 @@ class PhotonListener:
 
     CURSOR_KEY = "photon_cursor"
     POLL_SINCE_KEY = "photon_poll_since"
+    MAX_LOOKBACK_S = 600.0  # polling never fetches texts older than this, however stale the marker is
 
     def __init__(self, client: PhotonClient, store: Any, on_message: OnMessage,
                  poll_interval_s: float = 2.0, poll_after_down_s: float = 5.0, sio_factory: Callable[[], Any] | None = None):
@@ -188,13 +189,7 @@ class PhotonListener:
         for t in self._tasks:
             t.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
-        if self._sio is not None:
-            try:
-                await self._sio.disconnect()
-            except Exception:  # noqa: BLE001 - shutting down anyway
-                pass
-        if self._http_session is not None:
-            await self._http_session.close()
+        await self._close_sio()
 
     # ---------- socket ----------
     def _make_sio(self) -> Any:
@@ -212,9 +207,7 @@ class PhotonListener:
         return socketio.AsyncClient(reconnection=True, reconnection_delay=1, reconnection_delay_max=10,
                                     logger=False, http_session=self._http_session)
 
-    async def _socket(self) -> None:
-        sio = self._sio = self._make_sio()
-
+    def _wire(self, sio: Any) -> None:
         @sio.event
         async def connect():
             asyncio.create_task(self._subscribe(sio))
@@ -235,16 +228,42 @@ class PhotonListener:
         async def delivery_error(err):
             log.warning("photon delivery_error: %s", err)
 
-        try:
-            await sio.connect(self.client.base_url, socketio_path=f"/v1/projects/{self.client.project_id}/events/ws",
-                              transports=["websocket"], headers={"Authorization": f"Bearer {self.client.api_key}"},
-                              wait_timeout=10, retry=True)
-            await sio.wait()
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:  # noqa: BLE001 - the poller keeps messages flowing
-            log.error("photon socket gave up: %r (polling fallback stays on)", e)
+    async def _socket(self) -> None:
+        """Connect, and keep trying forever. Socket.IO's own reconnection only covers drops after a
+        successful connect; a first connect that times out (Photon slow for a moment) used to leave us on
+        polling for the rest of the run."""
+        delay = 1.0
+        while True:
+            sio = self._sio = self._make_sio()
+            self._wire(sio)
+            try:
+                await sio.connect(self.client.base_url, socketio_path=f"/v1/projects/{self.client.project_id}/events/ws",
+                                  transports=["websocket"], headers={"Authorization": f"Bearer {self.client.api_key}"},
+                                  wait_timeout=10)
+                delay = 1.0
+                await sio.wait()  # returns only if the client gives up for good
+                log.warning("photon socket closed; reconnecting")
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001 - polling covers the gap; try again
+                log.warning("photon socket connect failed: %r; retrying in %.0fs (polling meanwhile)", e, delay)
             self._mark_down()
+            await self._close_sio()
+            await _backoff(delay)
+            delay = min(delay * 2, 30.0)
+
+    async def _close_sio(self) -> None:
+        if self._sio is not None:
+            try:
+                await self._sio.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+        if self._http_session is not None:
+            try:
+                await self._http_session.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._http_session = None
 
     async def _subscribe(self, sio: Any) -> None:
         try:
@@ -255,6 +274,7 @@ class PhotonListener:
             return
         if isinstance(res, dict) and res.get("ok"):
             self.subscribed, self.down_since = True, None
+            self._mark_polled_now()  # the socket's cursor covers everything from here
             log.info("photon subscribed (cursor %s, connection %s)", self.cursor, res.get("connectionId"))
         else:
             log.error("photon subscribe rejected: %s", res)
@@ -300,9 +320,15 @@ class PhotonListener:
             return False
         return time.monotonic() - self.down_since >= self.poll_after_down_s
 
+    def _mark_polled_now(self) -> None:
+        self.store.kv_set(self.POLL_SINCE_KEY, datetime.now(timezone.utc).isoformat())
+
     async def _poller(self) -> None:
         while True:
             await asyncio.sleep(self.poll_interval_s)
+            if self.subscribed:
+                self._mark_polled_now()  # keep the fallback's window fresh while the socket is healthy
+                continue
             if not self._polling_active():
                 continue
             try:
@@ -314,6 +340,8 @@ class PhotonListener:
 
     async def poll_once(self) -> int:
         since = datetime.fromisoformat(self.store.kv_get(self.POLL_SINCE_KEY))
+        floor = datetime.now(timezone.utc) - timedelta(seconds=self.MAX_LOOKBACK_S)
+        since = max(since, floor)
         items = await self.client.list_received(since - timedelta(seconds=5))  # overlap; dedupe makes it safe
         newest = since
         n = 0

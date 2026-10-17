@@ -95,6 +95,12 @@ CREATE TABLE IF NOT EXISTS phones (
     space_id        TEXT,                    -- the direct chat                 } needed to send
     last_inbound_at TEXT                     -- opt-in: a shared line may only reply after this is set
 );
+-- Photon message ids already handled. Survives reseeds: after /dev/reset the messages table is empty,
+-- and without this a redelivered or polled old text would be treated as new and answered again.
+CREATE TABLE IF NOT EXISTS inbound_seen (
+    external_id TEXT PRIMARY KEY,
+    seen_wall   REAL NOT NULL
+);
 -- Small durable settings that survive reseeds (e.g. the Photon event cursor).
 CREATE TABLE IF NOT EXISTS kv (
     key   TEXT PRIMARY KEY,
@@ -351,6 +357,13 @@ class Store:
         rows = self._rows("SELECT data FROM messages WHERE direction = 'out' AND delivery = 'failed' "
                           "AND created_wall >= ? ORDER BY seq", (time.time() - max_age_s,))
         return [json.loads(r["data"]) for r in rows]
+
+    def inbound_seen(self, external_id: str) -> bool:
+        return bool(self._rows("SELECT 1 FROM inbound_seen WHERE external_id = ?", (external_id,)))
+
+    def mark_inbound_seen(self, external_id: str) -> None:
+        with self._tx() as db:
+            db.execute("INSERT OR IGNORE INTO inbound_seen (external_id, seen_wall) VALUES (?, ?)", (external_id, time.time()))
 
     def has_external_id(self, external_id: str) -> bool:
         return bool(self._rows("SELECT 1 FROM messages WHERE external_id = ?", (external_id,)))

@@ -154,3 +154,28 @@ def test_health_with_live_listener(settings, tmp_path):
             assert r.status_code == 200 and r.json()["photon_listener"]["socket"] == "down"
     finally:
         app_mod.PhotonListener = orig
+
+
+async def test_socket_retries_a_failed_first_connect(store, monkeypatch):
+    """Live incident: Photon was slow, the first connect timed out, and the listener stayed on polling forever."""
+    async def no_wait(*_a, **_k):
+        await asyncio.sleep(0)
+    monkeypatch.setattr("residents.photon._backoff", no_wait)
+    attempts = []
+
+    class Flaky(FakeSio):
+        async def connect(self, url, **kw):
+            attempts.append(1)
+            if len(attempts) <= 2:
+                raise TimeoutError()
+            await super().connect(url, **kw)
+
+    socks = []
+    lst = PhotonListener(FakePhoton().client(), store, _no_sleep, sio_factory=lambda: socks.append(Flaky()) or socks[-1])
+    task = asyncio.create_task(lst._socket())
+    for _ in range(200):
+        await asyncio.sleep(0.01)
+        if lst.subscribed:
+            break
+    task.cancel()
+    assert lst.subscribed and len(attempts) == 3 and len(socks) == 3   # a fresh client per attempt

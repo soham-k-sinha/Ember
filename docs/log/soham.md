@@ -102,3 +102,12 @@ Run: cd residents && uv run pytest -q (125 pass) ; uv run python scripts/eval_ex
 Interfaces: none changed. D53.
 Status: done.
 Notes for Aryaman (DEMO.md owner): measured today — beat 2 judge pickup 121 min (DEMO says 132) vs deadline 165; beat 4 hospital outage 15 min (DEMO says 16); setup step 6 no longer needs the "POST /replan once" fallback (keep it as a fallback). Every `/dev/reset` re-texts the judge's question to the opted-in phone; that's intended for rehearsals but means the judge phone collects one question per reset.
+
+## 2026-10-17 13:20 · INCIDENT + fix: old texts re-answered after a reset · branch soham/replay-guard · commit (this PR)
+What happened: restarting the live server with RESET_ON_START=1 while Photon was slow → the socket's first connect timed out and the listener gave up on the socket (polling only). The poll window marker had never advanced (it only moved while polling) and the reset had emptied the messages table used for dedupe, so the poller re-fetched the judge phone's earlier texts and EMBER answered 6 of them again on the real (team) phone, drill-prefixed. I stopped the server within ~1 min.
+Fix: run boundary (texts sent before the last reset are ignored), `inbound_seen` table that survives resets, poll window kept fresh + capped at 10 min, socket reconnects forever with backoff. Regression tests for each guard (each verified by mutation; one test was initially hollow and was fixed). Test fakes no longer use a fixed timestamp (would have broken after 12:00 UTC with the run boundary).
+Files: residents/residents/{photon,messaging,planner,db}.py, residents/tests/{test_replay_guard,test_listener,fake_photon}.py
+Run: cd residents && uv run pytest -q (129 pass)
+Verified live: restart without reset → socket subscribed, redelivered the 7 old events from the saved cursor → all deduped, 0 texts sent.
+Interfaces: none changed. D54.
+Status: done.

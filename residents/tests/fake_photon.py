@@ -46,8 +46,12 @@ class FakePhoton:
                 for r in self.requests if r.method == "POST" and r.url.path.endswith("/messages")]
 
 
-def received(msg_id: str, handle: str, text: str, created="2026-10-17T12:00:00Z", content_type="text") -> dict:
-    """A Photon ReceivedImessageMessage (fields per openapi)."""
+def received(msg_id: str, handle: str, text: str, created: str | None = None, content_type="text") -> dict:
+    """A Photon ReceivedImessageMessage (fields per openapi). `created` defaults to now (UTC), so it is
+    never "before this run" (Messenger ignores texts sent before the last reset)."""
+    if created is None:
+        from datetime import datetime, timezone
+        created = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     content = {"type": content_type, "format": "plain", "text": text} if content_type == "text" else {"type": content_type}
     return {"id": msg_id, "projectId": PROJECT, "platform": "imessage", "status": "received", "content": content,
             "sentBy": {"id": f"pho_usr_{handle[-4:]}", "handle": handle, "platform": "imessage"},

@@ -15,6 +15,7 @@ import json
 import logging
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
 from starlette.concurrency import run_in_threadpool
@@ -57,6 +58,8 @@ class Planner:
         reset, as DEMO.md expects)."""
         async with self.lock:
             self.store.clear_scenario()
+            # texts sent before this moment belong to the previous run (see Messenger._before_this_run)
+            self.store.kv_set("run_started_at", datetime.now(timezone.utc).isoformat())
             plan = await run_in_threadpool(self.bridge.plan, [], 0.0, None, None, "initial plan")
             self.store.add_plan(plan, reports_used=[])
             self._comparison = None
