@@ -65,6 +65,7 @@ export function Panels(props: {
   selection: Selection | null;
   comparison: Comparison | null;
   scatter: ScatterPoint[];
+  scatterTotal: number | null;
   plans: PlanSnapshot[];
   judge: JudgeClosure[];
   notice: string | null;
@@ -460,6 +461,15 @@ function Needs(props: { state: StateSnapshot }) {
   );
 }
 
+function metricNumber(metrics: PlanMetrics, key: string): number | null {
+  const value = metrics[key as keyof PlanMetrics];
+  return typeof value === "number" ? value : null;
+}
+
+function digitsFor(value: number): number {
+  return Number.isInteger(value) ? 0 : 1;
+}
+
 function Compare(props: {
   state: StateSnapshot;
   comparison: Comparison | null;
@@ -469,43 +479,55 @@ function Compare(props: {
   const comparison = props.comparison;
   return (
     <div className="stack">
-      <p className="meta">Spread, not confidence bounds.</p>
+      <p className="meta">B − A is EMBER minus baseline. Spread, not confidence bounds.</p>
       <button className="primary" disabled={props.busy != null} onClick={props.onCompare}>
         {props.busy === "compare" ? "Running comparison…" : "Run comparison"}
       </button>
       {comparison ? (
-        <table className="grid">
-          <thead>
-            <tr>
-              <th>Metric</th>
-              <th>Baseline (A)</th>
-              <th>EMBER (B)</th>
-              <th>B − A</th>
-            </tr>
-          </thead>
-          <tbody>
-            {METRICS.map((metric) => {
-              const a = comparison.baseline[metric.key];
-              const b = comparison.ember[metric.key];
-              const delta = typeof a === "number" && typeof b === "number" ? b - a : null;
-              return (
-                <tr key={metric.key}>
-                  <td>{metric.label}</td>
-                  <td>{typeof a === "number" ? `${formatNumber(a, metric.digits)} ${metric.unit}` : "—"}</td>
-                  <td>{typeof b === "number" ? `${formatNumber(b, metric.digits)} ${metric.unit}` : "—"}</td>
-                  <td>{delta == null ? "—" : formatNumber(delta, metric.digits)}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <>
+          <ul className="needs">
+            {comparison.headline.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+          <table className="grid">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th>Baseline (A)</th>
+                <th>EMBER (B)</th>
+                <th>B − A</th>
+              </tr>
+            </thead>
+            <tbody>
+              {comparison.metrics.map((metric) => {
+                const baseline = metricNumber(comparison.nominal.baseline, metric.metric);
+                const ember = metricNumber(comparison.nominal.ember, metric.metric);
+                const delta = baseline != null && ember != null ? ember - baseline : null;
+                const digits = digitsFor(delta ?? ember ?? baseline ?? 0);
+                return (
+                  <tr key={metric.metric}>
+                    <td>
+                      {metric.label}
+                      <span>
+                        spread {formatNumber(metric.diff_min, digitsFor(metric.diff_min))} to {formatNumber(metric.diff_max, digitsFor(metric.diff_max))} {metric.unit}
+                      </span>
+                    </td>
+                    <td>{baseline == null ? "—" : `${formatNumber(baseline, digits)} ${metric.unit}`}</td>
+                    <td>{ember == null ? "—" : `${formatNumber(ember, digits)} ${metric.unit}`}</td>
+                    <td>{delta == null ? "—" : `${formatNumber(delta, digits)} ${metric.unit}`}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {comparison.notes.map((note) => (
+            <p key={note} className="meta">{note}</p>
+          ))}
+        </>
       ) : (
-        <p className="empty">
-          No comparison fixture is published, and the backend has not returned one. A is baseline
-          and B is EMBER once both sides arrive. The numbers below are this snapshot&apos;s plan only.
-        </p>
+        <p className="empty">No comparison is loaded. Nominal columns come from comparison.fixture.json.</p>
       )}
-      {comparison?.note ? <p className="meta">{comparison.note}</p> : null}
       <PlanMetricsBlock title="This snapshot" metrics={props.state.metrics} />
     </div>
   );
@@ -531,77 +553,126 @@ function PlanMetricsBlock(props: { title: string; metrics: PlanMetrics }) {
   );
 }
 
-function Scatter(props: { scatter: ScatterPoint[]; state: StateSnapshot }) {
+function Scatter(props: { scatter: ScatterPoint[]; scatterTotal: number | null }) {
   const points = props.scatter;
-  const chosenId = props.state.plan ? `v${props.state.plan.version}` : null;
-  if (points.length === 0) {
-    return (
-      <p className="empty">
-        Robustness runs show up here as they arrive on <code>scatter_point</code>. Nothing has
-        been streamed yet. The chosen plan is drawn as a ring.
-      </p>
-    );
-  }
-  const maxX = Math.max(...points.map((point) => point.overflowM3), 1);
-  const maxY = Math.max(...points.map((point) => point.peopleUnreached), 1);
+  return (
+    <div className="stack">
+      <p className="meta">scatter_point is provisional until Soham signs off.</p>
+      {points.length === 0 ? (
+        <p className="empty">
+          Robustness runs fill this chart from <code>scatter_point</code> events. A new batch clears the previous one. The chosen EMBER plan is the ring.
+        </p>
+      ) : (
+        <ScatterChart points={points} total={props.scatterTotal} />
+      )}
+    </div>
+  );
+}
+
+function ScatterChart(props: { points: ScatterPoint[]; total: number | null }) {
+  const points = props.points;
+  const maxX = Math.max(...points.map((point) => point.peopleUnreached), 1);
+  const maxY = Math.max(...points.map((point) => point.overflowM3), 1);
   const width = 280;
   const height = 180;
   const pad = 16;
+  const batch = points[0]?.batchId;
   return (
     <figure className="scatter">
       <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Robustness scatter">
         {points.map((point) => {
-          const x = pad + (point.overflowM3 / maxX) * (width - pad * 2);
-          const y = height - pad - (point.peopleUnreached / maxY) * (height - pad * 2);
-          const chosen = point.chosen || point.planId === chosenId;
+          const x = pad + (point.peopleUnreached / maxX) * (width - pad * 2);
+          const y = height - pad - (point.overflowM3 / maxY) * (height - pad * 2);
           return (
             <circle
-              key={point.id}
+              key={point.runId}
               cx={x}
               cy={y}
-              r={chosen ? 6 : 3.5}
-              className={chosen ? "chosen" : ""}
-            />
+              r={point.chosen ? 6 : 3.5}
+              className={point.chosen ? "chosen" : ""}
+            >
+              <title>{point.candidate} seed {point.seed}</title>
+            </circle>
           );
         })}
       </svg>
-      <figcaption>People unreached (vertical) against overflow m³ (horizontal). Spread, not confidence bounds.</figcaption>
+      <figcaption>
+        {points.length}{props.total ? ` / ${props.total}` : ""} in {batch}. Horizontal: people unreached. Vertical: overflow m³. Spread, not confidence bounds.
+      </figcaption>
     </figure>
   );
 }
 
-function Plans(props: { plans: PlanSnapshot[]; onReplan: () => void; busy: string | null }) {
-  const plans = [...props.plans].sort((a, b) => a.version - b.version);
+function Plans(props: {
+  plans: PlanSnapshot[];
+  comparison: Comparison | null;
+  onReplan: () => void;
+  busy: string | null;
+}) {
+  const fromCompare = props.comparison?.plans.ember.versions ?? [];
+  const snapshots = new Map(props.plans.map((plan) => [plan.version, plan]));
+  const rows = fromCompare.length > 0
+    ? fromCompare.map((version) => ({
+        version: version.version,
+        t_s: version.t_s,
+        trigger: version.trigger,
+        changeCount: version.changes,
+        wall_s: version.wall_s,
+        changes: snapshots.get(version.version)?.changes ?? [],
+        reserved: snapshots.get(version.version)?.reserved,
+      }))
+    : [...snapshots.values()].sort((a, b) => a.version - b.version).map((plan) => ({
+        version: plan.version,
+        t_s: plan.created_at_t_s,
+        trigger: plan.trigger ?? "",
+        changeCount: plan.changes?.length,
+        wall_s: undefined as number | undefined,
+        changes: plan.changes ?? [],
+        reserved: plan.reserved,
+      }));
+  const known = new Set(rows.map((row) => row.version));
+  for (const plan of snapshots.values()) {
+    if (known.has(plan.version)) continue;
+    rows.push({
+      version: plan.version,
+      t_s: plan.created_at_t_s,
+      trigger: plan.trigger ?? "",
+      changeCount: plan.changes?.length,
+      wall_s: undefined,
+      changes: plan.changes ?? [],
+      reserved: plan.reserved,
+    });
+  }
+  rows.sort((a, b) => a.version - b.version);
+
   return (
     <div className="stack">
       <button className="primary" disabled={props.busy != null} onClick={props.onReplan}>
         {props.busy === "replan" ? "Replanning…" : "Replan"}
       </button>
-      {plans.length === 0 ? <p className="empty">No plan versions yet.</p> : null}
+      {rows.length === 0 ? <p className="empty">No plan versions yet.</p> : null}
       <ol className="versions">
-        {plans.map((plan, index) => (
-          <li key={plan.version}>
-            <h2>
-              {index === 0 && plan.parent_version
-                ? `v${plan.parent_version} → v${plan.version}`
-                : `v${plan.version}`}
-            </h2>
+        {rows.map((row, index) => (
+          <li key={row.version}>
+            <h2>{index === 0 ? `v${row.version}` : `v${rows[index - 1].version} → v${row.version}`}</h2>
             <p className="meta">
-              {plan.planner ?? "planner"} · {formatSim(plan.created_at_t_s)}
-              {plan.parent_version ? ` · parent v${plan.parent_version}` : ""}
+              {formatSim(row.t_s)}
+              {row.changeCount != null ? ` · ${row.changeCount} changes` : ""}
+              {row.wall_s != null ? ` · ${row.wall_s.toFixed(2)} s` : ""}
             </p>
-            {plan.trigger ? <p>{plan.trigger}</p> : null}
-            {(plan.changes ?? []).length > 0 ? (
+            {row.trigger ? <p>{row.trigger}</p> : null}
+            {row.reserved && row.reserved.length > 0 ? <p className="meta">Reserved: {row.reserved.join(", ")}</p> : null}
+            {row.changes.length > 0 ? (
               <ul>
-                {(plan.changes ?? []).map((change) => (
-                  <li key={`${plan.version}-${change.assignment_id}-${change.change}`}>
+                {row.changes.map((change) => (
+                  <li key={`${row.version}-${change.assignment_id}-${change.change}`}>
                     {change.change} {change.assignment_id}
                     {change.note ? ` — ${change.note}` : ""}
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="empty">No diff was published against the parent version.</p>
+              <p className="empty">No assignment diff was published for this version.</p>
             )}
           </li>
         ))}

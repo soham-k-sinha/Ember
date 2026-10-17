@@ -181,7 +181,7 @@ export type Assignment = {
 
 export type PlanChange = {
   assignment_id: string;
-  change: "added" | "removed" | "retargeted" | "eta_changed" | "resource_changed";
+  change: "added" | "removed" | "retargeted" | "eta_changed" | "resource_changed" | "status_changed";
   note?: string;
 };
 
@@ -221,6 +221,8 @@ export type PlanSnapshot = {
   created_at_t_s: number;
   trigger?: string;
   planner?: "ember" | "baseline" | "example";
+  reserved?: string[];
+  search?: unknown;
   assignments: Assignment[];
   changes?: PlanChange[];
   unresolved: Unresolved[];
@@ -284,20 +286,59 @@ export type Trajectories = {
   trips: { id: number; path: LngLat[]; t: number[]; final: number }[];
 };
 
-export type ComparisonSide = PlanMetrics & { label?: string };
-
-export type Comparison = {
-  baseline: ComparisonSide;
-  ember: ComparisonSide;
-  note?: string;
+export type ComparisonMetric = {
+  metric: string;
+  label: string;
+  better: "higher" | "lower";
+  unit: string;
+  baseline_mean: number;
+  ember_mean: number;
+  diff_mean: number;
+  diff_min: number;
+  diff_max: number;
+  sentence: string;
 };
 
+export type EmberPlanVersion = {
+  version: number;
+  t_s: number;
+  trigger: string;
+  changes?: number;
+  wall_s?: number;
+};
+
+export type Comparison = {
+  version: string;
+  scenario_id: string;
+  headline: string[];
+  notes: string[];
+  nominal: { baseline: PlanMetrics; ember: PlanMetrics };
+  plans: {
+    baseline: { planner: string; assignments: number; rule?: string };
+    ember: { planner: string; assignments: number; versions: EmberPlanVersion[] };
+  };
+  metrics: ComparisonMetric[];
+};
+
+/** One robustness run. Shape follows contracts/ws-events.schema.json on aryaman/ws-events and is provisional until Soham signs off. */
 export type ScatterPoint = {
-  id: string;
-  planId: string;
+  runId: string;
+  batchId: string;
+  nTotal: number | null;
+  planVersion: number | null;
+  candidate: string;
+  seed: number;
   peopleUnreached: number;
   overflowM3: number;
   chosen: boolean;
+};
+
+export type AssignmentEvent = {
+  plan_version: number;
+  change: PlanChange["change"];
+  assignment_id: string;
+  assignment: Assignment | null;
+  note?: string;
 };
 
 export type Selection =

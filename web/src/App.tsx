@@ -3,10 +3,10 @@ import { MapView } from "./components/MapView";
 import { Panels, snapshotNote, type PanelId } from "./components/Panels";
 import { API_BASE, publishedComparison, publishedState, scenario } from "./fixtures";
 import { formatSim } from "./format";
-import { getJson, openSocket, parseLiveEvent, postJson, type LiveStatus } from "./live";
+import { asComparison, asState, getJson, openSocket, postJson, type LiveStatus } from "./live";
 import { activeKeyframe, closedEdges } from "./model";
 import type {
-  Assignment,
+  AssignmentEvent,
   Comparison,
   JudgeClosure,
   Message,
@@ -32,6 +32,8 @@ type Model = {
   speed: number;
   comparison: Comparison | null;
   scatter: ScatterPoint[];
+  scatterBatch: string | null;
+  scatterTotal: number | null;
   plans: PlanSnapshot[];
   judge: JudgeClosure[];
   selection: Selection | null;
@@ -54,7 +56,7 @@ type Action =
   | { type: "plan"; plan: PlanSnapshot }
   | { type: "comparison"; comparison: Comparison }
   | { type: "scatter"; point: ScatterPoint }
-  | { type: "assignment"; assignment: Assignment }
+  | { type: "assignment"; event: AssignmentEvent }
   | { type: "message"; message: Message }
   | { type: "report"; report: Report }
   | { type: "metrics"; metrics: PlanMetrics }
@@ -66,6 +68,14 @@ type Action =
   | { type: "trips" }
   | { type: "close"; edgeId: number; t: number }
   | { type: "undo"; edgeId: number };
+
+function planFromBody(value: unknown): PlanSnapshot | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.version !== "number" || !Array.isArray(record.assignments)) return null;
+  if (Array.isArray(record.households)) return null;
+  return value as PlanSnapshot;
+}
 
 function withPlan(plans: PlanSnapshot[], plan: PlanSnapshot | null): PlanSnapshot[] {
   if (!plan) return plans;
@@ -126,21 +136,35 @@ function reducer(state: Model, action: Action): Model {
       };
     case "comparison":
       return { ...state, comparison: action.comparison, tab: "compare" };
-    case "scatter":
+    case "scatter": {
+      const sameBatch = state.scatterBatch === action.point.batchId;
+      const existing = sameBatch ? state.scatter : [];
+      if (existing.some((point) => point.runId === action.point.runId)) return state;
       return {
         ...state,
-        scatter: state.scatter.some((point) => point.id === action.point.id)
-          ? state.scatter
-          : [...state.scatter, action.point],
+        scatterBatch: action.point.batchId,
+        scatterTotal: action.point.nTotal ?? state.scatterTotal,
+        scatter: [...existing, action.point],
       };
+    }
     case "assignment": {
       if (!state.snapshot.plan) return state;
+      const incoming = action.event;
+      const kept = state.snapshot.plan.assignments.filter((item) => item.id !== incoming.assignment_id);
+      const assignments = incoming.assignment == null || incoming.change === "removed"
+        ? kept
+        : [...kept, incoming.assignment];
+      const changes = [
+        ...(state.snapshot.plan.changes ?? []).filter(
+          (change) => !(change.assignment_id === incoming.assignment_id && change.change === incoming.change),
+        ),
+        { assignment_id: incoming.assignment_id, change: incoming.change, note: incoming.note },
+      ];
       const plan = {
         ...state.snapshot.plan,
-        assignments: [
-          ...state.snapshot.plan.assignments.filter((item) => item.id !== action.assignment.id),
-          action.assignment,
-        ],
+        version: incoming.plan_version,
+        assignments,
+        changes,
       };
       return {
         ...state,
@@ -200,6 +224,8 @@ const initial: Model = {
   speed: 60,
   comparison: publishedComparison,
   scatter: [],
+  scatterBatch: null,
+  scatterTotal: null,
   plans: withPlan([], publishedState.plan),
   judge: [],
   selection: null,
@@ -241,9 +267,9 @@ export function App() {
       dispatch({ type: "live-status", status: "connecting", detail: null });
       try {
         const body = await getJson(`${model.apiBase.replace(/\/$/, "")}/state`);
-        const event = parseLiveEvent({ type: "state", data: body });
-        if (!cancelled && event.type === "state") dispatch({ type: "state", state: event.state });
-        if (!cancelled && event.type !== "state") {
+        const snapshot = asState(body);
+        if (!cancelled && snapshot) dispatch({ type: "state", state: snapshot });
+        if (!cancelled && !snapshot) {
           dispatch({
             type: "live-status",
             status: "error",
@@ -265,14 +291,19 @@ export function App() {
         (event) => {
           if (event.type === "state") dispatch({ type: "state", state: event.state });
           else if (event.type === "plan") dispatch({ type: "plan", plan: event.plan });
-          else if (event.type === "comparison") dispatch({ type: "comparison", comparison: event.comparison });
           else if (event.type === "scatter_point") dispatch({ type: "scatter", point: event.point });
-          else if (event.type === "assignment") dispatch({ type: "assignment", assignment: event.assignment });
+          else if (event.type === "assignment") dispatch({ type: "assignment", event: event.event });
           else if (event.type === "message") dispatch({ type: "message", message: event.message });
           else if (event.type === "report") dispatch({ type: "report", report: event.report });
           else if (event.type === "metrics") dispatch({ type: "metrics", metrics: event.metrics });
         },
         (status, detail) => dispatch({ type: "live-status", status, detail }),
+        async () => {
+          const body = await getJson(`${model.apiBase.replace(/\/$/, "")}/state`);
+          const snapshot = asState(body);
+          if (snapshot) dispatch({ type: "state", state: snapshot });
+          else throw new Error("GET /state did not return a state snapshot.");
+        },
       );
     };
     void run();
@@ -298,8 +329,8 @@ export function App() {
         source: "judge",
         closed_from_t_s: model.clock,
       });
-      const event = parseLiveEvent({ type: "state", data: body });
-      if (event.type === "state") dispatch({ type: "state", state: event.state });
+      const snapshot = asState(body);
+      if (snapshot) dispatch({ type: "state", state: snapshot });
       dispatch({ type: "notice", notice: `POST /disruption sent for edge ${edgeId}.` });
     } catch (error) {
       dispatch({
@@ -320,10 +351,10 @@ export function App() {
     dispatch({ type: "busy", busy: "replan" });
     try {
       const body = await postJson(`${model.apiBase.replace(/\/$/, "")}/replan`, {});
-      const asState = parseLiveEvent({ type: "state", data: body });
-      const asPlan = parseLiveEvent({ type: "plan", data: body });
-      if (asState.type === "state") dispatch({ type: "state", state: asState.state });
-      else if (asPlan.type === "plan") dispatch({ type: "plan", plan: asPlan.plan });
+      const snapshot = asState(body);
+      const plan = planFromBody(body);
+      if (snapshot) dispatch({ type: "state", state: snapshot });
+      else if (plan) dispatch({ type: "plan", plan });
       dispatch({ type: "notice", notice: "POST /replan returned." });
     } catch (error) {
       dispatch({
@@ -339,7 +370,7 @@ export function App() {
     if (model.mode !== "live") {
       dispatch({
         type: "notice",
-        notice: "Comparison needs the backend. There is no comparison.fixture.json in contracts yet.",
+        notice: "The table is the published comparison fixture. Live mode refreshes it from GET /comparison.",
       });
       dispatch({ type: "tab", tab: "compare" });
       return;
@@ -356,10 +387,10 @@ export function App() {
     }
     try {
       const body = await getJson(`${root}/comparison`);
-      const event = parseLiveEvent({ type: "comparison", data: body });
-      if (event.type !== "comparison") throw new Error("GET /comparison did not include baseline and ember.");
-      dispatch({ type: "comparison", comparison: event.comparison });
-      dispatch({ type: "notice", notice: "Comparison loaded. Spread, not confidence bounds." });
+      const comparison = asComparison(body);
+      if (!comparison) throw new Error("GET /comparison did not include nominal.baseline and nominal.ember.");
+      dispatch({ type: "comparison", comparison });
+      dispatch({ type: "notice", notice: "Comparison loaded. B − A is EMBER minus baseline. Spread, not confidence bounds." });
     } catch (error) {
       dispatch({
         type: "notice",
@@ -465,6 +496,7 @@ export function App() {
           selection={model.selection}
           comparison={model.comparison}
           scatter={model.scatter}
+          scatterTotal={model.scatterTotal}
           plans={model.plans}
           judge={model.judge}
           notice={model.notice}

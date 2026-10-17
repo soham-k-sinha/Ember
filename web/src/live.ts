@@ -1,5 +1,5 @@
 import type {
-  Assignment,
+  AssignmentEvent,
   Comparison,
   Message,
   PlanMetrics,
@@ -14,19 +14,28 @@ export type LiveStatus = "idle" | "connecting" | "live" | "error";
 export type LiveEvent =
   | { type: "state"; state: StateSnapshot }
   | { type: "plan"; plan: PlanSnapshot }
-  | { type: "assignment"; assignment: Assignment }
+  | { type: "assignment"; event: AssignmentEvent }
   | { type: "message"; message: Message }
   | { type: "report"; report: Report }
   | { type: "scatter_point"; point: ScatterPoint }
   | { type: "metrics"; metrics: PlanMetrics }
-  | { type: "comparison"; comparison: Comparison }
   | { type: "ignore" };
+
+const EVENT_TYPES = new Set([
+  "state",
+  "plan",
+  "assignment",
+  "message",
+  "report",
+  "scatter_point",
+  "metrics",
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function asState(value: unknown): StateSnapshot | null {
+export function asState(value: unknown): StateSnapshot | null {
   if (!isRecord(value)) return null;
   if (!Array.isArray(value.households) || !Array.isArray(value.facilities)) return null;
   if (!Array.isArray(value.resources) || !Array.isArray(value.closures)) return null;
@@ -34,59 +43,91 @@ function asState(value: unknown): StateSnapshot | null {
   return value as StateSnapshot;
 }
 
-function asComparison(value: unknown): Comparison | null {
-  if (!isRecord(value) || !isRecord(value.baseline) || !isRecord(value.ember)) return null;
+export function asComparison(value: unknown): Comparison | null {
+  if (!isRecord(value) || !isRecord(value.nominal)) return null;
+  const nominal = value.nominal;
+  if (!isRecord(nominal) || !isRecord(nominal.baseline) || !isRecord(nominal.ember)) return null;
+  if (!Array.isArray(value.metrics) || !Array.isArray(value.headline)) return null;
   return value as Comparison;
 }
 
 function asScatter(value: unknown): ScatterPoint | null {
-  if (!isRecord(value)) return null;
-  const metrics = isRecord(value.metrics) ? value.metrics : value;
-  const people = metrics.people_unreached ?? metrics.peopleUnreached;
-  const overflow = metrics.overflow_m3 ?? metrics.overflowM3;
-  if (typeof people !== "number" || typeof overflow !== "number") return null;
-  const planId = String(value.plan_id ?? value.planId ?? value.id ?? "plan");
+  if (!isRecord(value) || !isRecord(value.metrics)) return null;
+  const metrics = value.metrics;
+  if (typeof metrics.people_unreached !== "number" || typeof metrics.overflow_m3 !== "number") return null;
+  if (typeof value.run_id !== "string" || typeof value.batch_id !== "string") return null;
+  if (typeof value.candidate !== "string" || typeof value.seed !== "number") return null;
   return {
-    id: String(value.id ?? `${planId}:${people}:${overflow}`),
-    planId,
-    peopleUnreached: people,
-    overflowM3: overflow,
-    chosen: Boolean(value.chosen ?? value.selected),
+    runId: value.run_id,
+    batchId: value.batch_id,
+    nTotal: typeof value.n_total === "number" ? value.n_total : null,
+    planVersion: typeof value.plan_version === "number" ? value.plan_version : null,
+    candidate: value.candidate,
+    seed: value.seed,
+    peopleUnreached: metrics.people_unreached,
+    overflowM3: metrics.overflow_m3,
+    chosen: value.candidate === "ember",
   };
 }
 
-export function parseLiveEvent(payload: unknown): LiveEvent {
-  if (!isRecord(payload)) return { type: "ignore" };
-  const name = String(payload.type ?? payload.event ?? payload.kind ?? "");
-  const body = payload.data ?? payload.payload ?? payload;
-  if (name === "state" || (!name && asState(body))) {
-    const state = asState(name ? body : payload);
-    return state ? { type: "state", state } : { type: "ignore" };
+function asAssignmentEvent(value: unknown): AssignmentEvent | null {
+  if (!isRecord(value)) return null;
+  if (typeof value.plan_version !== "number" || typeof value.assignment_id !== "string") return null;
+  if (typeof value.change !== "string") return null;
+  if (value.assignment !== null && !isRecord(value.assignment)) return null;
+  return value as AssignmentEvent;
+}
+
+function eventFrom(type: string, data: unknown): LiveEvent | null {
+  if (type === "state") {
+    const state = asState(data);
+    return state ? { type: "state", state } : null;
   }
-  if (name === "plan" && isRecord(body) && Array.isArray(body.assignments)) {
-    return { type: "plan", plan: body as PlanSnapshot };
+  if (type === "plan" && isRecord(data) && Array.isArray(data.assignments)) {
+    return { type: "plan", plan: data as PlanSnapshot };
   }
-  if (name === "assignment" && isRecord(body) && typeof body.id === "string") {
-    return { type: "assignment", assignment: body as Assignment };
+  if (type === "assignment") {
+    const event = asAssignmentEvent(data);
+    return event ? { type: "assignment", event } : null;
   }
-  if (name === "message" && isRecord(body) && typeof body.text === "string") {
-    return { type: "message", message: body as Message };
+  if (type === "message" && isRecord(data) && typeof data.text === "string") {
+    return { type: "message", message: data as Message };
   }
-  if (name === "report" && isRecord(body) && typeof body.id === "string") {
-    return { type: "report", report: body as Report };
+  if (type === "report" && isRecord(data) && typeof data.id === "string") {
+    return { type: "report", report: data as Report };
   }
-  if (name === "scatter_point") {
-    const point = asScatter(body);
-    return point ? { type: "scatter_point", point } : { type: "ignore" };
+  if (type === "scatter_point") {
+    const point = asScatter(data);
+    return point ? { type: "scatter_point", point } : null;
   }
-  if (name === "metrics" && isRecord(body)) return { type: "metrics", metrics: body as PlanMetrics };
-  if (name === "comparison") {
-    const comparison = asComparison(body);
-    return comparison ? { type: "comparison", comparison } : { type: "ignore" };
+  if (type === "metrics" && isRecord(data)) return { type: "metrics", metrics: data as PlanMetrics };
+  return null;
+}
+
+/** Envelope from contracts/ws-events.schema.json (aryaman/ws-events, PR #11). Not residents/ws-events.schema.json. */
+export type Envelope =
+  | { kind: "invalid" }
+  | { kind: "envelope"; seq: number; t_s: number; event: LiveEvent | null };
+
+export function readEnvelope(payload: unknown): Envelope {
+  if (!isRecord(payload)) return { kind: "invalid" };
+  if (!EVENT_TYPES.has(String(payload.type))) return { kind: "invalid" };
+  if (typeof payload.seq !== "number" || typeof payload.t_s !== "number" || !("data" in payload)) {
+    return { kind: "invalid" };
   }
-  const comparison = asComparison(payload);
-  if (comparison) return { type: "comparison", comparison };
-  return { type: "ignore" };
+  return {
+    kind: "envelope",
+    seq: payload.seq,
+    t_s: payload.t_s,
+    event: eventFrom(String(payload.type), payload.data),
+  };
+}
+
+/** null expected means this is the first envelope on the connection and any seq is the baseline. */
+export function seqDecision(expected: number | null, seq: number): "accept" | "duplicate" | "gap" {
+  if (expected === null || seq === expected) return "accept";
+  if (seq < expected) return "duplicate";
+  return "gap";
 }
 
 async function readError(response: Response): Promise<string> {
@@ -118,14 +159,19 @@ export function openSocket(
   apiBase: string,
   onEvent: (event: LiveEvent) => void,
   onStatus: (status: LiveStatus, detail?: string) => void,
+  onGap: () => Promise<void> | void,
 ): () => void {
   let stopped = false;
+  let recovering = false;
   let socket: WebSocket | null = null;
   let retry = 0;
   let timer = 0;
+  let expected: number | null = null;
 
   const connect = () => {
     if (stopped) return;
+    expected = null;
+    recovering = false;
     onStatus("connecting");
     const wsBase = apiBase.replace(/^http/i, "ws").replace(/\/$/, "");
     socket = new WebSocket(`${wsBase}/ws`);
@@ -134,17 +180,35 @@ export function openSocket(
       onStatus("live");
     };
     socket.onmessage = (message) => {
+      if (recovering) return;
+      let payload: unknown;
       try {
-        onEvent(parseLiveEvent(JSON.parse(String(message.data)) as unknown));
+        payload = JSON.parse(String(message.data)) as unknown;
       } catch {
         onStatus("error", "The backend sent a message that was not JSON.");
+        return;
       }
+      const envelope = readEnvelope(payload);
+      if (envelope.kind === "invalid") return;
+      const decision = seqDecision(expected, envelope.seq);
+      if (decision === "duplicate") return;
+      if (decision === "gap") {
+        recovering = true;
+        onStatus("error", `Sequence skipped at ${envelope.seq}. Reloading GET /state.`);
+        socket?.close();
+        void Promise.resolve(onGap()).finally(() => {
+          if (!stopped) connect();
+        });
+        return;
+      }
+      expected = envelope.seq + 1;
+      if (envelope.event && envelope.event.type !== "ignore") onEvent(envelope.event);
     };
     socket.onerror = () => {
       onStatus("error", "WebSocket connection failed.");
     };
     socket.onclose = () => {
-      if (stopped) return;
+      if (stopped || recovering) return;
       retry += 1;
       onStatus("error", "WebSocket closed. Reconnecting.");
       timer = window.setTimeout(connect, Math.min(8000, 1000 * retry));
