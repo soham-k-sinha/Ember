@@ -83,3 +83,11 @@ Run: uv run --project engine ember robust --scenario scenarios/allston_flood_v1/
 Interfaces: emits ws-events `scatter_point` (PR #11 shape) via `robust_plan(..., on_point=...)`; Soham: call it from POST /optimize and broadcast each point; plan.search.robust carries the ranking table. Daytona needs DAYTONA_API_KEY in engine/.env (nobody has added one yet).
 Status: done locally (100 runs, 1.5 s, chooses c03 over nominal c00); Daytona path wire-tested with stand-in sandboxes, not yet run against real Daytona (no key on this machine).
 Next: get a Daytona key + Tier 2, run `ember daytona-snapshot` and a live 100-job batch; scenario tuning with Anshuman.
+
+## 2026-10-17 14:10 · Daytona live (Tier 1) + backend bridge + Allston seed · branch aryaman/daytona · commit (PR #12)
+What: Daytona verified live: snapshot `ember-engine-1b735d7199` built (77 s), `ember robust --pool daytona` ran 100 runs on 8 Tier-1 sandboxes in 29 s, identical to the local pool, 0 fallbacks, sandboxes deleted after. `ember_engine.api.EngineSession` = the backend's calls (start, add_report(s), close_road, state_at, compare, optimize, resume, edges_at_household / edges_by_name). `ember seed-state` → `engine/data/allston_flood_v1.seed_state.json` (plan v1 at t=0; 37 assignments; validates; round-trips through residents' Store).
+Files: engine/ember_engine/{api,cli}.py, engine/ember_engine/daytona/pool.py, engine/data/allston_flood_v1.seed_state.json, engine/tests/test_api.py
+Run: uv run --project engine ember seed-state ; uv run --project engine ember robust --scenario scenarios/allston_flood_v1/scenario.json --pool daytona
+Interfaces: D42. Soham: `SEED_STATE=../engine/data/allston_flood_v1.seed_state.json`; `from ember_engine.api import EngineSession` (add `ember-engine = { path = "../engine", editable = true }` to residents' deps); call methods in a threadpool; `out["assignment_events"]` are ready-to-send WS `assignment` payloads. Daytona key lives only in engine/.env (gitignored) on Aryaman's laptop; Tier 2 tomorrow → set EMBER_DAYTONA_WORKERS≈90.
+Status: done. 79 tests.
+Next: judge-beat tuning with Anshuman; help Soham wire the endpoints.

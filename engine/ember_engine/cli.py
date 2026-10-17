@@ -299,6 +299,21 @@ def cmd_robust(a):
     print(f"[robust] wrote {out}" + (f" and {a.points_out}" if a.points_out else ""))
 
 
+def cmd_seed_state(a):
+    """The backend's starting state for a scenario (plan v1 at t=0): point residents' SEED_STATE at it."""
+    from .api import write_seed
+    from .state import validate_state
+    from .scenario import load_scenario
+    t0 = time.time()
+    st = write_seed(a.scenario, a.out)
+    errs = validate_state(st, load_scenario(a.scenario), json.loads(_ensure_town().read_text()))
+    print(f"[seed-state] {st['scenario_id']} plan v{st['plan_version']} at t=0 → {a.out} ({time.time()-t0:.1f}s); "
+          f"{len(st['plan']['assignments'])} assignments, projected {st['plan']['metrics']['people_reached_before_deadline']} "
+          f"people reached; {'valid' if not errs else 'INVALID: ' + errs[0]}")
+    if errs:
+        sys.exit(1)
+
+
 def cmd_daytona_snapshot(a):
     from .daytona.pool import build_snapshot
     build_snapshot()
@@ -413,6 +428,10 @@ def main(argv=None):
     rb.add_argument("--pool", choices=["auto", "local", "daytona"], default="auto"); rb.add_argument("--workers", type=int, default=None)
     rb.add_argument("--out", default=None); rb.add_argument("--points-out", default=None, help="write scatter points as JSON lines")
     rb.set_defaults(f=cmd_robust)
+    ss = sp.add_parser("seed-state", help="backend seed: plan v1 + state at t=0 for a scenario")
+    ss.add_argument("--scenario", default=str(ROOT / "scenarios" / "allston_flood_v1" / "scenario.json"))
+    ss.add_argument("--out", default=str(ROOT / "engine" / "data" / "allston_flood_v1.seed_state.json"))
+    ss.set_defaults(f=cmd_seed_state)
     ds = sp.add_parser("daytona-snapshot", help="build the Daytona snapshot for the current engine + town (needs DAYTONA_API_KEY)")
     ds.set_defaults(f=cmd_daytona_snapshot)
     vs = sp.add_parser("validate-state", help="check a state snapshot against state.schema.json and town/scenario ids")
