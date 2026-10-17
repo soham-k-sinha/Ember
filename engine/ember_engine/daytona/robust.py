@@ -74,7 +74,7 @@ def robust_plan(world, scn: dict, reports=(), t_now: float = 0.0, prev: dict | N
     ranking = robust_rank(points)
     chosen = cands[ranking[0]["candidate"]]
     plan = finalize(s, chosen, prev, trigger)
-    plan["search"]["robust"] = {"batch_id": batch_id, "jobs": len(jobs), "seeds": seeds, "candidates": list(plans), "pool": pool.kind,
+    plan["search"]["robust"] = {"batch_id": batch_id, "jobs": len(jobs), "seeds": seeds, "candidates": list(plans), "pool": "local-fallback" if getattr(pool, "fell_back", False) else pool.kind,
                                 "workers": getattr(pool, "n", None) or getattr(pool, "workers", None), "fanout_wall_s": round(fan_s, 2),
                                 "rule": f"best mean of the worst {int(WORST_SHARE * 100)}% of runs: people unreached, then overflow m³",
                                 "chosen": chosen.cid, "nominal_best": s.ranked[0].cid, "ranking": ranking}

@@ -92,34 +92,56 @@ class LocalPool:
 
 
 # ---------- Daytona ----------
-HOST_ONLY = {"cli.py", "api.py", "render_png.py", "build_town.py", "daytona/pool.py", "daytona/robust.py"}
-
-
 def _config():
     from daytona import DaytonaConfig
     return DaytonaConfig(api_key=os.environ.get("DAYTONA_API_KEY"), api_url=os.environ.get("DAYTONA_API_URL") or None,
                          connection_pool_maxsize=None)
 
 
+_CLOSURE_PROBE = (
+    "import sys, json, ember_engine.world, ember_engine.daytona.jobs, ember_engine.allocator.search, ember_engine.sim\n"
+    "print(json.dumps(sorted(m.__file__ for n, m in sys.modules.items() if n.startswith('ember_engine') and getattr(m, '__file__', None))))"
+)
+_HASH_CACHE: dict = {}
+
+
+def sandbox_modules() -> list[Path]:
+    """The engine files a sandbox job actually imports (measured in a fresh interpreter, so host-side
+    imports don't leak in). Editing anything else (CLI, backend API, rationale text) keeps the snapshot."""
+    import subprocess
+    import sys
+    out = subprocess.run([sys.executable, "-c", _CLOSURE_PROBE], cwd=str(ENGINE_DIR), capture_output=True, text=True, timeout=60,
+                         env={**os.environ, "PYTHONPATH": str(ENGINE_DIR)}, check=True).stdout
+    return [Path(f) for f in json.loads(out.strip().splitlines()[-1])]
+
+
 def snapshot_name() -> str:
-    """Content hash of the code sandboxes run + the shared town: a change there → a new snapshot.
-    Host-only modules (CLI, backend API, renderer, OSM builder, the pool itself) don't count."""
-    h = hashlib.sha1()
-    for f in sorted(PKG_DIR.rglob("*.py")):
-        if f.relative_to(PKG_DIR).as_posix() in HOST_ONLY:
-            continue
-        h.update(f.relative_to(PKG_DIR).as_posix().encode()); h.update(f.read_bytes())
-    h.update(CANONICAL_TOWN.read_bytes())
-    return f"{SNAPSHOT_PREFIX}-{h.hexdigest()[:10]}"
+    """Content hash of the code sandboxes run + the shared town: a change there → a new snapshot."""
+    key = "name"
+    if key not in _HASH_CACHE:
+        h = hashlib.sha1()
+        for f in sorted(sandbox_modules()):
+            h.update(f.resolve().relative_to(PKG_DIR.resolve()).as_posix().encode()); h.update(f.read_bytes())
+        h.update(CANONICAL_TOWN.read_bytes())
+        _HASH_CACHE[key] = f"{SNAPSHOT_PREFIX}-{h.hexdigest()[:10]}"
+    return _HASH_CACHE[key]
 
 
-async def ensure_snapshot(client, on_logs=print) -> str:
-    """Build the snapshot if this content hash doesn't exist yet (takes a few minutes once)."""
+class SnapshotMissing(RuntimeError):
+    pass
+
+
+async def ensure_snapshot(client, on_logs=print, build: bool = True) -> str:
+    """The snapshot for the current sandbox code. build=False: raise SnapshotMissing instead of building
+    (a build takes minutes; never let one start implicitly in the middle of a demo)."""
     from daytona import CreateSnapshotParams, Image, Resources
     name = snapshot_name()
     with contextlib.suppress(Exception):
         await client.snapshot.get(name)
         return name
+    if not build:
+        raise SnapshotMissing(f"Daytona snapshot {name} is not built for the current engine code; "
+                              "run `uv run --project engine ember daytona-snapshot` (≈1–2 min). Using local processes meanwhile.")
     image = (Image.debian_slim("3.12").pip_install("numpy>=1.26", "scipy>=1.12", "shapely>=2.0")
              .add_local_dir(PKG_DIR, "/home/daytona/engine/ember_engine")
              .add_local_file(CANONICAL_TOWN, "/home/daytona/town.json.gz")
@@ -140,6 +162,7 @@ class DaytonaPool:
         self._fallback_world = local_fallback_world
         self._loop = None
         self.log = []
+        self.fell_back = False
 
     # -- lifecycle --
     async def _open_client(self):
@@ -147,7 +170,7 @@ class DaytonaPool:
         if self.api_key:
             os.environ.setdefault("DAYTONA_API_KEY", self.api_key)
         self.client = AsyncDaytona(_config())
-        self.snapshot = await ensure_snapshot(self.client)
+        self.snapshot = await ensure_snapshot(self.client, build=os.environ.get("EMBER_DAYTONA_BUILD") == "1")
 
     async def _create_one(self, i: int):
         from daytona import CreateSandboxFromSnapshotParams, DaytonaRateLimitError
@@ -187,7 +210,19 @@ class DaytonaPool:
 
     # -- batches --
     async def arun(self, batch_id: str, scn: dict, plans: dict, reports: list, jobs: list, on_point=None) -> list[dict]:
-        await self.astart()
+        try:
+            await self.astart()
+        except Exception as ex:   # noqa: BLE001 — no snapshot / no sandbox: the batch still completes locally
+            self.log.append(f"Daytona unavailable, running locally: {ex}"[:400])
+            self.fell_back = True
+            world = self._fallback_world or _load_world()
+            out = []
+            for j in jobs:
+                p = run_job(world, scn, plans, reports, j, worker="local-fallback")
+                out.append(p)
+                if on_point:
+                    on_point(p)
+            return out
         setup = batch_setup(batch_id, scn, plans, reports)
         ok = await asyncio.gather(*(s.code_interpreter.run_code(setup, timeout=BATCH_TIMEOUT_S) for s in self.sandboxes), return_exceptions=True)
         live = [s for s, r in zip(self.sandboxes, ok) if not isinstance(r, BaseException) and not r.error]
