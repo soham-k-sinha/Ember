@@ -20,7 +20,7 @@ FACT_KINDS = ("need", "closure_report", "facility_status")  # what the allocator
 
 class EngineBridge:
     def __init__(self, scenario_path: Path | str, town_path: Path | str | None = None, seed: int = 0,
-                 moves: int | None = None):
+                 moves: int | None = None, solo: bool = False):
         from ember_engine.scenario import load_scenario
         from ember_engine.world import World
 
@@ -35,6 +35,12 @@ class EngineBridge:
         # moves = allocator local-search budget per (re)plan; None = engine's default (production)
         self.session = EngineSession(self.scenario_path, world=self.world, seed=seed, moves=moves)
         self.moves = moves
+        if solo:  # drill without the scenario's synthetic households: only the people who text in
+            for scn in (self.scenario, self.session.scn):
+                scn["households"], scn["scripted_reports"] = [], []
+        self._base_households = list(self.scenario["households"])
+        self._extra: list[dict] = []
+        self._outcomes: tuple[tuple, dict] | None = None
         self._lock = threading.Lock()
         self._opt_session = None
         self._opt_lock = threading.Lock()
@@ -42,6 +48,8 @@ class EngineBridge:
         self._reverse = {(e["u"], e["v"]): e["id"] for e in self.town["edges"]}
         self._facility_ids = {f["id"] for f in self.scenario["facilities"]}
         self._household_ids = {h["household_id"] for h in self.scenario["households"]}
+        from .places import Gazetteer
+        self.places = Gazetteer(self.town)
 
     @staticmethod
     def _unpacked_town() -> Path:
@@ -101,6 +109,8 @@ class EngineBridge:
                 # sharing one World between this thread and replans/state_at could raise KeyError mid-read
                 self._opt_session = EngineSession(self.scenario_path, world=World.load(self.town_file),
                                                   seed=self.seed, moves=self.moves)
+                self._opt_session.scn["households"] = list(self.scenario["households"])
+                self._opt_session.scn["scripted_reports"] = list(self.scenario.get("scripted_reports", []))
             self._opt_session.resume(prev, self.engine_reports(reports))
             return self._opt_session.optimize(on_point=on_point, t_now=t_now, seeds=seeds, k=k)["plan"]
 
@@ -120,6 +130,85 @@ class EngineBridge:
         with self._lock:
             self.session.reports = self.engine_reports(reports)  # compare() reads reports only, not the plan
             return self.session.compare(seeds=seeds)
+
+    def outcomes(self, plan: dict, reports: list[dict]) -> dict[str, dict]:
+        """Per assignment, the simulated timeline of `plan`: {assignment_id: {status, arrive_t, pickup_t,
+        complete_t, ...}} (plan_sim Outcome). Drives step-by-step directions. Cached for the last input."""
+        from ember_engine.sim import simulate
+        rep = self.engine_reports(reports)
+        key = (plan["version"], plan.get("created_at_t_s"), len(plan.get("assignments", [])),
+               tuple(r["id"] for r in rep), tuple(h["household_id"] for h in self._extra))
+        if self._outcomes and self._outcomes[0] == key:
+            return self._outcomes[1]
+        with self._lock:
+            res = simulate(self.world, self.scenario, plan, reports=rep, record=False)
+        out = {o["assignment_id"]: o for o in res.outcomes}
+        self._outcomes = (key, out)
+        return out
+
+    # ---------- households added at runtime (a resident texted their location, D56) ----------
+    def set_extra_households(self, extra: list[dict]) -> None:
+        """Assisted households on top of the scenario's: [{household_id, label, needs: "unknown"}].
+        Must be town.json buildings. Replaces the previous extra list (persisted by the caller)."""
+        rows = {int(h) for h in self.world.hh_id}
+        base_ids = {h["household_id"] for h in self._base_households}
+        for h in extra:
+            if h["household_id"] not in rows:
+                raise ValueError(f"household {h['household_id']} is not a town.json building")
+            if h["household_id"] in base_ids:
+                raise ValueError(f"household {h['household_id']} is already in the scenario")
+        entries = [{"household_id": int(h["household_id"]), "needs": h.get("needs", "unknown"),
+                    "label": h.get("label", f"household #{h['household_id']}"), "phone_role": "resident"} for h in extra]
+        with self._opt_lock, self._lock:
+            self._extra = entries
+            households = self._base_households + entries
+            sessions = [self.session] + ([self._opt_session] if self._opt_session is not None else [])
+            self.scenario["households"] = households
+            for s in sessions:
+                s.scn["households"] = list(households)
+                # deadlines per household are cached on the World by scenario keyframes; a new household
+                # needs its own, so drop the cache (it rebuilds in ~0.1 s)
+                s.world.__dict__.pop("_flood_cache", None)
+            self.world.__dict__.pop("_flood_cache", None)
+            self._household_ids = {h["household_id"] for h in households}
+            self._outcomes = None
+
+    @property
+    def extra_households(self) -> list[dict]:
+        return list(self._extra)
+
+    def is_assisted(self, hid: int) -> bool:
+        return hid in self._household_ids
+
+    def deadline(self, hid: int) -> float | None:
+        """When this town building's pickup must be done by (first flood keyframe at its node − margin), or
+        None: the forecast flood never reaches it."""
+        from ember_engine.scenario import deadlines
+        scn = {**self.scenario, "households": [{"household_id": int(hid), "needs": "unknown"}]}
+        return deadlines(scn, self.world)["households"].get(int(hid))
+
+    @property
+    def margin_s(self) -> float:
+        return float(self.scenario.get("deadline_margin_s", 900))
+
+    def flood_corners(self, k: int = 4) -> list[tuple[float, str]]:
+        """Street corners the forecast flood reaches first: [(deadline_s, "Flagg Street and Memorial Drive")].
+        For the drill console: places a tester can text to get an evacuation (elsewhere: shelter in place)."""
+        from ember_engine.scenario import deadlines
+        scn = {**self.scenario, "households": [{"household_id": int(h), "needs": "unknown"} for h in self.world.hh_id]}
+        best: dict[int, float] = {}
+        for hid, d in deadlines(scn, self.world)["households"].items():
+            if d is not None:
+                node = self.household_node(hid)
+                best[node] = min(d, best.get(node, d))
+        out = sorted((d, " and ".join(sorted(self.places.streets.get(n, set()))[:2]), n) for n, d in best.items()
+                     if len(self.places.streets.get(n, set())) >= 2)
+        return [(d, label) for d, label, _ in out[:k]]
+
+    def household_node(self, hid: int) -> int:
+        if not hasattr(self, "_hh_rows"):
+            self._hh_rows = {int(h): i for i, h in enumerate(self.world.hh_id)}
+        return int(self.world.node_id[self.world.hh_node[self._hh_rows[int(hid)]]])
 
     # ---------- lookups for validating disruptions ----------
     def both_directions(self, edge_ids: list[int]) -> list[int]:

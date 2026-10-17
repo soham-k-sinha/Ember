@@ -20,11 +20,14 @@ from .config import CONTRACTS, Settings
 from .db import PhoneConflict, Store
 from .engine_bridge import EngineBridge
 from .extract import LLM, make_llm
+from .guide import Guide
 from .intake import Intake
+from .locate import Locator
 from .outbound import Outbound
 from .messaging import Messenger
 from .photon import PhotonClient, PhotonError, PhotonListener
 from .planner import Planner, ReportError
+from .threads import normalize_handle
 
 log = logging.getLogger("residents")
 
@@ -106,6 +109,7 @@ class DisruptionIn(BaseModel):
 
 class PhoneIn(TargetIn):
     handle: str = Field(min_length=3, description="the tester's phone, e.g. 4135550100 or +14135550100")
+    locate: bool = Field(default=False, description="resident without a household: they text where they are (D56)")
 
 
 class ThreadIn(BaseModel):
@@ -127,6 +131,7 @@ class MessageIn(BaseModel):
 
 class DevInboundIn(TargetIn):
     text: str = Field(min_length=1, max_length=1000)
+    handle: str | None = Field(default=None, description="as this registered phone (also before it has a household)")
 
 
 def create_app(settings: Settings | None = None, photon_client: PhotonClient | None = None,
@@ -141,21 +146,35 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         app.state.hub = Hub()
         app.state.planner = None
         if engine_mode:
-            b = bridge or await run_in_threadpool(EngineBridge, settings.scenario, None, 0, settings.engine_moves)
+            b = bridge or await run_in_threadpool(EngineBridge, settings.scenario, None, 0, settings.engine_moves,
+                                                  settings.drill_solo)
             app.state.planner = Planner(app.state.store, app.state.hub, b)
+            await app.state.planner.restore_households()
         photon = photon_client
         if photon is None and settings.photon_enabled:
             photon = PhotonClient(settings.photon_api_key, settings.photon_project_id)
         app.state.messenger = Messenger(app.state.store, app.state.hub, photon)
-        app.state.outbound = None
+        app.state.outbound = app.state.guide = app.state.locator = None
         if app.state.planner is not None:
-            app.state.outbound = Outbound(app.state.store, app.state.messenger)
+            app.state.outbound = Outbound(app.state.store, app.state.messenger, app.state.planner.bridge)
             app.state.planner.plan_hooks.append(app.state.outbound.on_plan)
+            # after outbound: a changed instruction is texted before the next step of the old one
+            app.state.guide = Guide(app.state.store, app.state.messenger, app.state.planner, settings.auto_clock)
+            app.state.planner.plan_hooks.append(app.state.guide.on_plan)
+            app.state.planner.clock_hooks.append(app.state.guide.tick)
         app.state.intake = None
+        model = None
         if app.state.planner is not None and settings.extract_enabled and (llm is not None or settings.anthropic_api_key):
-            app.state.intake = Intake(app.state.store, app.state.messenger, app.state.planner,
-                                      llm or make_llm(settings.anthropic_api_key), app.state.outbound)
+            model = llm or make_llm(settings.anthropic_api_key)
+            app.state.intake = Intake(app.state.store, app.state.messenger, app.state.planner, model,
+                                      app.state.outbound, app.state.guide)
             app.state.messenger.inbound_hooks.append(app.state.intake.on_inbound)
+        if app.state.planner is not None:
+            from .places import nominatim
+            app.state.locator = Locator(app.state.store, app.state.messenger, app.state.planner, model,
+                                        nominatim if settings.geocode_enabled else None)
+            app.state.messenger.lobby_hooks.append(app.state.locator.on_lobby)
+            app.state.planner.plan_hooks.append(app.state.locator.on_plan)
         if app.state.planner is not None:  # after messenger + hooks exist: a fresh plan v1 texts its open questions
             await start_engine(settings, app.state.store, app.state.planner)
         app.state.listener = None
@@ -264,6 +283,8 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
             raise HTTPException(409, res["reason"])
         if not res["applied"] and res["reason"] and not res["reason"].startswith("already"):
             raise HTTPException(409, res["reason"])
+        if res["applied"] and decision == "confirm" and app.state.guide is not None:
+            await app.state.guide.tick()  # confirmed on the console: their phone gets step 1
         return {**res, "plan_version": store().meta().get("plan_version")}
 
     @app.post("/assignments/{assignment_id}/confirm")
@@ -353,7 +374,8 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         """Register a tester phone for a role (and create its Photon shared-line assignment). The tester
         must then text anything to `assigned_number` before EMBER can message them (Photon opt-in rule)."""
         try:
-            phone = await messenger().register_phone(body.role, body.handle, body.household_id, body.facility_id)
+            phone = await messenger().register_phone(body.role, body.handle, body.household_id, body.facility_id,
+                                                     locate=body.locate)
         except PhoneConflict as e:
             raise HTTPException(409, str(e)) from e
         except ValueError as e:
@@ -396,7 +418,12 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         async def dev_inbound(body: DevInboundIn) -> dict:
             """Pretend a tester texted: same path as a real Photon message (store → WS → hooks)."""
             try:
-                msg = await messenger().simulate_inbound(body.role, body.text, body.household_id, body.facility_id)
+                if body.handle is not None:
+                    msg = await messenger().phone_inbound(body.handle, body.text)
+                    if msg is None:  # no household yet: handled by the Locator (location first)
+                        return {"message": None, "lobby": messenger().lobby_log(normalize_handle(body.handle))}
+                else:
+                    msg = await messenger().simulate_inbound(body.role, body.text, body.household_id, body.facility_id)
             except ValueError as e:
                 raise HTTPException(422, str(e)) from e
             if msg is None:

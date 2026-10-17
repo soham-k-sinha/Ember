@@ -97,19 +97,23 @@ the plan (routes + as-of-t statuses), with `search` and `replan_latency_s` carri
 | `planner.py` | The replan loop. `bootstrap`, `submit_report` (validate against report.schema + refs), `replan` → `_store_plan` → `_publish` (WS `plan`, one `assignment` per change, `metrics`, then plan hooks). `set_clock`, `respond` (confirm/reject + stale check), `optimize` (fan-out **outside** the lock; superseded if the plan moved), `simulate`, `comparison` (cached per version), `close_road`, `set_facility`. One asyncio lock; engine work in a threadpool. |
 | `contracts.py` | jsonschema validators over `contracts/` (`validate_report`, `errors`, `def_errors`). |
 | `photon.py` | Photon transport. `PhotonClient` (httpx; retries 429/5xx with the **same Idempotency-Key**; `_backoff` hook for tests). `parse_inbound`. `PhotonListener`: Socket.IO at `/v1/projects/{id}/events/ws`, `subscribe {startSeq}`, serial `delivery` worker, durable cursor, **reconnects forever**; polling fallback after 5 s down, window kept fresh while subscribed and capped at 10 min (D54). certifi SSL context (macOS python.org builds lack CA certs). |
-| `threads.py` | Phones are registered by **role**: `resident` → the state's judge household, `operator` → `OPERATOR_FACILITY_ID` or the critical hospital (`mt-auburn` in Allston). `normalize_handle`. |
+| `threads.py` | One phone per household/facility (D55, Codex-authored on Soham's branch): `phone_thread`, `phone_for_thread`, `select_thread`; role defaults (`resident` → judge household, `operator` → critical hospital) only when no target is given. `unplaced()`: a resident registered with `locate` that has no household yet (D56). `normalize_handle`. |
+| `places.py` | Where a resident is (D56): `parse_coords` (typed / maps links), `Gazetteer` over town.json (street intersections, nearest free building, pickup-corner names, distance/bearing), `nominatim()` address lookup bounded to the town. |
+| `locate.py` | `Locator` (D56): texts from unplaced phones (the "lobby"): ask where they are → LLM pulls the place (+ any needs) → `Gazetteer.locate` → nearest free building becomes an assisted household of this run (`planner.add_household`, kv `extra_households`) → phone bound → one replan (the plan asks / offers). Welcomes opted-in unplaced phones after a reset. |
+| `guide.py` | `Guide` (D56): after YES, one text per step from the plan simulator's arrive / pickup / drop-off times (`bridge.outcomes`): rescue = get ready + walk to the corner (or wait inside for a door pickup) → board → ride → checked in; protect = meet the crew → connecting → powered. DONE replies (regex, or the LLM's `done` fact); `auto_clock` jumps the sim clock to the next event once nobody is pending. kv `guide:<thread>`. |
+| `drill.py` | `uv run ember-drill`: one process = backend + phone registration + a console printing every text, with `status / next / +N / @r1 text / close / reset`. Preflight refuses to run next to another Photon-enabled EMBER. |
 | `messaging.py` | `Messenger`: inbound (dedupe by id + `inbound_seen`, ignore texts from before the last reset, learn space/agent ids from the first text = opt-in) → stored message → WS → hooks. `send_message`: drill prefix, plan_version, opt-in enforced (`not_opted_in`), `delivery` = sent/failed/dev/no_phone. `retry_failed`. |
 | `extract.py` | **The one LLM call.** Claude Opus 5.5 (`EXTRACT_MODEL`), effort low, structured outputs (`beta.messages.parse` + Pydantic `Extraction{facts[], confidence, clarifying_question}`), server-side refusal fallback. `to_outcome()` is deterministic: confidence < 0.6 → question; need without head count → hold `pending` + ask; **merge with known needs** (D46); closure → `resolve_road` or ask; `endurance_min` → `backup_endurance_s` (D53); confirm/reject only if something was offered. |
 | `intake.py` | Inbound hook, **serialized**: extract → reports (dupes skipped) → **one** replan per text → `report_id` on the message → reply: missing-info question, else (after a replan) instruction or "Got it." + status, else for chatter: plan's open question → status → model prompt; questions → "passed to the coordinators". Planner failure → honest text. YES/NO → `planner.respond`. |
 | `outbound.py` | Plan hook. Per opted-in thread, texts only when **its** instruction materially changed (new/replaced vehicle, cancelled, ETA ±10 min; D44). Marks `offered`; confirmed changes → "Update: …". Never re-offers a declined vehicle. Asks `info_requests` once. `status_text` / `ack` / `latest` templates. |
-| `tests/` | 129 tests (no network, no paid API: Photon faked at HTTP layer `fake_photon.py`, LLM faked `FakeLLM`; `EMBER_LOCAL_POOL=1`; engine at `moves=10`, demo-beat test at full search). `samples.json` = 21 messages for the live eval. |
-| `scripts/eval_extract.py` | Live accuracy of the LLM call on samples.json (real API, ~$0.20). Last run **21/21, median 2.0 s**. |
+| `tests/` | 173 tests (`test_drill.py`: the whole text-driven drill on the real allocator with no synthetic households) (no network, no paid API: Photon faked at HTTP layer `fake_photon.py`, LLM faked `FakeLLM`; `EMBER_LOCAL_POOL=1`; engine at `moves=10`, demo-beat test at full search). `samples.json` = 27 messages for the live eval. |
+| `scripts/eval_extract.py` | Live accuracy of the LLM call on samples.json (real API, ~$0.20). Last run **27/27, median 2.2 s** (2026-10-17, incl. location and DONE replies). |
 
 ### API (full table in residents/README.md)
 `GET /health` · `GET /state` · `GET /plan/current` · `GET /plan/{v}` · `WS /ws` · `POST /reports` · `POST /disruption`
 (`close_edges` or `facility_id`+`set`) · `POST /replan` · `POST /clock {t_s}` · `GET /comparison?seeds=` · `POST /optimize?seeds=&k=` (202) +
 `GET /optimize` · `POST /simulate {planner}` · `POST /ask {role, question?}` · `POST /assignments/{id}/confirm|reject {plan_version?}` ·
-`GET/POST /phones` · `POST /messages` · dev: `POST /dev/reset`, `POST /dev/inbound {role, text}`.
+`GET/POST /phones {role, handle, household_id?|facility_id?|locate?}` · `POST /messages` · dev: `POST /dev/reset`, `POST /dev/inbound {role, text, household_id?|facility_id?|handle?}`.
 WS events: `state`, `plan`, `assignment` (incl. `status_changed`), `message` (re-sent when its report_id is set; upsert by id), `report`, `metrics`, `scatter_point`.
 The web calls `/state`, `/clock` (every 1.2 s while playing), `/disruption`, `/replan`, `/comparison`, `/optimize`, `/ws`; CORS allows `:5173` and `:43123`.
 
@@ -119,13 +123,15 @@ cd residents && uv sync
 cp .env.example .env     # PHOTON_ENABLED, PHOTON_API_KEY, PHOTON_PROJECT_ID, ANTHROPIC_API_KEY (already filled in on Soham's laptop)
 uv run uvicorn residents.app:app --port 8000                       # keeps the existing DB
 RESET_ON_START=1 PHOTON_ENABLED=1 uv run uvicorn residents.app:app --port 8000   # demo start: fresh plan v1
-uv run pytest -q                                                   # ~35–65 s
+uv run ember-drill --resident <phone> [--crowded] [--dry]          # a whole drill by text, one process (README "The drill")
+uv run pytest -q                                                   # ~90 s
 uv run python scripts/eval_extract.py                              # live LLM accuracy (costs a little)
 curl -s localhost:8000/state > /tmp/s.json && uv run --project ../engine ember validate-state /tmp/s.json --scenario ../scenarios/allston_flood_v1/scenario.json
 ```
 Env knobs: `SCENARIO` (default allston; empty = static fixture mode, engine endpoints 503), `START_T_S`, `ENGINE_MOVES`,
 `DB_PATH` (default `residents/ember.db`), `RESET_ON_START`, `DEV_ENDPOINTS`, `PHOTON_LISTEN`, `RETRY_EVERY_S`,
-`OPERATOR_FACILITY_ID`, `EXTRACT_ENABLED|MODEL|EFFORT`, `CORS_ORIGINS`. Python is 3.13 here (pin allows 3.12–3.13).
+`OPERATOR_FACILITY_ID`, `EXTRACT_ENABLED|MODEL|EFFORT`, `CORS_ORIGINS`, `GEOCODE` (Nominatim, default on), `DRILL_SOLO`,
+`AUTO_CLOCK`, `DRILL_RESIDENTS` / `DRILL_OPERATORS` (drill phones; .env only). Python is 3.13 here (pin allows 3.12–3.13).
 
 **Phones:** two testers are registered (roles `resident` = judge phone, `operator` = Soham's phone), assigned to Photon
 shared lines, opted in. See `GET /phones` for numbers and lines. Registrations survive resets. **Every `/dev/reset` or
@@ -157,8 +163,10 @@ shared lines, opted in. See `GET /phones` for numbers and lines. Registrations s
 - **#29 robustness:** serialized intake, dupes, planner-failure handling, send retries, 150 m street resolution matching the tuned beat; tests stopped patching global `asyncio.sleep` (it deadlocked); `EMBER_LOCAL_POOL=1`; adopted `EngineSession(moves=)`.
 - **#32 operator-simulate:** `/ask`, `/simulate`; `/optimize` outside the lock on its own World (World caches race across threads).
 - **#34 demo-dry-run:** full DEMO.md dry run passed; v1 questions texted on reset; endurance in minutes (10 min = 600 s, was 612).
+- **#38 multi-household-phones (Codex-authored, D55):** one phone per household/facility, many testers on one plan, 409 instead of silent replacement, opt-in guidance.
+- **soham/drill (D56):** residents text their location and get placed; step-by-step directions with DONE replies; the clock steps with the texts; `ember-drill`. Found: the engine sends no vehicle to an unthreatened household (solo), and our status text blamed busy vehicles → now "outside the forecast flood area: shelter in place". Tester numbers removed from tests (555 placeholders).
 - **#35 replay-guard (INCIDENT):** at a restart Photon was slow → socket gave up → stale poll window + reset-emptied dedupe → 6 old texts re-answered on the judge test phone. Fixed with a run boundary, `inbound_seen`, bounded poll window, socket retries forever. Verified live: 7 redelivered events → 0 texts.
-Decisions written by Soham: **D36, D37, D40, D41, D43, D44, D45, D46, D51, D52, D53, D54.**
+Decisions written by Soham: **D36, D37, D40, D41, D43, D44, D45, D46, D51, D52, D53, D54, D55, D56.**
 
 ## 9. Demo (docs/DEMO.md, docs/QA.md: Aryaman owns them)
 Measured by Soham's dry run (real LLM + allocator, Photon off): setup after reset → judge phone gets *"How many people are
@@ -174,6 +182,8 @@ Re-measure after Aryaman's #36 (generator re-targeting change) before quoting nu
 - **Aryaman (DEMO/QA):** update the measured numbers (121 / 15). Setup step 6 no longer needs `POST /replan`.
 - **Web:** upsert messages by id; each `/clock` already broadcasts a full `state` (the web also refetches /state).
 - Residents' questions ("is the bridge open?") are stored as `question` reports and acknowledged; nobody answers them automatically.
+- **Aryaman (engine):** an unthreatened household (deadline null) with known needs gets no vehicle when it's the only household (solo), but does in the full scenario; the unresolved reason then says "committed to earlier deadlines". The backend now tells such residents to shelter in place.
+- The drill's flood zone is the Cambridgeport/Riverside side (Putnam Ave, Banks St, Memorial Dr × River St); Allston addresses are mostly outside it, so they get "shelter in place". `ember-drill` prints corners to try.
 - Task 9 (voice) not started.
 
 ## 11. Gotchas that cost time before

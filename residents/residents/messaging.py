@@ -12,6 +12,7 @@ Rules enforced here, not left to callers:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -20,7 +21,7 @@ from typing import Any, Awaitable, Callable
 from .bus import Hub
 from .db import PhoneConflict, Store, thread_key
 from .photon import Inbound, PhotonClient, PhotonError
-from .threads import ROLES, normalize_handle, resolve_thread, phone_thread, phone_for_thread, select_thread
+from .threads import ROLES, normalize_handle, resolve_thread, phone_thread, phone_for_thread, select_thread, unplaced
 
 log = logging.getLogger("residents.messaging")
 
@@ -29,6 +30,10 @@ RUN_STARTED_KEY = "run_started_at"  # wall-clock UTC ISO of the last bootstrap (
 
 # Called after a new inbound message is stored: (message, role). Task 3/4 hang extraction + replan here.
 InboundHook = Callable[[dict, str], Awaitable[Any]]
+# A text from a phone that has no household yet (registered with `locate`): (phone row, text).
+LobbyHook = Callable[[dict, str], Awaitable[Any]]
+# Every message in or out, for the drill console: {direction, who (thread or handle), text, delivery}.
+Tap = Callable[[dict], Any]
 
 
 def with_drill_prefix(text: str) -> str:
@@ -45,6 +50,8 @@ class Messenger:
     def __init__(self, store: Store, hub: Hub, photon: PhotonClient | None):
         self.store, self.hub, self.photon = store, hub, photon
         self.inbound_hooks: list[InboundHook] = []
+        self.lobby_hooks: list[LobbyHook] = []
+        self.taps: list[Tap] = []
         self._registration_lock = asyncio.Lock()
         # Freeze the old role-only registrations to the existing scenario before a reset.
         for phone in self.store.phones():
@@ -54,12 +61,22 @@ class Messenger:
         return float(self.store.meta().get("t_s", 0.0))
 
     # ---------- phones ----------
+    def _tap(self, event: dict) -> None:
+        for tap in self.taps:
+            try:
+                tap(event)
+            except Exception:  # noqa: BLE001 - a console printer must never break messaging
+                log.exception("tap failed")
+
     async def register_phone(self, role: str, raw_handle: str, household_id: int | None = None,
-                             facility_id: str | None = None) -> dict:
-        """Assign a shared line and pin this phone to one validated household/facility."""
+                             facility_id: str | None = None, locate: bool = False) -> dict:
+        """Assign a shared line and pin this phone to one validated household/facility. `locate`: a
+        resident with no household yet; it is placed where its first texts say it is (Locator)."""
         if role not in ROLES:
             raise ValueError(f"role must be one of {ROLES}")
         handle = normalize_handle(raw_handle)
+        if locate:
+            return await self._register_unplaced(role, handle, household_id, facility_id)
         async with self._registration_lock:
             thread = resolve_thread(self.store, role, household_id, facility_id)
             if thread is None:
@@ -81,6 +98,24 @@ class Messenger:
             self.store.upsert_phone(handle, role, **fields)
             return next(p for p in self.phones_view() if p["handle"] == handle)
 
+    async def _register_unplaced(self, role: str, handle: str, household_id: int | None, facility_id: str | None) -> dict:
+        if role != "resident" or household_id is not None or facility_id is not None:
+            raise ValueError("locate is for residents without a household_id: they text where they are")
+        async with self._registration_lock:
+            previous = self.store.phone(handle=handle)
+            scenario = self.store.meta().get("scenario_id")
+            if previous and (previous["role"] != role or (previous["thread_key"] is not None
+                                                           and not self.store.kv_get(f"located:{handle}"))):
+                raise PhoneConflict("This phone is already registered to a household/facility; it can't be re-placed by location.")
+            fields: dict[str, str | None] = {"scenario_id": scenario}
+            if self.photon is not None:
+                a = await self.photon.create_assignment(handle)
+                fields.update(assignment_id=a.get("assignmentId"), assigned_number=a.get("assignedPhoneNumber"))
+                if previous and previous["assigned_number"] != fields["assigned_number"]:
+                    self.store.clear_phone_opt_in(handle)
+            self.store.upsert_phone(handle, role, **fields)
+            return next(p for p in self.phones_view() if p["handle"] == handle)
+
     @staticmethod
     def opted_in(phone: dict) -> bool:
         return bool(phone["last_inbound_at"] and phone["space_id"] and phone["agent_user_id"])
@@ -91,7 +126,9 @@ class Messenger:
             thread = phone_thread(self.store, p)
             ready = self.opted_in(p)
             action = None if ready else self._opt_in_instruction(p)
-            if thread is None:
+            if thread is None and unplaced(self.store, p):
+                action = (action if self.photon is not None else None) or "Waiting for this resident's location: they text where they are (address or intersection)."
+            elif thread is None:
                 action = "This phone's household/facility is not in the current scenario."
             out.append({**p, "thread": thread, **(thread or {}), "opted_in": ready,
                         "action_needed": action})
@@ -128,7 +165,8 @@ class Messenger:
             log.warning("text from unregistered handle %s ignored", handle)
             return None
         thread = phone_thread(self.store, phone)
-        if thread is None:
+        lobby = thread is None and unplaced(self.store, phone)
+        if thread is None and not lobby:
             log.warning("text for a household/facility outside the current scenario ignored")
             return None
         if self.store.has_external_id(inbound.external_id) or self.store.inbound_seen(inbound.external_id):
@@ -142,6 +180,9 @@ class Messenger:
         first_contact = not self.opted_in(phone)
         self.store.upsert_phone(handle, phone["role"], peer_user_id=inbound.peer_user_id, agent_user_id=inbound.agent_user_id,
                                 space_id=inbound.space_id, last_inbound_at=inbound.created_at or datetime.now(timezone.utc).isoformat())
+        if lobby:
+            await self._lobby_inbound(self.store.phone(handle=handle), inbound.text)
+            return None
         if first_contact:
             # Repair markers left by older code that counted blocked sends as delivered.
             self.store.kv_delete(f"instr:{thread_key(thread)}")
@@ -168,6 +209,65 @@ class Messenger:
         return await self._store_inbound(role, text, external_id=None,
                                          thread=select_thread(self.store, role, household_id, facility_id))
 
+    async def phone_inbound(self, raw_handle: str, text: str) -> dict | None:
+        """Dev / drill console: a text "from" a registered phone, without Photon (no opt-in learned).
+        Placed phones go the normal path; unplaced ones to the lobby (location first)."""
+        phone = self.store.phone(handle=normalize_handle(raw_handle))
+        if phone is None:
+            raise ValueError(f"{raw_handle} is not a registered phone")
+        thread = phone_thread(self.store, phone)
+        if thread is None:
+            if not unplaced(self.store, phone):
+                raise ValueError(f"{raw_handle} is not bound to anything in the current scenario")
+            await self._lobby_inbound(phone, text)
+            return None
+        return await self._store_inbound(phone["role"], text, external_id=None, thread=thread)
+
+    def lobby_log(self, handle: str) -> list[dict]:
+        return json.loads(self.store.kv_get(f"lobby:{handle}") or "[]")
+
+    def _lobby_append(self, handle: str, m: dict) -> None:
+        self.store.kv_set(f"lobby:{handle}", json.dumps(self.lobby_log(handle) + [m]))
+
+    async def _lobby_inbound(self, phone: dict, text: str) -> None:
+        """A text from a phone with no household yet: kept in the phone's lobby log (moved into its
+        household's thread once placed) and handed to the Locator."""
+        self._lobby_append(phone["handle"], {"direction": "in", "text": text.strip(), "t_s": self._t_s()})
+        self._tap({"direction": "in", "who": phone["handle"], "text": text.strip(), "delivery": None})
+        for hook in self.lobby_hooks:
+            await hook(phone, text.strip())
+
+    async def send_to_phone(self, handle: str, text: str) -> str:
+        """Text a phone that has no household yet (the Locator's questions). Same rules as send_message
+        (drill prefix, opt-in); kept in the lobby log. Returns delivery."""
+        phone = self.store.phone(handle=handle)
+        text = with_drill_prefix(text)
+        if self.photon is None:
+            delivery = "dev"
+        elif phone is None:
+            delivery = "no_phone"
+        elif not self.opted_in(phone):
+            delivery = "not_opted_in"
+        else:
+            try:
+                await self.photon.send_text(phone["space_id"], phone["agent_user_id"], text,
+                                            idempotency_key=f"ember-{new_message_id()}")
+                delivery = "sent"
+            except Exception as e:  # noqa: BLE001 - tell the console, keep going
+                log.error("lobby send to %s failed: %s", handle, e)
+                delivery = "failed"
+        self._lobby_append(handle, {"direction": "out", "text": text, "t_s": self._t_s(), "delivery": delivery})
+        self._tap({"direction": "out", "who": handle, "text": text, "delivery": delivery})
+        return delivery
+
+    def move_lobby_to_thread(self, handle: str, thread: dict) -> None:
+        """Once placed: the pre-placement chat becomes the start of the household's thread (dashboard)."""
+        for m in self.lobby_log(handle):
+            msg = {"id": new_message_id(), "thread": thread, "direction": m["direction"], "text": m["text"],
+                   "t_s": m["t_s"], "plan_version": None, "assignment_id": None, "report_id": None}
+            self.store.add_message(msg, delivery=m.get("delivery") if m["direction"] == "out" else None)
+        self.store.kv_delete(f"lobby:{handle}")
+
     async def _store_inbound(self, role: str, text: str, external_id: str | None, thread: dict | None) -> dict | None:
         if thread is None:
             log.warning("no %s thread in the current state; text dropped", role)
@@ -177,6 +277,7 @@ class Messenger:
                "assignment_id": None, "report_id": None}
         if not self.store.add_message(msg, external_id=external_id):
             return None  # lost a race with the other delivery path
+        self._tap({"direction": "in", "who": thread, "text": msg["text"], "delivery": None})
         await self.hub.broadcast("message", msg, msg["t_s"])
         for hook in self.inbound_hooks:
             await hook(msg, role)
@@ -225,6 +326,7 @@ class Messenger:
         if delivery != "pending":
             if delivery == "not_opted_in":
                 log.warning("%s phone hasn't texted the line yet; message %s not sent", thread_key(thread), msg["id"])
+            self._tap({"direction": "out", "who": thread, "text": msg["text"], "delivery": delivery})
             return msg, delivery
         try:
             res = await self.photon.send_text(phone["space_id"], phone["agent_user_id"], msg["text"],  # type: ignore[union-attr]
@@ -235,4 +337,5 @@ class Messenger:
             delivery = "failed"
             log.error("send %s to %s failed: %s", msg["id"], thread_key(thread), e)
             self.store.set_delivery(msg["id"], delivery)
+        self._tap({"direction": "out", "who": thread, "text": msg["text"], "delivery": delivery})
         return msg, delivery

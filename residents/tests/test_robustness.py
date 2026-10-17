@@ -26,7 +26,7 @@ SCRIPT = {TWO: ex(fact("need", people=2)),
 def rc(settings, bridge):  # noqa: F811
     s = replace(settings, scenario=SCENARIO, extract_enabled=True)
     with TestClient(create_app(s, bridge=bridge, llm=FakeLLM(SCRIPT))) as c:
-        c.post("/phones", json={"role": "resident", "handle": "4133620520"})
+        c.post("/phones", json={"role": "resident", "handle": "6175550120"})
         yield c
 
 
@@ -89,8 +89,8 @@ def pc(settings, monkeypatch):
     fp = FakePhoton()
     s = replace(settings, photon_enabled=True, photon_listen=False)
     with TestClient(create_app(s, photon_client=fp.client())) as c:
-        c.post("/phones", json={"role": "resident", "handle": "4133620520"})
-        c.portal.call(c.app.state.messenger.handle_inbound, parse_inbound(received("in1", "+14133620520", "hi")))
+        c.post("/phones", json={"role": "resident", "handle": "6175550120"})
+        c.portal.call(c.app.state.messenger.handle_inbound, parse_inbound(received("in1", "+16175550120", "hi")))
         yield c, fp
 
 
@@ -123,7 +123,7 @@ def test_stale_failures_are_not_retried(pc):
 def test_polled_then_socket_delivery_is_stored_once(pc):
     """Photon socket down → the poller fetches the text; the socket comes back and redelivers it."""
     c, fp = pc
-    obj = received("pho_msg_9", "+14133620520", "we're 3", created="2099-01-01T00:00:05Z")
+    obj = received("pho_msg_9", "+16175550120", "we're 3", created="2099-01-01T00:00:05Z")
     fp.received_items = [obj]
     lst = PhotonListener(fp.client(), c.app.state.store, c.app.state.messenger.handle_inbound)
     c.app.state.store.kv_set(PhotonListener.POLL_SINCE_KEY, "2099-01-01T00:00:00+00:00")

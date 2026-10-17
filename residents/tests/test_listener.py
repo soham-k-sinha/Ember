@@ -30,9 +30,9 @@ async def test_worker_handles_in_order_and_saves_cursor(store):
     async def on_message(i):
         got.append(i.text)
     lst = PhotonListener(FakePhoton().client(), store, on_message)
-    await run_worker(lst, [(event(received("m1", "+14133620520", "one")), {"seq": 5}),
+    await run_worker(lst, [(event(received("m1", "+16175550120", "one")), {"seq": 5}),
                            (event({"status": "received", "content": {"type": "space.typing.update"}}), {"seq": 6}),
-                           (event(received("m2", "+14133620520", "two")), {"seq": 9})])
+                           (event(received("m2", "+16175550120", "two")), {"seq": 9})])
     assert got == ["one", "two"] and lst.cursor == 9
 
 
@@ -42,7 +42,7 @@ async def test_replayed_seq_is_skipped(store):
         got.append(i.text)
     store.kv_set(PhotonListener.CURSOR_KEY, "9")
     lst = PhotonListener(FakePhoton().client(), store, on_message)
-    await run_worker(lst, [(event(received("m1", "+1", "old")), {"seq": 9}), (event(received("m3", "+14133620520", "new")), {"seq": 10})])
+    await run_worker(lst, [(event(received("m1", "+1", "old")), {"seq": 9}), (event(received("m3", "+16175550120", "new")), {"seq": 10})])
     assert got == ["new"] and lst.cursor == 10
 
 
@@ -54,16 +54,16 @@ async def test_handler_failure_does_not_block_the_stream(store, monkeypatch):
             raise RuntimeError("boom")
         got.append(i.text)
     lst = PhotonListener(FakePhoton().client(), store, on_message)
-    await run_worker(lst, [(event(received("m1", "+14133620520", "bad")), {"seq": 1}),
-                           (event(received("m2", "+14133620520", "good")), {"seq": 2})])
+    await run_worker(lst, [(event(received("m1", "+16175550120", "bad")), {"seq": 1}),
+                           (event(received("m2", "+16175550120", "good")), {"seq": 2})])
     assert got == ["good"] and lst.cursor == 2
 
 
 async def test_poll_once_hands_texts_over_and_advances(store):
     fp = FakePhoton()
-    fp.received_items = [received("m1", "+14133620520", "hi", created="2026-10-17T12:00:01Z"),
-                         received("m2", "+14133620520", "", created="2026-10-17T12:00:02Z", content_type="message.read"),
-                         received("m3", "+14134094408", "6 hours", created="2026-10-17T12:00:03Z")]
+    fp.received_items = [received("m1", "+16175550120", "hi", created="2026-10-17T12:00:01Z"),
+                         received("m2", "+16175550120", "", created="2026-10-17T12:00:02Z", content_type="message.read"),
+                         received("m3", "+16175550140", "6 hours", created="2026-10-17T12:00:03Z")]
     got = []
     async def on_message(i):
         got.append(i.external_id)
@@ -140,8 +140,8 @@ def test_health_with_live_listener(settings, tmp_path):
             assert sio.kw["socketio_path"] == "/v1/projects/pho_prj_0test00000000000000000000000/events/ws"
             assert sio.kw["headers"] == {"Authorization": "Bearer pho_sk_test"} and sio.kw["transports"] == ["websocket"]
             # a delivery through the socket handler reaches the thread
-            c.post("/phones", json={"role": "resident", "handle": "4133620520"})
-            c.portal.call(sio.handlers["delivery"], event(received("m1", "+14133620520", "hi from socket")), {"seq": 3})
+            c.post("/phones", json={"role": "resident", "handle": "6175550120"})
+            c.portal.call(sio.handlers["delivery"], event(received("m1", "+16175550120", "hi from socket")), {"seq": 3})
             for _ in range(50):
                 if c.get("/state").json()["messages"][-1]["text"] == "hi from socket":
                     break
