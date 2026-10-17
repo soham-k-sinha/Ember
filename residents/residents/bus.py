@@ -1,6 +1,6 @@
 """WebSocket hub for the web app (WS /ws).
 
-Every event is an envelope {type, seq, t_s, data} (draft schema: residents/ws-events.schema.json).
+Every event is an envelope {type, seq, t_s, data} (contract: contracts/ws-events.schema.json).
 `seq` goes up by one per broadcast, so a client can tell it missed something and re-fetch GET /state.
 The `state` event sent on connect carries the current seq without incrementing it: "this is the
 state as of event N; the next broadcast is N+1".

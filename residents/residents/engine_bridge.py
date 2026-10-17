@@ -74,6 +74,14 @@ class EngineBridge:
             res = simulate(self.world, self.scenario, plan, reports=self.engine_reports(reports))
             return res.state_at(min(max(t_s, 0.0), self.t_end_s))
 
+    def optimize(self, reports: list[dict], t_now: float, prev: dict | None, on_point, seeds: int = 20, k: int = 4) -> dict:
+        """Robust fan-out through engine's EngineSession (Daytona if engine/.env has a key, else local)."""
+        from ember_engine.api import EngineSession
+        with self._lock:
+            sess = EngineSession(self.scenario_path, world=self.world, seed=self.seed)
+            sess.resume(prev, self.engine_reports(reports))
+            return sess.optimize(on_point=on_point, t_now=t_now, seeds=seeds, k=k)["plan"]
+
     def compare(self, reports: list[dict], seeds: int = 5) -> dict:
         from ember_engine.compare import compare
         with self._lock:

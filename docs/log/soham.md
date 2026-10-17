@@ -37,3 +37,12 @@ Notes for the team:
   - Operator "90 min of fuel" at 75 min: allocator keeps gen-1 at Cottage Farm and lists mt-auburn as unresolved ("the only compatible generator is protecting cottage-farm"), hospital outage 75 min. Good trade-off for the beat; a shorter endurance moves the generator (Aryaman's test: 10 min at 50 min).
   - Questions from residents ("is the bridge open?") are stored as `question` reports; nothing answers them automatically yet.
 Next: Task 4 outbound: text only changed instructions (with plan_version) after each replan; then confirm/reject + stale replies.
+
+## 2026-10-17 07:40 · outbound instructions + POST /optimize · branch soham/optimize-outbound · commit (this PR)
+What: Task 4 outbound: after each plan version, every opted-in phone gets a text only when its own instruction materially changed (new/replaced vehicle, cancelled, ETA ±10 min); assignment → `offered` (and kept offered across replans); plan info_requests asked once (e.g. after the judge's first "hi"). `POST /optimize` (202) runs the robust fan-out via EngineSession.optimize, streaming `scatter_point` then `plan`; `GET /optimize` status. Dropped residents/ws-events.schema.json; tests use contracts/ws-events.schema.json and validate engine's example events.
+Files: residents/residents/{outbound,planner,engine_bridge,intake,db,app,bus}.py, residents/tests/{test_outbound,test_ws_schema,test_engine}.py, residents/README.md
+Run: cd residents && uv run pytest -q (101 pass) ; curl -X POST 'localhost:8000/optimize?seeds=20&k=4' and watch WS
+Interfaces: WS `assignment` with change `status_changed` when an instruction is texted; `scatter_point` per ws-events (D38) with n_total for progress. D44.
+Status: done. Local optimize on Allston (k=2, seeds=3): 9 points in 2.7 s, plan v2 with search.robust.
+Notes: Aryaman — at t=0 `EngineSession.optimize` tags points `batch_id`/`plan_version` = v1 but returns plan v2 (version bumped after the fan-out); the web clears the scatter per batch, so fine, but the tag says v1. Arnav — upsert messages by id (a message is re-broadcast when its report_id is set).
+Next: Task 5 confirm/reject (+ stale plan_version replies), then a live phone run-through.

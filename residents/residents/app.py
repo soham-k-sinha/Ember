@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -20,6 +21,7 @@ from .db import Store
 from .engine_bridge import EngineBridge
 from .extract import LLM, make_llm
 from .intake import Intake
+from .outbound import Outbound
 from .messaging import Messenger
 from .photon import PhotonClient, PhotonError, PhotonListener
 from .planner import Planner, ReportError
@@ -124,10 +126,14 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         if photon is None and settings.photon_enabled:
             photon = PhotonClient(settings.photon_api_key, settings.photon_project_id)
         app.state.messenger = Messenger(app.state.store, app.state.hub, photon)
+        app.state.outbound = None
+        if app.state.planner is not None:
+            app.state.outbound = Outbound(app.state.store, app.state.messenger)
+            app.state.planner.plan_hooks.append(app.state.outbound.on_plan)
         app.state.intake = None
         if app.state.planner is not None and settings.extract_enabled and (llm is not None or settings.anthropic_api_key):
             app.state.intake = Intake(app.state.store, app.state.messenger, app.state.planner,
-                                      llm or make_llm(settings.anthropic_api_key))
+                                      llm or make_llm(settings.anthropic_api_key), app.state.outbound)
             app.state.messenger.inbound_hooks.append(app.state.intake.on_inbound)
         app.state.listener = None
         if photon is not None and settings.photon_listen:
@@ -214,6 +220,31 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
             raise HTTPException(422, str(e)) from e
         return {"report": report, "plan_version": store().meta().get("plan_version"),
                 "changes": plan.get("changes", []) if plan else []}
+
+    @app.post("/optimize", status_code=202)
+    async def post_optimize(seeds: int = 20, k: int = 4) -> dict:
+        """Start the robust fan-out in the background; watch WS `scatter_point` events, then `plan`.
+        GET /optimize for the outcome. 409 while one is running."""
+        p = planner()
+        if not (1 <= seeds <= 50 and 1 <= k <= 8):
+            raise HTTPException(422, "seeds must be 1..50 and k 1..8")
+        if p.optimizing:
+            raise HTTPException(409, "an optimization is already running")
+
+        async def run() -> None:
+            try:
+                await p.optimize(seeds, k)
+            except Exception:  # noqa: BLE001 - recorded in last_optimize
+                log.exception("optimize failed")
+
+        app.state.optimize_task = asyncio.create_task(run())
+        await asyncio.sleep(0)  # let it take the flag before we answer
+        return {"status": "started", "seeds": seeds, "k": k}
+
+    @app.get("/optimize")
+    def get_optimize() -> dict:
+        p = planner()
+        return {"running": p.optimizing, "last": p.last_optimize}
 
     @app.post("/clock")
     async def post_clock(body: ClockIn) -> dict:

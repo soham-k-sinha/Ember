@@ -11,7 +11,7 @@ from referencing import Registry, Resource
 
 from ember_engine.state import validate_state
 from residents.app import create_app
-from residents.config import CONTRACTS, PKG_ROOT, REPO_ROOT
+from residents.config import CONTRACTS, REPO_ROOT
 from residents.contracts import errors
 from residents.engine_bridge import EngineBridge
 
@@ -38,8 +38,6 @@ def ec(esettings, bridge):
 @pytest.fixture(scope="session")
 def ws_validator():
     path = CONTRACTS / "ws-events.schema.json"
-    if not path.exists():  # until engine's PR #11 lands on main
-        path = PKG_ROOT / "ws-events.schema.json"
     reg = Registry()
     for p in CONTRACTS.glob("*.schema.json"):
         s = json.loads(p.read_text())

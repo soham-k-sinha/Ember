@@ -17,10 +17,11 @@ uv run pytest -q
 | `GET /health` | `{ok, scenario_id, plan_version, t_s, photon}` |
 | `GET /state` | the shared state, `contracts/state.schema.json` v0.1 (`source: "backend"`) |
 | `GET /plan/current`, `GET /plan/{version}` | a plan with its assignments (404 if none) |
-| `WS /ws` | events `{type, seq, t_s, data}`; a `state` event on connect, then broadcasts. Draft contract: `ws-events.schema.json` |
+| `WS /ws` | events `{type, seq, t_s, data}`; a `state` event on connect, then broadcasts. Contract: `contracts/ws-events.schema.json` |
 | `POST /reports` | a structured fact (`report.schema.json`; `id`/`observed_at_t_s` default to new/the clock). `need` / `closure_report` / `facility_status` → replan → WS `report`, `plan`, one `assignment` per change, `metrics` |
 | `POST /disruption` | judge's map controls: `{"close_edges": [edge ids]}` (reverse direction closed too) or `{"facility_id", "set": {...}}` → report → replan |
 | `POST /replan` | replan now (no new fact) |
+| `POST /optimize?seeds=20&k=4` → 202 | robust fan-out (top-k candidates × perturbed worlds + baseline; Daytona if engine/.env has a key, else local processes). Streams WS `scatter_point`, then `plan`. 409 while running; `GET /optimize` = `{running, last}` |
 | `POST /clock {t_s}` | move the sim clock (play / scrub); broadcasts `state` |
 | `GET /comparison?seeds=5` | baseline vs EMBER on paired perturbations (`comparison.schema.json`), cached per plan version (~3 s first call) |
 | `GET /phones`, `POST /phones {role, handle}` | tester phones by role (`resident` → the judge's household, `operator` → the critical hospital); POST creates the Photon shared-line assignment and returns `assigned_number` |
@@ -52,6 +53,9 @@ uv run --project ../engine ember validate-state /tmp/state.json --scenario ../co
 `residents/extract.py`: each inbound text (Photon or `/dev/inbound`) → Claude (`EXTRACT_MODEL`, default `claude-opus-5-5`, effort `low`, structured outputs) → `facts[]` + confidence + optional clarifying question. Everything after is code: confidence < 0.6 or a missing head count / unplaceable street → one clarifying question (a partial need waits in `pending` for the reply); street names → town edges near the household (`engine_bridge.resolve_road`, both directions); hours → `backup_endurance_s`. All facts from one text → one replan. The model never sees or emits routes, times or assignments.
 Live accuracy: `uv run python scripts/eval_extract.py` on `tests/samples.json` (20 messages; last run 20/20, median 1.9 s). Unit tests use a fake model and never call the API.
 
-## WS events (draft, `ws-events.schema.json`)
+## Outbound instructions
+After every plan version (`residents/outbound.py`), each opted-in phone thread is compared with the last instruction actually texted to it: a text goes out only if a vehicle is newly assigned / replaced, is no longer coming, or the ETA moved ≥ 10 min. Fixed templates over computed fields, `[EMBER drill]` prefix, `plan_version` + `assignment_id` on every message; the assignment becomes `offered` (WS `assignment` with `change: status_changed`). The plan's `info_requests` for a phone thread are asked once each (e.g. right after the tester's first "hi").
+
+## WS events (`contracts/ws-events.schema.json`)
 `state` (full snapshot) · `plan` (a new plan version) · `assignment` (`{plan_version, change, assignment_id, assignment}`, one per changed assignment) · `message` · `report` · `metrics` · `scatter_point`.
 `seq` goes up by 1 per broadcast; on a gap, re-fetch `GET /state`.
