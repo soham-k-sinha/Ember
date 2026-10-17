@@ -41,6 +41,15 @@ WHERE = "Where are you right now? Tell me your street address or the nearest int
 FILLER = "One moment... "        # ElevenLabs' advice for slow turns: an ellipsis + space, said while we work
 FILLER_AFTER_S = 1.2
 SESSION_IDLE_S = 300.0           # a call with no turn for this long is over (its leftovers go back to text)
+# Phone call screening (iPhone "Screen Unknown Callers", Google Call Screen) answers first and asks who's calling
+# and why; answering that (once) is what gets the call put through. A person asking "who is this?" gets the same.
+SCREENING = re.compile(r"\b(stay on the line|record (your|it)\b|recorded\b|reason for (your )?call|screening service|"
+                       r"see if (this person|they('re| are)) available|who('s| is) (calling|this)|state your name|"
+                       r"leave (a|your) (message|name))", re.I)
+WHO_WE_ARE = ("This is EMBER, the HackHarvard flood drill, calling with this phone's evacuation plan. It's a drill, "
+              "not a real emergency.")
+ECHO_SIMILAR = 0.7               # this close to what we just said, and no answer in it: our own voice coming back
+ECHO_EXACT = 0.85                # this close: our own voice, whatever it contains (our help text lists "yes", "done")
 CALL_LINE = re.compile(r"caller=(\S*)\s+called=(\S*)\s+conv=(\S*)")
 SYSTEM_PROMPT = ("EMBER-CALL caller={{system__caller_id}} called={{system__called_number}} "
                  "conv={{system__conversation_id}}")
@@ -53,6 +62,8 @@ class Session:
     outbox: list[str] = field(default_factory=list)
     last: float = field(default_factory=time.monotonic)
     turns: int = 0
+    last_said: str = ""          # what this call said last (to tell our own echo from the caller)
+    screened: int = 0            # times we answered a call-screening prompt on this call
 
 
 class Voice:
@@ -121,12 +132,21 @@ class Voice:
             self.store.upsert_phone(handle, "resident", scenario_id=self.store.meta().get("scenario_id"))
             log.info("admitted caller %s as a resident to be located", handle)
         text = (text or "").strip()
+        sim = _similar(text, s.last_said) if text and s.last_said else 0.0
+        if sim >= ECHO_EXACT or (sim >= ECHO_SIMILAR and not _answers(text)):
+            log.info("call %s: ignored our own echo %r", handle, text[:60])
+            return None  # say nothing
+        if text and SCREENING.search(text) and s.screened < 2:
+            s.screened += 1
+            s.last_said = WHO_WE_ARE
+            return [WHO_WE_ARE]  # not a message from the resident: the thread doesn't change
         if text:
             await self.messenger.phone_inbound(handle, text)
         elif not s.outbox:  # the call started with no first words from them: say where things stand
             await self.say_situation(handle)
         out, s.outbox = s.outbox, []
         s.last = time.monotonic()
+        s.last_said = render_all(out) or s.last_said
         return out
 
     async def say_situation(self, handle: str) -> None:
@@ -192,6 +212,20 @@ class Voice:
         return rec
 
 
+def _similar(a: str, b: str) -> float:
+    """Share of the caller's words that are words we just said (a transcript of our own voice scores ~1)."""
+    wa = re.findall(r"[a-z']+", a.lower())
+    wb = set(re.findall(r"[a-z']+", b.lower()))
+    return sum(w in wb for w in wa) / len(wa) if len(wa) >= 6 else 0.0
+
+
+def _answers(text: str) -> bool:
+    """Does it carry an answer (yes / no / done / a need / a street)? Then it's the caller, never an echo."""
+    from . import fallback
+    ex = fallback.parse(text)
+    return bool(ex and any(f.kind not in ("question", "other") for f in ex.facts)) or bool(fallback.STREET.search(text.lower()))
+
+
 # ---------- the voice app: the only thing reachable through the tunnel ----------
 def _content(m: dict) -> str:
     c = m.get("content")
@@ -234,7 +268,8 @@ def create_voice_app(get_voice, token: str) -> FastAPI:
         async def answer() -> str:
             if task is None:
                 return reply_now
-            return render_all(await task) or "Okay."
+            got = await task
+            return "" if got is None else (render_all(got) or "Okay.")
 
         if not body.get("stream"):
             text = await answer()
@@ -250,9 +285,10 @@ def create_voice_app(get_voice, token: str) -> FastAPI:
                 except asyncio.TimeoutError:
                     yield _chunk(cid, {"content": FILLER})
             texts = await task if task is not None else None
-            text = (render_all(texts) or "Okay.") if task is not None else reply_now
+            text = ("" if texts is None else (render_all(texts) or "Okay.")) if task is not None else reply_now
             try:
-                yield _chunk(cid, {"content": text})
+                if text:
+                    yield _chunk(cid, {"content": text})
                 yield _chunk(cid, {}, "stop")
                 yield "data: [DONE]\n\n"
             except (asyncio.CancelledError, GeneratorExit):

@@ -70,6 +70,8 @@ def spoken(r) -> str:
     ("household #10296; overflow 9,600 m³. We'll text you if that changes. Text us if anything changes.",
      "household number 10296; overflow 9,600 cubic meters. We'll let you know if that changes. Tell us if anything changes."),
     ("Send your street address or the nearest intersection.", "Tell me your street address or the nearest intersection."),
+    ("we need a few details to send the right vehicle.", "we need a few details to send the right vehicle."),
+    ("Send a street address or the two nearest cross streets there.", "Tell me a street address or the two nearest cross streets there."),
 ])
 def test_render(text, want):
     assert render(text) == want

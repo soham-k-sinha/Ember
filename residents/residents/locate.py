@@ -115,9 +115,16 @@ class Locator:
         try:
             ex = await self.llm(SYSTEM, build_prompt(text, "resident", {}, last,
                                                      {"kind": "location", "note": "we don't know where the sender is yet"}))
-        except Exception as e:  # noqa: BLE001 - API down: fall back to treating the text as an address
+        except Exception as e:  # noqa: BLE001 - API down: keyword parser for needs/questions, the text as a place if it looks like one
             log.error("location extraction failed: %r", e)
-            return text, None, {}, False
+            from . import fallback
+            ex = fallback.parse(text)
+            needs = {k: getattr(f, k) for f in (ex.facts if ex else []) if f.kind == "need"
+                     for k in NEED_FIELDS if getattr(f, k) is not None}
+            asked = bool(ex and any(f.kind == "question" for f in ex.facts))
+            low = text.lower()
+            looks = bool(fallback.STREET.search(low)) or (("and" in low.split() or "&" in low) and not needs)  # street / intersection
+            return (text if looks else None), None, needs, asked
         where = cross = None
         needs: dict = {}
         for f in ex.facts:
