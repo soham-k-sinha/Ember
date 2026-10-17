@@ -1,5 +1,5 @@
 {
- "_doc": "27 messages (#21 is DEMO.md beat 4, verbatim; #22-27 are the drill's location and DONE replies; #28-32 question topics, a decline with a question, a garbled need) a resident or operator might text during the drill, with the expected extraction. `expect.kinds` = fact kinds in order; other keys are checked on the fact of that kind. `context` = what we last sent / what we're waiting on. Run: uv run python scripts/eval_extract.py",
+ "_doc": "45 messages (#21 is DEMO.md beat 4, verbatim; #22-27 are the drill's location and DONE replies; #28-32 question topics, a decline with a question, a garbled need; #33-45 the D60 topics plan / flood / roads / safety / other, #33, #34 and #37 verbatim from the 2026-10-17 run) a resident or operator might text during the drill, with the expected extraction. `expect.kinds` = fact kinds in order; other keys are checked on the fact of that kind. `context` = what we last sent / what we're waiting on. Run: uv run python scripts/eval_extract.py",
  "samples": [
   {
    "role": "resident",
@@ -392,6 +392,177 @@
     ],
     "people": 4,
     "question": true
+   }
+  },
+  {
+   "role": "resident",
+   "text": "what’s the plan?",
+   "context": {
+    "last_outbound": "[EMBER drill] How many people are with you, and does anyone need a wheelchair-accessible vehicle?"
+   },
+   "expect": {
+    "kinds": [
+     "question"
+    ],
+    "question_topic": "plan"
+   }
+  },
+  {
+   "role": "resident",
+   "text": "what to do?",
+   "context": {
+    "last_outbound": "[EMBER drill] How many people are with you, and does anyone need a wheelchair-accessible vehicle?"
+   },
+   "expect": {
+    "kinds": [
+     "question"
+    ],
+    "question_topic": "plan"
+   }
+  },
+  {
+   "role": "resident",
+   "text": "what happens now?",
+   "context": {
+    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse (drill shelter). Reply YES to confirm, or tell us what changed. (plan v3)"
+   },
+   "expect": {
+    "kinds": [
+     "question"
+    ],
+    "question_topic": "plan"
+   }
+  },
+  {
+   "role": "resident",
+   "text": "is anyone coming for us?",
+   "context": {
+    "last_outbound": "[EMBER drill] How many people are with you, and does anyone need a wheelchair-accessible vehicle?"
+   },
+   "expect": {
+    "kinds": [
+     "question"
+    ],
+    "question_topic": "plan"
+   }
+  },
+  {
+   "role": "resident",
+   "text": "where is the flood happening",
+   "context": {
+    "last_outbound": "[EMBER drill] How many people are with you, and does anyone need a wheelchair-accessible vehicle?"
+   },
+   "expect": {
+    "kinds": [
+     "question"
+    ],
+    "question_topic": "flood"
+   }
+  },
+  {
+   "role": "resident",
+   "text": "will the water reach my street?",
+   "context": {
+    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse (drill shelter). Reply YES to confirm, or tell us what changed. (plan v3)"
+   },
+   "expect": {
+    "kinds": [
+     "question"
+    ],
+    "question_topic": "flood"
+   }
+  },
+  {
+   "role": "resident",
+   "text": "is River St open?",
+   "context": {
+    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse (drill shelter). Reply YES to confirm, or tell us what changed. (plan v3)"
+   },
+   "expect": {
+    "kinds": [
+     "question"
+    ],
+    "question_topic": "roads",
+    "road_hint": "River St"
+   }
+  },
+  {
+   "role": "resident",
+   "text": "can we still get across the Western Ave bridge?",
+   "context": {
+    "last_outbound": "[EMBER drill] Confirmed: Van 2 is coming to you. Step 1 of 4: Pack medications, ID, your phone and charger, then walk to the pickup point: the corner of Putnam Avenue and Western Avenue. Reply DONE when you're there."
+   },
+   "expect": {
+    "kinds": [
+     "question"
+    ],
+    "question_topic": "roads",
+    "road_hint": "Western Ave"
+   }
+  },
+  {
+   "role": "resident",
+   "text": "is it safe to drive to my sister's place?",
+   "context": {
+    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse (drill shelter). Reply YES to confirm, or tell us what changed. (plan v3)"
+   },
+   "expect": {
+    "kinds": [
+     "question"
+    ],
+    "question_topic": "safety"
+   }
+  },
+  {
+   "role": "resident",
+   "text": "water is coming in under the door, what should we do?",
+   "context": {
+    "last_outbound": "[EMBER drill] Confirmed: Van 2 is coming to you. Step 1 of 4: Pack medications, ID, your phone and charger, then walk to the pickup point: the corner of Putnam Avenue and Western Avenue. Reply DONE when you're there."
+   },
+   "expect": {
+    "kinds": [
+     "question"
+    ],
+    "question_topic": "safety"
+   }
+  },
+  {
+   "role": "resident",
+   "text": "who is running this drill?",
+   "context": {
+    "last_outbound": "[EMBER drill] How many people are with you, and does anyone need a wheelchair-accessible vehicle?"
+   },
+   "expect": {
+    "kinds": [
+     "question"
+    ],
+    "question_topic": "other"
+   }
+  },
+  {
+   "role": "resident",
+   "text": "can I bring my cat?",
+   "context": {
+    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse (drill shelter). Reply YES to confirm, or tell us what changed. (plan v3)"
+   },
+   "expect": {
+    "kinds": [
+     "question"
+    ],
+    "question_topic": "other"
+   }
+  },
+  {
+   "role": "resident",
+   "text": "what should I pack?",
+   "context": {
+    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse (drill shelter). Reply YES to confirm, or tell us what changed. (plan v3)"
+   },
+   "expect": {
+    "kinds": [
+     "question"
+    ],
+    "question_topic": "bring"
    }
   }
  ]

@@ -35,6 +35,7 @@ NOT_FOUND = ("We couldn't find \"{q}\" in the drill area ({area}). Send a street
 OUTSIDE = "That spot is outside the drill area ({area}). Send an address or intersection inside it."
 NO_BUILDING = "We couldn't match that spot to a building on our map. Send your street address, please."
 PLACED = "Got it: we have you at {label}. Your nearest pickup point is {corner}."
+ASK_FIRST = "We can tell you exactly what to do once we know where you are. "  # a question before a place (D60)
 
 
 class Locator:
@@ -82,12 +83,15 @@ class Locator:
     async def _handle(self, phone: dict, text: str) -> None:
         handle = phone["handle"]
         welcomed = bool(self.store.kv_get(f"welcomed:{handle}"))
-        where, cross, needs = await self._read(handle, text)
+        where, cross, needs, asked = await self._read(handle, text)
         if needs:
             known = json.loads(self.store.kv_get(self._needs_key(handle)) or "{}")
             self.store.kv_set(self._needs_key(handle), json.dumps({**known, **needs}))
         if where is None:
             self.store.kv_set(f"welcomed:{handle}", "1")
+            if asked:  # "what's going on?": the honest answer is that it depends on where they are
+                await self.messenger.send_to_phone(handle, ASK_FIRST + (WELCOME if not welcomed else ASK))
+                return
             await self.messenger.send_to_phone(handle, ASK_AFTER_NEEDS if needs else ASK if welcomed else WELCOME)
             return
         found = await self.places.locate(where, cross, self.geocoder)
@@ -100,20 +104,20 @@ class Locator:
             return
         await self.place(phone, found)
 
-    async def _read(self, handle: str, text: str) -> tuple[str | None, str | None, dict]:
-        """(place as written, cross street, need fields) from one text."""
+    async def _read(self, handle: str, text: str) -> tuple[str | None, str | None, dict, bool]:
+        """(place as written, cross street, need fields, asked a question) from one text."""
         if parse_coords(text) is not None:
-            return text, None, {}
+            return text, None, {}, False
         if self.llm is None:  # no extraction: take the text as the place if it looks like one
             looks = any(ch.isdigit() for ch in text) or any(w in text.lower() for w in (" and ", "&", " st", " ave", " street", " road"))
-            return (text if looks else None), None, {}
+            return (text if looks else None), None, {}, False
         last = next((m["text"] for m in reversed(self.messenger.lobby_log(handle)) if m["direction"] == "out"), None)
         try:
             ex = await self.llm(SYSTEM, build_prompt(text, "resident", {}, last,
                                                      {"kind": "location", "note": "we don't know where the sender is yet"}))
         except Exception as e:  # noqa: BLE001 - API down: fall back to treating the text as an address
             log.error("location extraction failed: %r", e)
-            return text, None, {}
+            return text, None, {}, False
         where = cross = None
         needs: dict = {}
         for f in ex.facts:
@@ -121,7 +125,7 @@ class Locator:
                 where, cross = f.address, f.cross_street
             if f.kind == "need":
                 needs.update({k: getattr(f, k) for k in NEED_FIELDS if getattr(f, k) is not None})
-        return where, cross, needs
+        return where, cross, needs, any(f.kind == "question" for f in ex.facts)
 
     # ---------- placing ----------
     async def place(self, phone: dict, where: Place) -> dict | None:

@@ -236,6 +236,16 @@ class EngineBridge:
     def edge_name(self, eid: int) -> str:
         return self._edges[eid].get("name") or f"edge {eid}"
 
+    def named_edges(self, road_hint: str, cross_street: str | None = None) -> list[dict]:
+        """Every edge of the named street (at the cross street, if given and they meet): for questions
+        ("is River St open?"), which ask about the street, not the segment by one household."""
+        named = [e for e in self.town["edges"] if street_matches(e.get("name"), road_hint)]
+        if cross_street and named:
+            cross_nodes = {n for e in self.town["edges"] if street_matches(e.get("name"), cross_street) for n in (e["u"], e["v"])}
+            at = [e for e in named if e["u"] in cross_nodes or e["v"] in cross_nodes]
+            return at or named
+        return named
+
     # ---------- street name → edges (for closure reports from texts) ----------
     NEAR_HOUSEHOLD_M = 150.0  # same radius as engine's tested demo beat (edges_by_name, near_household=…)
 

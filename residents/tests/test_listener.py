@@ -1,5 +1,6 @@
 """PhotonListener: serial processing, durable cursor, replay skipping, polling fallback."""
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -60,17 +61,20 @@ async def test_handler_failure_does_not_block_the_stream(store, monkeypatch):
 
 
 async def test_poll_once_hands_texts_over_and_advances(store):
+    # relative to now: the poll window never reaches back more than 10 min (D54), so fixed dates go stale
+    t0 = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(seconds=60)
+    at = lambda s: (t0 + timedelta(seconds=s)).isoformat().replace("+00:00", "Z")  # noqa: E731
     fp = FakePhoton()
-    fp.received_items = [received("m1", "+16175550120", "hi", created="2026-10-17T12:00:01Z"),
-                         received("m2", "+16175550120", "", created="2026-10-17T12:00:02Z", content_type="message.read"),
-                         received("m3", "+16175550140", "6 hours", created="2026-10-17T12:00:03Z")]
+    fp.received_items = [received("m1", "+16175550120", "hi", created=at(1)),
+                         received("m2", "+16175550120", "", created=at(2), content_type="message.read"),
+                         received("m3", "+16175550140", "6 hours", created=at(3))]
     got = []
     async def on_message(i):
         got.append(i.external_id)
-    store.kv_set(PhotonListener.POLL_SINCE_KEY, "2026-10-17T12:00:00+00:00")
+    store.kv_set(PhotonListener.POLL_SINCE_KEY, t0.isoformat())
     lst = PhotonListener(fp.client(), store, on_message)
     assert await lst.poll_once() == 2 and got == ["m1", "m3"]
-    assert store.kv_get(PhotonListener.POLL_SINCE_KEY) == "2026-10-17T12:00:03+00:00"
+    assert store.kv_get(PhotonListener.POLL_SINCE_KEY) == (t0 + timedelta(seconds=3)).isoformat()
 
 
 async def test_polling_only_while_socket_down(store):

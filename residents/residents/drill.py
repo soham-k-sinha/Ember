@@ -34,6 +34,8 @@ HELP = """commands:
   @r1 <text>            text EMBER as r1 (any participant name; needed with --dry, works with phones too)
   close <street> and <cross street>   report that road closed at that corner (replans)
   plan                  the current plan's assignments for the participants
+  questions             questions the plan couldn't answer (each already got the person's situation)
+  tell r1 <text>        reply to r1 as the coordinator (texted as written, with the drill prefix)
   reset                 start over from scratch (everyone texts their location again)
   help | quit"""
 
@@ -94,6 +96,8 @@ class Drill:
             await asyncio.sleep(0.1)
         st = self.app.state
         st.messenger.taps.append(self.on_message)
+        if st.intake is not None:
+            st.intake.escalation_hooks.append(self.on_question)
         await self.register()
         await st.locator.welcome()
 
@@ -197,7 +201,39 @@ class Drill:
             flag = "" if ev["delivery"] in ("sent", "dev", None) else f"   (delivery: {ev['delivery']})"
             print(f"\n[{t}] EMBER → {name}: {text}{flag}", flush=True)
 
+    def on_question(self, q: dict) -> None:
+        name = self._who(q["thread"]) or "someone"
+        print(f"   ↳ for the coordinator: {name} asked something the plan can't answer. Reply with: tell {name} <text>",
+              flush=True)
+
     # ---------- commands ----------
+    async def questions(self) -> None:
+        items = sorted((json.loads(v) for v in self.app.state.store.kv_prefix("question:").values()), key=lambda q: q["t_s"])
+        if not items:
+            print("  no questions for the coordinator")
+        for q in items:
+            state = f"answered: {q['answer']['text']}" if q.get("answer") else "open"
+            print(f"  [{_fmt_t(q['t_s'])}] {self._who(q['thread']) or q['thread']}: {q['text']}  ({state})")
+
+    async def tell(self, name: str, text: str) -> None:
+        """The coordinator's own reply. Marks that person's open questions answered."""
+        st = self.app.state
+        handle = next((h for h, n in self.names.items() if n == name), None)
+        if handle is None or not text.strip():
+            print(f"usage: tell r1 <text>  (participants: {', '.join(self.names.values())})")
+            return
+        from .threads import phone_thread
+        thread = phone_thread(st.store, st.store.phone(handle=handle))
+        if thread is None:
+            await st.messenger.send_to_phone(handle, text)
+            return
+        msg, delivery = await st.messenger.send_message(thread, text, st.store.meta().get("plan_version"))
+        if delivery in ("sent", "dev", "failed"):
+            for k, v in st.store.kv_prefix("question:").items():
+                q = json.loads(v)
+                if q["thread"] == thread and not q.get("answer"):
+                    st.store.kv_set(k, json.dumps({**q, "answer": {"text": text, "message_id": msg["id"]}}))
+
     async def status(self) -> None:
         st = self.app.state
         store, guide = st.store, st.guide
@@ -270,6 +306,11 @@ class Drill:
                 await self.status()
             elif line == "plan":
                 await self.plan()
+            elif line in ("questions", "qs"):
+                await self.questions()
+            elif line.startswith("tell "):
+                name, _, text = line[len("tell "):].partition(" ")
+                await self.tell(name, text)
             elif line in ("next", "n"):
                 t = await st.guide.next_event_t()
                 await self.move_clock(t if t is not None and t > st.planner.now() else st.planner.now() + 300)

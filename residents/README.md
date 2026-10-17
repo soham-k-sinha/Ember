@@ -44,14 +44,16 @@ What happens, all by text:
 5. **The clock moves one step at a time:** when everyone EMBER is waiting on has replied DONE, the sim clock
    jumps to the next event (the vehicle arriving, the pickup, the drop-off). `--manual-clock` turns that off.
 
-Ask anything: "how long?", "where do we go?", "are there other vans?", "is anyone near me?", "what should we
-bring?" are answered from the plan (which vehicles fit you and what each is doing, who's ahead of you on yours,
-other households near you). Anything else goes to the coordinators. Offers say why you got that vehicle and who
-is picked up before you. Saying NO to the only vehicle that can take you asks you to confirm first.
+Ask anything; every question is answered from the plan (D60): "what's the plan?" / "what do I do?" (where you
+stand, the step you're on, what we still need from you), "how long?", "where do we go?", "are there other vans?",
+"is anyone near me?", "what should we bring?", "where is the flood?", "is River St open?", "is it safe to drive?"
+(fixed safety wording, starting with 911). Something the plan doesn't cover ("can I bring my cat?") gets your
+situation too and goes to the coordinators' queue: the console prints it, `tell r1 <text>` answers it. Offers say
+why you got that vehicle and who is picked up before you. Saying NO to the only vehicle that can take you asks you to confirm first.
 Anything else you text goes through the same path as always: "my dad uses a wheelchair" or "the corner is
-flooded" → replan → changed instruction; "NO" → another vehicle; questions → "passed to the coordinators".
+flooded" → replan → changed instruction; "NO" → another vehicle.
 Console: `status`, `next` (jump to the next step), `+10` (minutes), `@r1 <text>` (text as r1), `close <street>
-and <cross street>`, `plan`, `reset`, `quit`.
+and <cross street>`, `plan`, `questions`, `tell r1 <text>` (reply as the coordinator), `reset`, `quit`.
 
 API for the same flow: `POST /phones {role: "resident", handle, locate: true}` registers a phone with no household;
 `POST /dev/inbound {role, handle, text}` texts as that phone (also before it's placed).
@@ -74,6 +76,8 @@ API for the same flow: `POST /phones {role: "resident", handle, locate: true}` r
 | `POST /assignments/{id}/confirm`, `/reject` `{plan_version?}` | the person accepts / declines an offer (texts "yes"/"no" take the same path). Reject → replan; that vehicle is never re-offered to them. 409 if `plan_version` is older and the assignment changed since (stale) |
 | `GET /phones`, `POST /phones {role, handle, household_id?, facility_id?}` | one phone per household/facility, many residents/operators. Residents specify household_id, operators facility_id. Omission uses the original judge/hospital default. Occupied target or a phone bound elsewhere → 409; never silently replaces a registration. Returns thread, assigned_number, opted_in and action_needed. `locate: true` (resident, no household_id): the phone gets a household when it texts where it is (D56). |
 | `POST /messages {thread, text, plan_version?, assignment_id?}` | send on a thread (gets the `[EMBER drill]` prefix); returns `delivery`: `sent` / `failed` / `not_opted_in` / `no_phone` / `dev` |
+| `GET /questions?open_only=` | questions the plan couldn't answer (D60): `{report_id, thread, handle, text, t_s, answer}`; each person already got their situation |
+| `POST /questions/{report_id}/answer {text}` | a coordinator's reply, texted on that thread as written (drill prefix); marks it answered. 404 if not in this run |
 | `POST /dev/reset` | reseed from `SEED_STATE` and broadcast `state` (rehearsals; `DEV_ENDPOINTS=0` hides it) |
 | `POST /dev/inbound {role, text, household_id?, facility_id?, handle?}` | inject a message into a specific thread (or as a registered phone, `handle`, also before it has a household); role-only is rejected if ambiguous. Does not opt a real phone in. With Photon enabled, replies can still go to real phones. |
 
