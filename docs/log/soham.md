@@ -46,3 +46,14 @@ Interfaces: WS `assignment` with change `status_changed` when an instruction is 
 Status: done. Local optimize on Allston (k=2, seeds=3): 9 points in 2.7 s, plan v2 with search.robust.
 Notes: Aryaman — at t=0 `EngineSession.optimize` tags points `batch_id`/`plan_version` = v1 but returns plan v2 (version bumped after the fan-out); the web clears the scatter per batch, so fine, but the tag says v1. Arnav — upsert messages by id (a message is re-broadcast when its report_id is set).
 Next: Task 5 confirm/reject (+ stale plan_version replies), then a live phone run-through.
+
+## 2026-10-17 08:40 · confirm / reject + stale replies · branch soham/confirm-reject · commit (this PR)
+What: Task 5. "yes"/"no" texts (and POST /assignments/{id}/confirm|reject) → stale check against the answered plan version → confirmed (sticky in the allocator, household shows confirmed, ack text) / rejected (ack, replan, never re-offered). Stale → latest instruction re-sent. Confirmed work that moves later gets an "Update:" text, not a second confirmation request.
+Files: residents/residents/{planner,outbound,intake,db,app}.py, residents/tests/{test_confirm,test_api}.py, residents/README.md
+Run: cd residents && uv run pytest -q (108 pass)
+Interfaces: WS `assignment` with change `status_changed` on offered/confirmed/rejected. D45.
+Status: done. Bug found + fixed: a request model defined inside create_app() was invisible to FastAPI (postponed annotations), so the confirm body (plan_version) was silently ignored; regression test checks every JSON endpoint declares its body.
+Notes for Aryaman (engine, please):
+  - `rejected` isn't understood by carry_over: a declined (resource, household) pair goes back into prev_queues and is usually re-proposed. The backend works around it (no re-offer, keeps it rejected), but the vehicle stays booked. Ask: treat `status == "rejected"` like cancelled history and exclude that pair in construct().
+  - Confirming moves the work to the front of the vehicle's queue: judge confirmed at t=0 → van-3 ETA 153 → 21 min on the next replan (carry_over sets free_at = rescue_cycle from now). Intended? It can push earlier-deadline households later.
+Next: robustness (Task 8: duplicate reports, two replies in a row, Photon outage) and a live phone run-through.

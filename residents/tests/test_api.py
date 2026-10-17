@@ -112,3 +112,14 @@ def test_engine_endpoints_need_engine_mode(client):
                                ("get", "/comparison", None), ("post", "/disruption", {"close_edges": [0]})]:
         r = getattr(client, method)(path, **({"json": body} if body is not None else {}))
         assert r.status_code == 503, (path, r.status_code)
+
+
+def test_every_json_endpoint_declares_its_body():
+    """Regression: a request model defined inside create_app() is invisible to FastAPI under postponed
+    annotations, and the body is silently ignored. Every POST taking JSON must show a requestBody."""
+    from residents.config import Settings
+    spec = create_app(Settings(scenario=None)).openapi()["paths"]
+    want_body = ["/reports", "/disruption", "/clock", "/phones", "/messages", "/dev/inbound",
+                 "/assignments/{assignment_id}/confirm", "/assignments/{assignment_id}/reject"]
+    for path in want_body:
+        assert "requestBody" in spec[path]["post"], path

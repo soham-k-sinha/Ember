@@ -229,7 +229,7 @@ class Store:
                 db.execute(f"DELETE FROM {t}")
             db.execute("DELETE FROM sqlite_sequence WHERE name IN ('reports', 'messages')")
             # per-run conversation memory: half-answered questions, last instruction texted, questions asked
-            for prefix in ("pending:", "instr:", "asked:"):
+            for prefix in ("pending:", "instr:", "asked:", "rejected:"):
                 db.execute("DELETE FROM kv WHERE key LIKE ?", (prefix + "%",))
 
     def apply_snapshot(self, state: dict) -> None:
@@ -265,28 +265,33 @@ class Store:
             db.execute("INSERT INTO meta (key, value) VALUES ('plan_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                        (_dump(plan["version"]),))
 
-    def mark_offered(self, version: int, assignment_id: str) -> bool:
-        """proposed → offered once the instruction is texted (raw plan + the state's view). False if it was
-        already past `proposed` (offered / confirmed / en route ...)."""
+    def set_assignment_status(self, version: int, assignment_id: str, status: str, only_from: tuple[str, ...]) -> bool:
+        """Backend-owned status bookkeeping (offered / confirmed / rejected) on the raw plan, which the next
+        replan reads as `prev` (the allocator keeps `confirmed` work), and on the state's view. Only moves
+        from `only_from`; False if the assignment isn't there or is already past that."""
         with self._tx() as db:
             row = db.execute("SELECT data FROM assignments WHERE plan_version = ? AND id = ?", (version, assignment_id)).fetchone()
             if not row:
                 return False
             a = json.loads(row["data"])
-            if a.get("status", "proposed") != "proposed":
+            if a.get("status", "proposed") not in only_from:
                 return False
-            a["status"] = "offered"
-            db.execute("UPDATE assignments SET status = 'offered', data = ? WHERE plan_version = ? AND id = ?",
-                       (_dump(a), version, assignment_id))
+            a["status"] = status
+            db.execute("UPDATE assignments SET status = ?, data = ? WHERE plan_version = ? AND id = ?",
+                       (status, _dump(a), version, assignment_id))
             row = db.execute("SELECT value FROM meta WHERE key = 'plan_view'").fetchone()
             if row:
                 view = json.loads(row["value"])
                 if view and view.get("version") == version:
                     for x in view["assignments"]:
-                        if x["id"] == assignment_id and x["status"] == "proposed":
-                            x["status"] = "offered"
+                        if x["id"] == assignment_id and x["status"] in only_from:
+                            x["status"] = status
                     db.execute("UPDATE meta SET value = ? WHERE key = 'plan_view'", (_dump(view),))
             return True
+
+    def mark_offered(self, version: int, assignment_id: str) -> bool:
+        """proposed → offered once the instruction is texted."""
+        return self.set_assignment_status(version, assignment_id, "offered", ("proposed",))
 
     def plan_reports_used(self, version: int) -> list[str]:
         rows = self._rows("SELECT reports_used FROM plans WHERE version = ?", (version,))

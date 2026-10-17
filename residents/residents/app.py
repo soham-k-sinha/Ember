@@ -68,6 +68,11 @@ async def start_engine(settings: Settings, store: Store, planner: Planner) -> No
                  settings.db_path, db_scenario, store.meta().get("plan_version"))
 
 
+class RespondIn(BaseModel):
+    # module level, not inside create_app: with postponed annotations FastAPI resolves hints by name
+    plan_version: int | None = Field(default=None, description="the plan version the person answered (stale check)")
+
+
 class ClockIn(BaseModel):
     t_s: float = Field(ge=0)
 
@@ -220,6 +225,24 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
             raise HTTPException(422, str(e)) from e
         return {"report": report, "plan_version": store().meta().get("plan_version"),
                 "changes": plan.get("changes", []) if plan else []}
+
+    async def respond(assignment_id: str, decision: str, body: RespondIn | None) -> dict:
+        res = await planner().respond(assignment_id, decision, body.plan_version if body else None)
+        if res["stale"]:
+            raise HTTPException(409, res["reason"])
+        if not res["applied"] and res["reason"] and not res["reason"].startswith("already"):
+            raise HTTPException(409, res["reason"])
+        return {**res, "plan_version": store().meta().get("plan_version")}
+
+    @app.post("/assignments/{assignment_id}/confirm")
+    async def confirm(assignment_id: str, body: RespondIn | None = None) -> dict:
+        """The person accepted the offer (web operator console; texts go through the same path)."""
+        return await respond(assignment_id, "confirm", body)
+
+    @app.post("/assignments/{assignment_id}/reject")
+    async def reject(assignment_id: str, body: RespondIn | None = None) -> dict:
+        """The person declined: status `rejected`, replan; that vehicle is never re-offered to them."""
+        return await respond(assignment_id, "reject", body)
 
     @app.post("/optimize", status_code=202)
     async def post_optimize(seeds: int = 20, k: int = 4) -> dict:

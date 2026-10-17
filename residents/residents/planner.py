@@ -11,6 +11,7 @@ the event loop (WS clients, the Photon socket) keeps moving during a 0.5–2 s s
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 import uuid
@@ -20,7 +21,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .bus import Hub
 from .contracts import validate_report
-from .db import Store
+from .db import Store, thread_key
 from .engine_bridge import FACT_KINDS, EngineBridge
 
 log = logging.getLogger("residents.planner")
@@ -75,6 +76,12 @@ class Planner:
             latency = (plan.get("metrics") or {}).get("replan_latency_s")
             state["plan"]["metrics"]["replan_latency_s"] = latency
             state["metrics"]["replan_latency_s"] = latency
+        if state.get("plan") is not None:
+            # confirmations are backend facts the simulator doesn't model: show them on the household
+            confirmed = {a["target"].get("household_id") for a in state["plan"]["assignments"] if a["status"] == "confirmed"}
+            for h in state["households"]:
+                if h["household_id"] in confirmed and h["status"] == "assigned":
+                    h["status"] = "confirmed"
         self.store.apply_snapshot(state)
         return self.store.snapshot()
 
@@ -170,6 +177,55 @@ class Planner:
             except Exception:  # noqa: BLE001 - a messaging failure must not undo a plan
                 log.exception("plan hook failed for v%s", view["version"])
         return view
+
+    # ---------- confirm / reject (Task 5) ----------
+    async def respond(self, assignment_id: str, decision: str, answered_version: int | None = None,
+                      on_applied: Callable[[dict], Awaitable[Any]] | None = None) -> dict:
+        """A person accepts or declines an offered assignment.
+
+        `answered_version` = the plan version of the message they replied to. If the plan moved on since
+        and that assignment changed (gone, or a different resource / target), the reply is stale: nothing
+        is applied and the caller re-sends the latest instruction. Reject → status `rejected` + replan;
+        the backend never re-offers that vehicle to that thread (outbound) even if the allocator proposes it
+        again. Returns {applied, stale, reason, assignment}."""
+        if decision not in ("confirm", "reject"):
+            raise ValueError("decision must be confirm or reject")
+        async with self.lock:
+            current = self.store.current_plan()
+            if current is None:
+                return {"applied": False, "stale": False, "reason": "no plan", "assignment": None}
+            a = next((x for x in current["assignments"] if x["id"] == assignment_id), None)
+            stale_reason = None
+            if a is None:
+                stale_reason = f"{assignment_id} is not in plan v{current['version']}"
+            elif answered_version is not None and answered_version < current["version"]:
+                old_plan = self.store.plan(answered_version)
+                old = next((x for x in (old_plan or {}).get("assignments", []) if x["id"] == assignment_id), None)
+                if old is None or old["resource_id"] != a["resource_id"] or old["target"] != a["target"]:
+                    stale_reason = f"answered v{answered_version}, but {assignment_id} changed by v{current['version']}"
+            if stale_reason:
+                log.info("stale %s: %s", decision, stale_reason)
+                return {"applied": False, "stale": True, "reason": stale_reason, "assignment": a}
+            new = "confirmed" if decision == "confirm" else "rejected"
+            if a.get("status") == new:
+                return {"applied": False, "stale": False, "reason": f"already {new}", "assignment": a}
+            if not self.store.set_assignment_status(current["version"], assignment_id, new, ("proposed", "offered", "confirmed")):
+                return {"applied": False, "stale": False, "reason": f"can't {decision} a {a.get('status')} assignment", "assignment": a}
+            if decision == "reject":
+                key = thread_key(a["target"]) if "edge_ids" not in a["target"] else None
+                if key:
+                    pairs = json.loads(self.store.kv_get(f"rejected:{key}") or "[]")
+                    pairs.append(a["resource_id"])
+                    self.store.kv_set(f"rejected:{key}", json.dumps(sorted(set(pairs))))
+            state = await self._refresh(self.now())
+        a = next(x for x in state["plan"]["assignments"] if x["id"] == assignment_id)
+        await self.hub.broadcast("assignment", {"plan_version": state["plan_version"], "change": "status_changed",
+                                                "assignment_id": assignment_id, "assignment": a}, state["t_s"])
+        if on_applied is not None:
+            await on_applied(a)
+        if decision == "reject":
+            await self.replan(trigger=f"{assignment_id} rejected")
+        return {"applied": True, "stale": False, "reason": None, "assignment": a}
 
     # ---------- robust optimization (Daytona / local pool) ----------
     @property

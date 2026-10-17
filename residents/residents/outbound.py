@@ -40,10 +40,12 @@ class Outbound:
         return res, fac
 
     @staticmethod
-    def instruction_for(view: dict, thread: dict) -> dict | None:
+    def instruction_for(view: dict, thread: dict, exclude: set[str] = frozenset()) -> dict | None:
         """The assignment this thread is told about: the household's rescue, or the generator heading to the
-        facility. Earliest ETA if several; cancelled/done ones don't count."""
-        live = [a for a in view.get("assignments", []) if a["status"] not in ("cancelled", "rejected", "done")]
+        facility. Earliest ETA if several; cancelled/done/rejected ones and vehicles this thread declined
+        (`exclude`) don't count."""
+        live = [a for a in view.get("assignments", []) if a["status"] not in ("cancelled", "rejected", "done")
+                and a["resource_id"] not in exclude]
         if "household_id" in thread:
             mine = [a for a in live if a["task"] == "rescue" and a["target"].get("household_id") == thread["household_id"]]
         else:
@@ -54,6 +56,8 @@ class Outbound:
         res, fac = self._names()
         r = res.get(a["resource_id"], {})
         who = r.get("name", a["resource_id"])
+        if a.get("status") == "confirmed":  # they already said yes: just the update, no second confirmation
+            return f"Update: {who} is now arriving {_mins(a['eta_s'], now)}. (plan v{version})"
         if "household_id" in thread:
             drop = fac.get(a.get("dropoff_facility_id") or "", {}).get("name")
             return (f"{who} will pick you up at your address {_mins(a['eta_s'], now)}"
@@ -63,7 +67,8 @@ class Outbound:
                 f"Reply YES to confirm someone will meet it. (plan v{version})")
 
     async def on_plan(self, view: dict, raw: dict | None = None) -> list[dict]:
-        return await self.sync(view)
+        await self.mark_declined(view)
+        return await self.sync(self.store.plan_view() or view)
 
     async def sync(self, view: dict, only: str | None = None, ask: bool = True) -> list[dict]:
         """Send what changed for every phone thread (or only thread key `only`). Returns sent messages."""
@@ -87,13 +92,16 @@ class Outbound:
                     sent.append(q)
         return sent
 
-    async def _instruction(self, view: dict, thread: dict, key: str, now: float) -> dict | None:
-        a = self.instruction_for(view, thread)
+    def rejected(self, key: str) -> set[str]:
+        return set(json.loads(self.store.kv_get(f"rejected:{key}") or "[]"))
+
+    async def _instruction(self, view: dict, thread: dict, key: str, now: float, force: bool = False) -> dict | None:
+        a = self.instruction_for(view, thread, exclude=self.rejected(key))
         raw_last = self.store.kv_get(f"instr:{key}")
         last = json.loads(raw_last) if raw_last else None
         if a is not None:
-            changed = (last is None or last.get("assignment_id") != a["id"] or last.get("resource_id") != a["resource_id"]
-                       or abs(float(last.get("eta_s", 0)) - a["eta_s"]) >= MATERIAL_ETA_S)
+            changed = force or (last is None or last.get("assignment_id") != a["id"] or last.get("resource_id") != a["resource_id"]
+                                or abs(float(last.get("eta_s", 0)) - a["eta_s"]) >= MATERIAL_ETA_S)
             if not changed:
                 # same instruction carried into a new version: the allocator rebuilds it as `proposed`,
                 # but the person already has it → keep it `offered` (no new text)
@@ -119,6 +127,42 @@ class Outbound:
             self.store.kv_set(f"instr:{key}", json.dumps({"assignment_id": None, "plan_version": view["version"]}))
             return msg
         return None
+
+    async def mark_declined(self, view: dict) -> None:
+        """The allocator doesn't know about declines yet: if it re-proposes a vehicle a thread rejected,
+        keep that assignment `rejected` (bookkeeping only; the assignment itself is the allocator's)."""
+        for a in view.get("assignments", []):
+            t = a["target"]
+            if "edge_ids" in t or a["status"] != "proposed":
+                continue
+            if a["resource_id"] in self.rejected(thread_key(t)):
+                self.store.set_assignment_status(view["version"], a["id"], "rejected", ("proposed",))
+
+    async def ack(self, a: dict, decision: str, thread: dict) -> dict:
+        """Reply to a YES / NO on an offered instruction."""
+        res, _ = self._names()
+        who = res.get(a["resource_id"], {}).get("name", a["resource_id"])
+        now = float(self.store.meta().get("t_s", 0.0))
+        v = a["plan_version"]
+        if decision == "confirm":
+            text = (f"Confirmed: {who} is coming to you, arriving {_mins(a['eta_s'], now)}. "
+                    f"Reply here if anything changes. (plan v{v})")
+        else:
+            text = (f"Understood, we won't send {who}. We're re-planning; reply here if you need help later. (plan v{v})")
+        msg, _ = await self.messenger.send_message(thread, text, self.store.meta().get("plan_version"), a["id"])
+        return msg
+
+    async def latest(self, thread: dict) -> dict | None:
+        """Re-send the current instruction (after a stale reply), or say there is none."""
+        view = self.store.plan_view()
+        key = thread_key(thread)
+        now = float(self.store.meta().get("t_s", 0.0))
+        msg = await self._instruction(view, thread, key, now, force=True)
+        if msg is None:
+            msg, _ = await self.messenger.send_message(
+                thread, f"Thanks. That was an older message; nothing is scheduled for you right now. "
+                        f"We'll text you as soon as that changes. (plan v{view['version']})", view["version"])
+        return msg
 
     async def _info_request(self, view: dict, thread: dict, key: str) -> dict | None:
         for q in view.get("info_requests", []):

@@ -24,6 +24,7 @@ uv run pytest -q
 | `POST /optimize?seeds=20&k=4` → 202 | robust fan-out (top-k candidates × perturbed worlds + baseline; Daytona if engine/.env has a key, else local processes). Streams WS `scatter_point`, then `plan`. 409 while running; `GET /optimize` = `{running, last}` |
 | `POST /clock {t_s}` | move the sim clock (play / scrub); broadcasts `state` |
 | `GET /comparison?seeds=5` | baseline vs EMBER on paired perturbations (`comparison.schema.json`), cached per plan version (~3 s first call) |
+| `POST /assignments/{id}/confirm`, `/reject` `{plan_version?}` | the person accepts / declines an offer (texts "yes"/"no" take the same path). Reject → replan; that vehicle is never re-offered to them. 409 if `plan_version` is older and the assignment changed since (stale) |
 | `GET /phones`, `POST /phones {role, handle}` | tester phones by role (`resident` → the judge's household, `operator` → the critical hospital); POST creates the Photon shared-line assignment and returns `assigned_number` |
 | `POST /messages {thread, text, plan_version?, assignment_id?}` | send on a thread (gets the `[EMBER drill]` prefix); returns `delivery`: `sent` / `failed` / `not_opted_in` / `no_phone` / `dev` |
 | `POST /dev/reset` | reseed from `SEED_STATE` and broadcast `state` (rehearsals; `DEV_ENDPOINTS=0` hides it) |
@@ -55,6 +56,9 @@ Live accuracy: `uv run python scripts/eval_extract.py` on `tests/samples.json` (
 
 ## Outbound instructions
 After every plan version (`residents/outbound.py`), each opted-in phone thread is compared with the last instruction actually texted to it: a text goes out only if a vehicle is newly assigned / replaced, is no longer coming, or the ETA moved ≥ 10 min. Fixed templates over computed fields, `[EMBER drill]` prefix, `plan_version` + `assignment_id` on every message; the assignment becomes `offered` (WS `assignment` with `change: status_changed`). The plan's `info_requests` for a phone thread are asked once each (e.g. right after the tester's first "hi").
+
+## Confirm / reject
+A "yes"/"no" text is extracted as `confirm`/`reject` for the last instruction texted on that thread, carrying the plan version it answered. If the plan moved on and that assignment changed (gone / other vehicle / other target), nothing is applied and the latest instruction is re-sent. Confirm → `confirmed` on the stored raw plan (the allocator keeps confirmed work across replans) + ack text; a later material change to it is texted as "Update: …" without asking again. Reject → `rejected` + ack + replan; the backend never re-offers that vehicle to that thread and keeps re-proposed copies `rejected` (engine doesn't exclude declined pairs yet).
 
 ## WS events (`contracts/ws-events.schema.json`)
 `state` (full snapshot) · `plan` (a new plan version) · `assignment` (`{plan_version, change, assignment_id, assignment}`, one per changed assignment) · `message` · `report` · `metrics` · `scatter_point`.
