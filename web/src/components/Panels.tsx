@@ -130,7 +130,7 @@ function Ledger(props: { state: StateSnapshot }) {
               </td>
               <td><span className={`pill ${resource.status}`}>{statusLabel(resource.status)}</span></td>
               <td>{assignment ? targetLabel(assignment.target) : "—"}</td>
-              <td>{formatMinutes(resource.eta_s)}</td>
+              <td>{formatMinutes(resource.eta_s ?? assignment?.eta_s)}</td>
               <td>{formatNumber(resource.fuel_l, 1)} L</td>
             </tr>
           );
