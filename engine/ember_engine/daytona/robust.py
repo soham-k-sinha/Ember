@@ -80,5 +80,7 @@ def robust_plan(world, scn: dict, reports=(), t_now: float = 0.0, prev: dict | N
                                 "workers": getattr(pool, "n", None) or getattr(pool, "workers", None), "fanout_wall_s": round(fan_s, 2),
                                 "rule": f"best mean of the worst {int(WORST_SHARE * 100)}% of runs: people unreached, then overflow m³",
                                 "chosen": chosen.cid, "nominal_best": s.ranked[0].cid, "ranking": ranking}
+    if getattr(pool, "fell_back", False) and getattr(pool, "log", None):   # never fall back silently
+        plan["search"]["robust"]["fallback_reason"] = next((x for x in pool.log if "unavailable" in x), pool.log[-1])
     plan["search"]["wall_s"] = round(time.time() - t0, 3)
     return plan, points

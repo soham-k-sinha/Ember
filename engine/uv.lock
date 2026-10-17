@@ -418,6 +418,7 @@ name = "ember-engine"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "daytona" },
     { name = "geopandas" },
     { name = "jsonschema" },
     { name = "matplotlib" },
@@ -431,16 +432,13 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-daytona = [
-    { name = "daytona" },
-]
 dev = [
     { name = "pytest" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "daytona", marker = "extra == 'daytona'", specifier = ">=0.200" },
+    { name = "daytona", specifier = ">=0.200" },
     { name = "geopandas", specifier = ">=1.0" },
     { name = "jsonschema", specifier = ">=4.21" },
     { name = "matplotlib", specifier = ">=3.8" },
