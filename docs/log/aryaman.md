@@ -192,3 +192,11 @@ Run: uv run --project engine pytest -q engine/tests/test_replan_rules.py
 Interfaces: no contract change (uses existing status + cancelled_at_t_s). Soham: nothing to change; your workaround (keep re-proposed pairs `rejected`) becomes a no-op. Reseed (`POST /dev/reset`) for the new v1 (drop-offs at the Treehouse). `tests/test_listener.py::test_poll_once_hands_texts_over_and_advances` fails on main too (wall-clock dependent), not from this. Daytona snapshot → ember-engine-ce3bb66393 (live: 100 runs, 8 sandboxes, 11.6 s).
 Status: done. 93 engine tests (decline + confirm-order tests fail on the old engine); smoke OK; residents 128/129 (the unrelated listener test).
 Next: shared trips (several households per van trip).
+
+## 2026-10-17 06:10 · engine: shared trips (several households per van trip) · branch aryaman/shared-trips · commit (this PR)
+What: Soham's ask 2 (D59). Simulator: after a pickup the vehicle collects the next household on its queue first if ≤ 3 min by road, seats + accessibility fit and the drop-off is the same; one drop-off unloads everyone; failed/stalled chained pickups release the people aboard to the drop-off. Outcome gets `shared_after`; rationale says "shares the trip with household #…". Sim still ≈6 ms.
+Files: engine/ember_engine/sim/plan_sim.py, engine/ember_engine/allocator/explain.py, engine/tests/test_replan_rules.py, engine/data/allston_flood_v1.seed_state.json, docs/DECISIONS.md, docs/log/aryaman.md
+Run: uv run --project engine pytest -q engine/tests/test_replan_rules.py
+Interfaces: none (no contract change). Soham: a shared pickup is an ordinary assignment; its rationale names the household it shares with. Reseed for the new v1. Daytona snapshot → ember-engine-9634de9e37 (live: 100 runs, 8 sandboxes, 9.1 s).
+Status: done. 14 shared pickups in v1, vehicle-km 76 → 51. 5-seed compare: EMBER 86.2 vs baseline 56.4 (+29.8), −2,165 m³, −44 min, +19 vehicle-km. DEMO.md numbers need re-measuring (all four beats).
+Next: planner-side pooling estimate in construct (today only the simulator and local search know about it).

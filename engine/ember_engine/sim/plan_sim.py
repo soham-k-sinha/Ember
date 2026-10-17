@@ -27,6 +27,7 @@ from ..scenario import deadlines, flood_keyframes
 VEHICLES = {"van", "accessible_van", "truck"}
 UNLOAD_S = 120.0
 ABANDON_S = 900.0   # no open route to the target for this long → give up and take the next assignment
+POOL_DETOUR_S = 180.0   # after a pickup, a vehicle with seats collects its next household first if it is this close
 
 
 @dataclass
@@ -45,6 +46,7 @@ class Outcome:
     deadline_s: float | None = None
     met_deadline: bool | None = None
     people: int = 0
+    shared_after: str | None = None    # rescue: picked up on the same trip, right after this assignment
     route_edges: list = field(default_factory=list)
 
     def as_dict(self) -> dict:
@@ -192,11 +194,43 @@ def simulate(world, scn: dict, plan: dict, reports=(), perturbation: dict | None
     res = {}
     for x in scn["resources"]:
         start = fac_node(x["at_facility"]) if "at_facility" in x else world.node_index(x["node"])
-        res[x["id"]] = {"spec": x, "phase": "idle", "cur": None, "timer": 0.0, "on_board": 0, "failed": False,
+        res[x["id"]] = {"spec": x, "phase": "idle", "cur": None, "timer": 0.0, "on_board": 0, "failed": False, "aboard": [],
                         "mv": Mover(world, x["id"], start, speed_factor=float(x.get("speed_factor", 1.0)),
                                     fuel_l=float(x.get("fuel_l", float("inf"))), fuel_l_per_km=float(x.get("fuel_l_per_km", 0.0)),
                                     tt_mult=tt_mult)}
     fail = pert.get("resource_failure")   # {"resource_id": ..., "t_s": ...}
+
+    def to_dropoff(r, t, closed):
+        """Head for the drop-off of the people on board (after the last pickup of a trip, or a failed one)."""
+        first = r["aboard"][0]
+        r["mv"].go(fac_node(first.get("dropoff_facility_id") or base), closed)
+        r["phase"], r["cur"] = "to_dropoff", r["aboard"][-1]
+
+    def release(r, t, closed):
+        """The current leg ended without a pickup: drop off whoever is aboard, else go idle."""
+        if r["aboard"]:
+            to_dropoff(r, t, closed)
+        else:
+            r["phase"], r["cur"] = "idle", None
+
+    def pool_next(rid, r, t, closed):
+        """The vehicle's next rescue, if it is worth collecting before the drop-off (same drop-off, seats, access, close)."""
+        q = queues[rid]
+        b = q[0] if q else None
+        if b is None or b["task"] != "rescue" or cut_at(b) is not None or float(b.get("not_before_t_s") or 0.0) > t:
+            return None
+        if (b.get("dropoff_facility_id") or base) != (r["aboard"][0].get("dropoff_facility_id") or base):
+            return None
+        h = hh.get(b["target"].get("household_id"))
+        if h is None or h["needs"] == "unknown" or h["status"] in ("picked_up", "safe"):
+            return None
+        need, spec = h["needs"], r["spec"]
+        if (need.get("mobility") or need.get("accessible_vehicle")) and not spec.get("accessible"):
+            return None
+        if need["people"] + r["on_board"] > spec.get("capacity_people", 0):
+            return None
+        secs = world.route(r["mv"].node, h["node"], closed)[1] / float(spec.get("speed_factor", 1.0))
+        return b if secs <= POOL_DETOUR_S else None
 
     events: list[dict] = []
     revs = _report_events(scn, reports, float(pert.get("report_delay_s", 0.0)))
@@ -300,19 +334,23 @@ def simulate(world, scn: dict, plan: dict, reports=(), perturbation: dict | None
                 if st == "stalled" and r["phase"] == "to_target" and t + dt - r["stall_since"] >= ABANDON_S:
                     finish(out[r["cur"]["id"]], "incomplete", t, f"no open route to the target for {ABANDON_S/60:.0f} min")
                     mv.dest, mv.route = None, []
-                    r["phase"], r["cur"], r["last"] = "idle", None, None
+                    r["last"] = None
+                    release(r, t, closed)
                     continue
                 if st != "arrived":
                     continue
                 a, o = r["cur"], out[r["cur"]["id"]]
-                if r["phase"] == "to_dropoff":   # unload at the base
-                    hid = a["target"]["household_id"]
-                    hh[hid]["status"], hh[hid]["safe_t"] = "safe", t + UNLOAD_S
-                    on_site[a.get("dropoff_facility_id") or base] = on_site.get(a.get("dropoff_facility_id") or base, 0) + r["on_board"]
-                    r["on_board"] = 0
-                    o.complete_t = t + UNLOAD_S
-                    finish(o, "done", t + UNLOAD_S)
-                    events.append({"t_s": t, "kind": "dropoff", "assignment_id": a["id"], "household_id": hid})
+                if r["phase"] == "to_dropoff":   # unload everyone on this trip
+                    drop = r["aboard"][0].get("dropoff_facility_id") or base
+                    for b_ in r["aboard"]:
+                        hid = b_["target"]["household_id"]
+                        hh[hid]["status"], hh[hid]["safe_t"] = "safe", t + UNLOAD_S
+                        ob = out[b_["id"]]
+                        ob.complete_t = t + UNLOAD_S
+                        finish(ob, "done", t + UNLOAD_S)
+                        events.append({"t_s": t, "kind": "dropoff", "assignment_id": b_["id"], "household_id": hid, "facility_id": drop})
+                    on_site[drop] = on_site.get(drop, 0) + r["on_board"]
+                    r["on_board"], r["aboard"] = 0, []
                     r["phase"], r["timer"], r["cur"] = "unload", UNLOAD_S, a
                     continue
                 o.arrive_t = t
@@ -321,17 +359,17 @@ def simulate(world, scn: dict, plan: dict, reports=(), perturbation: dict | None
                     h = hh[tgt["household_id"]]
                     need = h["needs"]
                     if h["status"] in ("picked_up", "safe"):
-                        finish(o, "infeasible", t, "already picked up by another resource"); r["phase"], r["cur"] = "idle", None
+                        finish(o, "infeasible", t, "already picked up by another resource"); release(r, t, closed)
                         continue
                     if need == "unknown":
-                        finish(o, "incomplete", t, "needs unknown on arrival"); r["phase"], r["cur"] = "idle", None
+                        finish(o, "incomplete", t, "needs unknown on arrival"); release(r, t, closed)
                         continue
                     if (need.get("mobility") or need.get("accessible_vehicle")) and not spec.get("accessible"):
-                        finish(o, "infeasible", t, "needs an accessible vehicle"); r["phase"], r["cur"] = "idle", None
+                        finish(o, "infeasible", t, "needs an accessible vehicle"); release(r, t, closed)
                         continue
                     if need["people"] + r["on_board"] > spec.get("capacity_people", 0):
                         finish(o, "infeasible", t, f"{need['people']} people > capacity {spec.get('capacity_people', 0)}")
-                        r["phase"], r["cur"] = "idle", None
+                        release(r, t, closed)
                         continue
                     r["phase"], r["timer"] = "service", float(spec.get("service_s", 300))
                 elif a["task"] == "protect":
@@ -363,11 +401,21 @@ def simulate(world, scn: dict, plan: dict, reports=(), perturbation: dict | None
                     o.met_deadline = h["deadline"] is None or done_t <= h["deadline"]
                     h["status"], h["pickup_t"] = "picked_up", done_t
                     r["on_board"] += o.people
+                    r["aboard"].append(a)
                     events.append({"t_s": done_t, "kind": "pickup", "assignment_id": a["id"], "household_id": hid, "people": o.people,
                                    "met_deadline": o.met_deadline})
-                    dest = fac_node(a.get("dropoff_facility_id") or base)
-                    mv.go(dest, closed)
-                    r["phase"] = "to_dropoff"
+                    nxt = pool_next(rid, r, t, closed)
+                    if nxt is None:
+                        to_dropoff(r, t, closed)
+                    else:   # shared trip: collect the next household before the drop-off
+                        queues[rid].pop(0)
+                        o2 = out[nxt["id"]]
+                        r["cur"], o2.start_t, o2.shared_after = nxt, t, a["id"]
+                        o2.deadline_s = hh[nxt["target"]["household_id"]]["deadline"]
+                        mv.go(hh[nxt["target"]["household_id"]]["node"], closed)
+                        o2.route_edges, o2.status = list(mv.route), "en_route"
+                        r["phase"] = "to_target"
+                        events.append({"t_s": t, "kind": "dispatch", "assignment_id": nxt["id"], "resource_id": rid, "shared_after": a["id"]})
                 elif a["task"] == "protect":
                     fid = a["target"]["facility_id"]
                     fm.connect_generator(fid, rid)
