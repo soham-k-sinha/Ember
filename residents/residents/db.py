@@ -257,13 +257,20 @@ class Store:
         )
 
     def clear_scenario(self) -> None:
-        """Drop all scenario state (engine mode reseed). Phones and kv stay."""
+        """Drop all scenario state (engine mode reseed). Phones and kv stay, except: a phone that was
+        placed by texting its location goes back to waiting for a location (its household was part of
+        the run), and the households added that way are dropped (kv `extra_households`)."""
         with self._tx() as db:
             for t in ("meta", "closures", "households", "facilities", "resources", "reports", "plans", "assignments", "messages"):
                 db.execute(f"DELETE FROM {t}")
             db.execute("DELETE FROM sqlite_sequence WHERE name IN ('reports', 'messages')")
-            # per-run conversation memory: half-answered questions, last instruction texted, questions asked
-            for prefix in ("pending:", "instr:", "asked:", "rejected:"):
+            located = [r["key"][len("located:"):] for r in db.execute("SELECT key FROM kv WHERE key LIKE 'located:%'")]
+            for handle in located:
+                db.execute("UPDATE phones SET thread_key = NULL WHERE handle = ?", (handle,))
+            db.execute("DELETE FROM kv WHERE key = 'extra_households'")
+            # per-run conversation memory: half-answered questions, last instruction texted, questions asked,
+            # step-by-step directions, where located phones were placed, pre-placement chat
+            for prefix in ("pending:", "instr:", "asked:", "rejected:", "guide:", "located:", "lobby:", "welcomed:"):
                 db.execute("DELETE FROM kv WHERE key LIKE ?", (prefix + "%",))
 
     def apply_snapshot(self, state: dict) -> None:
@@ -440,6 +447,14 @@ class Store:
 
     def phones(self) -> list[dict]:
         return [dict(r) for r in self._rows("SELECT * FROM phones ORDER BY role, thread_key, handle")]
+
+    def unplace_phone(self, handle: str) -> None:
+        """Back to waiting for a location (thread_key NULL, scenario kept so it isn't legacy-bound)."""
+        with self._tx() as db:
+            db.execute("UPDATE phones SET thread_key = NULL WHERE handle = ?", (handle,))
+
+    def kv_prefix(self, prefix: str) -> dict[str, str]:
+        return {r["key"]: r["value"] for r in self._rows("SELECT key, value FROM kv WHERE key LIKE ? ORDER BY key", (prefix + "%",))}
 
     def kv_get(self, key: str, default: str | None = None) -> str | None:
         rows = self._rows("SELECT value FROM kv WHERE key = ?", (key,))

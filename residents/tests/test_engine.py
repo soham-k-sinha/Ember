@@ -213,7 +213,7 @@ def test_plan_hooks_get_the_new_version(ec):
 def test_restart_keeps_plans_reset_replans(esettings, bridge):
     with TestClient(create_app(esettings, bridge=bridge)) as c:
         c.post("/reports", json=judge_need())
-        c.post("/phones", json={"role": "resident", "handle": "4133620520"})
+        c.post("/phones", json={"role": "resident", "handle": "6175550120"})
     with TestClient(create_app(esettings, bridge=bridge)) as c:  # restart: same DB, no reseed
         assert c.get("/health").json()["plan_version"] == 2 and len(c.get("/state").json()["reports"]) == 1
         assert c.post("/dev/reset").json()["plan_version"] == 1
@@ -228,7 +228,7 @@ def test_restart_keeps_plans_reset_replans(esettings, bridge):
 def test_fresh_start_asks_the_judge(esettings, bridge):
     from dataclasses import replace as _r
     with TestClient(create_app(esettings, bridge=bridge)) as c:
-        c.post("/phones", json={"role": "resident", "handle": "4133620520"})
+        c.post("/phones", json={"role": "resident", "handle": "6175550120"})
     with TestClient(create_app(_r(esettings, reset_on_start=True), bridge=bridge)) as c:  # RESET_ON_START=1 (DEMO.md)
         outs = [m for m in c.get("/state").json()["messages"] if m["direction"] == "out"]
         assert len(outs) == 1 and "wheelchair-accessible vehicle" in outs[0]["text"] and outs[0]["thread"] == {"household_id": JUDGE}

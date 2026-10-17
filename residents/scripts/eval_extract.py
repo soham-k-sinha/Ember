@@ -37,7 +37,7 @@ def check(sample: dict, ex) -> list[str]:
             continue
         facts = [f for f in ex.facts if getattr(f, key, None) is not None] or ex.facts
         got = getattr(facts[0], key, None) if facts else None
-        if key in ("road_hint", "cross_street") and got is not None and want is not None:
+        if key in ("road_hint", "cross_street", "address") and got is not None and want is not None:
             ok = normalize_street(want) in normalize_street(got) or normalize_street(got) in normalize_street(want)
         elif isinstance(want, float) or key == "endurance_min":
             ok = got is not None and abs(float(got) - float(want)) < 0.5
@@ -79,7 +79,7 @@ async def main() -> int:
               + (f"  ask={ex.clarifying_question!r}" if ex.clarifying_question else "") + (f"\n      ✗ {', '.join(errs)}" if errs else ""))
     print(f"\n{passed}/{len(samples)} correct ({100 * passed / len(samples):.0f}%) · model {a.model} effort {a.effort} · "
           f"latency median {statistics.median(lat):.1f}s, max {max(lat):.1f}s")
-    return 0 if passed >= 18 else 1
+    return 0 if passed >= len(samples) - 3 else 1
 
 
 if __name__ == "__main__":

@@ -45,3 +45,9 @@ class Settings:
     # The one LLM call (text → report). On when engine mode is on and a key is set.
     extract_enabled: bool = field(default_factory=lambda: _flag("EXTRACT_ENABLED", True))
     anthropic_api_key: str = field(default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY", ""))
+    # Residents who text their location (D56): address lookups through OSM Nominatim (off in tests).
+    geocode_enabled: bool = field(default_factory=lambda: _flag("GEOCODE", True))
+    # The drill: no synthetic scenario households (only the people who text in), and a DONE from the last
+    # person anyone waited on moves the sim clock to the next step.
+    drill_solo: bool = field(default_factory=lambda: _flag("DRILL_SOLO", False))
+    auto_clock: bool = field(default_factory=lambda: _flag("AUTO_CLOCK", False))

@@ -19,8 +19,8 @@ from tests.test_extract import FakeLLM, ex, fact
 def oc(settings, bridge):  # noqa: F811
     s = replace(settings, scenario=SCENARIO)
     with TestClient(create_app(s, bridge=bridge)) as c:
-        c.post("/phones", json={"role": "resident", "handle": "4133620520"})   # Photon off → delivery "dev"
-        c.post("/phones", json={"role": "operator", "handle": "4134094408"})
+        c.post("/phones", json={"role": "resident", "handle": "6175550120"})   # Photon off → delivery "dev"
+        c.post("/phones", json={"role": "operator", "handle": "6175550140"})
         yield c
 
 
@@ -96,7 +96,7 @@ def test_info_request_asked_once_after_hi(settings, bridge):  # noqa: F811
     llm = FakeLLM({"hi": ex(fact("other")), "hello?": ex(fact("other"))})
     s = replace(settings, scenario=SCENARIO, extract_enabled=True)
     with TestClient(create_app(s, bridge=bridge, llm=llm)) as c:
-        c.post("/phones", json={"role": "resident", "handle": "4133620520"})
+        c.post("/phones", json={"role": "resident", "handle": "6175550120"})
         q = next(q for q in c.get("/state").json()["plan"]["info_requests"] if q["to"] == {"household_id": JUDGE})
         c.post("/dev/inbound", json={"role": "resident", "text": "hi"})
         assert [m["text"] for m in outs(c, {"household_id": JUDGE})] == [f"[EMBER drill] {q['question']}"]

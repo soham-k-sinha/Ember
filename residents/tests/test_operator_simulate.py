@@ -19,8 +19,8 @@ def oc(settings, bridge):  # noqa: F811
     llm = FakeLLM({"about 90 minutes of diesel": ex(fact("facility_status", endurance_min=90)), "hi": ex(fact("other"))})
     s = replace(settings, scenario=SCENARIO, extract_enabled=True)
     with TestClient(create_app(s, bridge=bridge, llm=llm)) as c:
-        c.post("/phones", json={"role": "operator", "handle": "4134094408"})
-        c.post("/phones", json={"role": "resident", "handle": "4133620520"})
+        c.post("/phones", json={"role": "operator", "handle": "6175550140"})
+        c.post("/phones", json={"role": "resident", "handle": "6175550120"})
         yield c
 
 

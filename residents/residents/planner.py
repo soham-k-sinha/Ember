@@ -29,6 +29,8 @@ log = logging.getLogger("residents.planner")
 
 # Called after a new plan version is live: (plan_view, raw plan). Task 4 sends changed instructions here.
 PlanHook = Callable[[dict, dict], Awaitable[Any]]
+# Called after the clock moved (POST /clock, the drill): step-by-step directions that became due go out.
+ClockHook = Callable[[], Awaitable[Any]]
 
 
 class ReportError(ValueError):
@@ -44,6 +46,7 @@ class Planner:
         self.store, self.hub, self.bridge = store, hub, bridge
         self.lock = asyncio.Lock()
         self.plan_hooks: list[PlanHook] = []
+        self.clock_hooks: list[ClockHook] = []
         self._comparison: tuple[tuple, dict] | None = None
         self._optimizing = False
         self.last_optimize: dict | None = None
@@ -58,6 +61,7 @@ class Planner:
         reset, as DEMO.md expects)."""
         async with self.lock:
             self.store.clear_scenario()
+            await run_in_threadpool(self.bridge.set_extra_households, [])  # households texted in belong to the run
             # texts sent before this moment belong to the previous run (see Messenger._before_this_run)
             self.store.kv_set("run_started_at", datetime.now(timezone.utc).isoformat())
             plan = await run_in_threadpool(self.bridge.plan, [], 0.0, None, None, "initial plan")
@@ -106,7 +110,33 @@ class Planner:
         async with self.lock:
             state = await self._refresh(t_s)
         await self.hub.broadcast("state", state, state["t_s"])
+        for hook in self.clock_hooks:
+            try:
+                await hook()
+            except Exception:  # noqa: BLE001 - a messaging failure must not break the clock
+                log.exception("clock hook failed at t=%.0f", t_s)
         return state
+
+    # ---------- households added at runtime (a resident texted their location, D56) ----------
+    def extra_households(self) -> list[dict]:
+        return json.loads(self.store.kv_get("extra_households") or "[]")
+
+    async def restore_households(self) -> None:
+        """After a restart: give the engine back the households this run added (kv is the record)."""
+        extra = self.extra_households()
+        if extra:
+            await run_in_threadpool(self.bridge.set_extra_households, extra)
+            log.info("restored %d household(s) added by location texts", len(extra))
+
+    async def add_household(self, entry: dict) -> None:
+        """Make a town building an assisted household of this run (needs unknown). The caller replans."""
+        async with self.lock:
+            extra = self.extra_households()
+            if any(h["household_id"] == entry["household_id"] for h in extra):
+                raise ReportError(f"household {entry['household_id']} was already added")
+            extra.append(entry)
+            await run_in_threadpool(self.bridge.set_extra_households, extra)
+            self.store.kv_set("extra_households", json.dumps(extra))
 
     # ---------- reports → replan ----------
     async def submit_report(self, report: dict, replan: bool = True) -> tuple[dict, dict | None]:
