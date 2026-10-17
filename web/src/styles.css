@@ -150,6 +150,24 @@ h3 { font-size: 11px; margin-top: 10px; letter-spacing: 0.08em; text-transform: 
 }
 .presets button:hover, .chip:hover { border-color: var(--accent); }
 .chip.following { border-color: var(--accent); color: var(--accent); }
+.chip.warn { border-color: #6b2b2b; color: #ff9a8a; }
+.credits {
+  position: absolute;
+  z-index: 2;
+  right: 8px;
+  bottom: 6px;
+  max-width: 60%;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(10, 13, 20, 0.72);
+  color: #c9d3e1;
+  font-size: 10.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.credits strong { font-weight: 700; letter-spacing: 0.01em; }
 
 .legend-card {
   position: absolute;

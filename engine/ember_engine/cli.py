@@ -379,6 +379,24 @@ def cmd_playback(a):
     print(f"[playback] {a.plan}: {sum(len(t['path']) for t in pb['tracks'])} track points → {out}")
 
 
+def cmd_diorama(a):
+    """Real buildings, trees, land use, water and paths for a rectangle around the venue → web/public/diorama/<name>.json."""
+    from .diorama import build, rect_around
+    town = json.loads(_ensure_town().read_text())
+    v = town["venue"]
+    bbox = rect_around(v["lon"], v["lat"], a.half_w, a.half_h, a.dx, a.dy)
+    t0 = time.time()
+    out = build(bbox, DATA / "diorama_raw" / a.name, (v["lon"], v["lat"]))
+    path = ROOT / "web" / "public" / "diorama" / f"{a.name}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(out, separators=(",", ":"), allow_nan=False))
+    src = {}
+    for b in out["buildings"]:
+        src[b["src"]] = src.get(b["src"], 0) + 1
+    print(f"[diorama] {a.name}: bbox {bbox} · {out['counts']} · buildings by source {src} · "
+          f"{path.stat().st_size // 1024} KB · {time.time() - t0:.1f}s → {path}")
+
+
 def cmd_validate_state(a):
     """Check a state snapshot (e.g. the backend's GET /state) against state.schema.json and town ids."""
     from .scenario import load_scenario
@@ -444,6 +462,11 @@ def main(argv=None):
     pb.add_argument("--report", action="append"); pb.add_argument("--out", default=None)
     pb.add_argument("--fixtures", action="store_true", help="write contracts/fixtures/playback{,.baseline}.fixture.json for allston_flood_v1")
     pb.set_defaults(f=cmd_playback)
+    dg = sp.add_parser("diorama", help="real buildings/trees/ground around the venue for the web's 3D model (D52)")
+    dg.add_argument("--name", default="test"); dg.add_argument("--half-w", type=float, default=700.0)
+    dg.add_argument("--half-h", type=float, default=500.0); dg.add_argument("--dx", type=float, default=200.0)
+    dg.add_argument("--dy", type=float, default=150.0)
+    dg.set_defaults(f=cmd_diorama)
     al = sp.add_parser("allocate", help="EMBER plan (initial + replan at every report)")
     al.add_argument("--scenario", required=True); al.add_argument("--report", action="append"); al.add_argument("--seed", type=int, default=0)
     al.add_argument("--out", default=None); al.add_argument("--versions-out", default=None); al.set_defaults(f=cmd_allocate)
