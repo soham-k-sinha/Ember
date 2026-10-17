@@ -67,3 +67,11 @@ Notes for Anshuman (scenario tuning, not engine bugs):
   - Overflow: the baseline also ends at 0 m³ because storage doesn't fill before 180 min even with a reactive generator. Smaller storage_max_m3 or higher inflow makes the dependency-first story show up in the comparison.
   - Infrastructure beat that already works (test): an operator report "10 min of backup left" at 50 min moves the generator from the pumping station to the hospital; hospital outage 15 min → 0, overflow 0 → 2,000 m³, stated in the rationale.
 Next: task 9 Daytona fan-out.
+
+## 2026-10-17 12:10 · ws-events contract moved to contracts/ + scatter_point proposal · branch aryaman/ws-events · commit (this PR)
+What: Soham's `residents/ws-events.schema.json` copied to `contracts/ws-events.schema.json` (envelope + event shapes unchanged); `scatter_point` filled in from the engine side; one example envelope per type in `contracts/fixtures/ws-events.fixture.json`; `compare.scatter_points()` emits the shape; test validates every example.
+Files: contracts/ws-events.schema.json, contracts/fixtures/ws-events.fixture.json, contracts/README.md, engine/ember_engine/{compare,cli}.py, engine/tests/test_contracts.py
+Run: uv run --project engine pytest -q engine/tests/test_contracts.py
+Interfaces: ws-events v (D38, proposed). Soham: please review scatter_point; after this merges, drop residents/ws-events.schema.json in your PR and renumber your D33/D34 to D36/D37 (main already has D33–D35). Arnav: build the WS client against contracts/ws-events.schema.json + the example fixture.
+Status: PR open, waiting on Soham's OK on scatter_point.
+Next: task 9 Daytona fan-out (emits these scatter points).

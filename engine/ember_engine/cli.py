@@ -110,6 +110,23 @@ def cmd_gate_a(a):
         sys.exit(1)
 
 
+def _ws_examples(state: dict, points: list) -> list:
+    """One example envelope per WS event type (contracts/ws-events.schema.json), built from the other fixtures."""
+    t = state["t_s"]
+    plan = state["plan"]
+    a = plan["assignments"][0]
+    ev = [("state", state), ("plan", plan),
+          ("assignment", {"plan_version": plan["version"], "change": "added", "assignment_id": a["id"], "assignment": a}),
+          ("assignment", {"plan_version": plan["version"], "change": "removed", "assignment_id": "a-example-removed", "assignment": None}),
+          ("metrics", state["metrics"])]
+    if state["messages"]:
+        ev.append(("message", state["messages"][0]))
+    if state["reports"]:
+        ev.append(("report", state["reports"][0]))
+    ev += [("scatter_point", p) for p in points]
+    return [{"type": k, "seq": i, "t_s": t, "data": d} for i, (k, d) in enumerate(ev)]
+
+
 def cmd_fixtures(a):
     """Write small fixtures into contracts/fixtures from the current data/."""
     import copy
@@ -138,8 +155,11 @@ def cmd_fixtures(a):
     scn = example_scenario(town)
     (fx / "scenario.fixture.json").write_text(json.dumps(scn, indent=1))
     (fx / "state.fixture.json").write_text(json.dumps(example_state(town, scn), indent=1))
-    from .compare import compare
-    (fx / "comparison.fixture.json").write_text(json.dumps(compare(World.from_dict(town), scn, seeds=3), indent=1))
+    from .compare import compare, scatter_points
+    cmp_ = compare(World.from_dict(town), scn, seeds=3)
+    (fx / "comparison.fixture.json").write_text(json.dumps(cmp_, indent=1))
+    (fx / "ws-events.fixture.json").write_text(json.dumps(_ws_examples(json.loads((fx / "state.fixture.json").read_text()),
+                                                                       scatter_points(cmp_)[:2]), separators=(",", ":")))
     print(f"[fixtures] wrote to {fx}")
 
 
