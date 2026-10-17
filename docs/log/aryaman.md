@@ -160,3 +160,11 @@ Run: uv run --project engine pytest -q engine/tests/test_demo_beats.py ; DEMO.md
 Interfaces: none. Soham: please confirm (a) the operator text extracts to facility_status mt-auburn {state: backup, backup_endurance_s: 600}, (b) the resident phone gets q-10296 on startup without a /replan; both are on the QA list.
 Status: done. 86 engine tests.
 Next: docs/QA.md.
+
+## 2026-10-17 03:05 · docs/QA.md · branch aryaman/qa-md · commit (this PR)
+What: HANDOFF issue 4. Row-per-action checklist for the 8 PM run-through, following DEMO.md: setup (tests, keys by name, snapshot, health, phones opted in, Live, clock 5:00, judge's opening question), then every click/text in beats 1–6 with the measured expected value, owner, blocker/fallback and a ✓ column; reset between rehearsals. DEMO.md beat 3 now says "Run comparison" (the web already fetches GET /comparison live, ~3 s).
+Files: docs/QA.md, docs/DEMO.md, docs/log/aryaman.md
+Run: print docs/QA.md at 8 PM.
+Interfaces: none.
+Status: done. Gap found: the web has no Optimize button (beat 5 uses the curl until HANDOFF issue 6 adds it).
+Next: Devpost draft (docs/devpost/).
