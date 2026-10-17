@@ -378,8 +378,8 @@ def example_scenario(town: dict) -> dict:
     dry = [h for h, i, t in zip(sample, inside, t_flood) if i and np.isnan(t)]
     picked = wet[:: max(1, len(wet) // 32)][:32] + dry[:: max(1, len(dry) // 8)][:8]
     t_of = {h["id"]: t for h, t in zip(sample, t_flood)}
-    # judge: a household whose street floods mid-storm (the demo beat happens before its deadline)
-    mid = [h for h in picked if 5400 <= (t_of.get(h["id"]) or 0) <= 9000]
+    # judge: a household whose street floods late (deadline ≈ 135 min), so the demo beat lands before it
+    mid = [h for h in picked if (t_of.get(h["id"]) or 0) == 9000]
     judge = (mid or picked)[0]["id"]
     others = [h["id"] for h in picked if h["id"] != judge]
     unknown = {judge, *others[3:6]}   # 4 unknown incl. the judge

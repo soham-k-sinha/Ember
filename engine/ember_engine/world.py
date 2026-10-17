@@ -177,6 +177,37 @@ class World:
         next_edge[self.exits] = -2   # -2 = at exit
         return next_edge, dist
 
+    def route(self, src: int, dst: int, closed: np.ndarray | None = None,
+              weight: np.ndarray | None = None) -> tuple[list[int], float]:
+        """Shortest open route between node indices: (edge indices in order, seconds). ([], inf) if none."""
+        if src == dst:
+            return [], 0.0
+        N = self.n_nodes
+        w = (self.edge_tt if weight is None else np.asarray(weight, dtype=np.float64)).copy()
+        if closed is not None and closed.any():
+            w = np.where(closed, np.inf, w)
+        ok = np.isfinite(w) & (self.edge_u != self.edge_v)
+        ei = np.where(ok)[0]
+        ei = ei[np.lexsort((w[ei], self.edge_v[ei], self.edge_u[ei]))]   # parallel edges: keep the fastest
+        pair = self.edge_u[ei] * N + self.edge_v[ei]
+        first = np.ones(len(ei), dtype=bool); first[1:] = pair[1:] != pair[:-1]
+        ei = ei[first]
+        g = csr_matrix((w[ei], (self.edge_u[ei], self.edge_v[ei])), shape=(N, N))
+        dist, pred = dijkstra(g, directed=True, indices=src, return_predecessors=True)
+        if not np.isfinite(dist[dst]):
+            return [], float("inf")
+        best = {(int(self.edge_u[e]), int(self.edge_v[e])): int(e) for e in ei}
+        path, n = [], dst
+        while n != src:
+            p = int(pred[n]); path.append(best[(p, n)]); n = p
+        return path[::-1], float(dist[dst])
+
+    def node_index(self, osm_id: int) -> int:
+        """OSM node id → node index (KeyError if not in the town)."""
+        if "_nidx" not in self.__dict__:
+            self.__dict__["_nidx"] = {int(n): i for i, n in enumerate(self.node_id)}
+        return self.__dict__["_nidx"][int(osm_id)]
+
     # ---------- geometry ----------
     def edge_pos_to_xy(self, edge: np.ndarray, pos_m: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """(edge index, meters along edge) → local x,y. Vectorized."""
