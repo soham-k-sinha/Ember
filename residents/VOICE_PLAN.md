@@ -156,24 +156,84 @@ separate decision, made only with the eval.
 **Barge-in:** allowed, except during the opener and the SAFETY text. A "yes" spoken over a long offer cuts it off and
 is handled.
 
-## 6. Provisioning (one-time; needs Soham)
-1. **Photon:** add a payment method to the organization. Then `ember-voice-setup --buy --area-code 617` buys **one**
-   US number (Idempotency-Key, poll the operation), creates the default voice profile, assigns the line, and enables
-   outbound with SHA-256.
-   - The script writes the SIP username and password to `residents/.env` **once**; they can't be fetched again, only
-     rotated.
-   - Check first that the API key has `platforms:write`.
-2. **LiveKit Cloud:** Soham creates a free project. `LIVEKIT_URL`, `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` go into
-   `residents/.env`. Then `ember-voice-setup --apply`:
-   - creates the outbound trunk (`sip.photon.codes:5061`, TLS, numbers = the Photon number, Photon outbound
-     credentials, media encryption on) → `LIVEKIT_SIP_TRUNK_ID`;
-   - creates the inbound trunk + an *individual* dispatch rule (room prefix `ember-call-`, agent `ember-voice`);
-   - sets Photon inbound to `sips:<project>.sip.livekit.cloud` with the inbound credentials.
-3. **Speech:** LiveKit Inference by default (no extra keys). Or `DEEPGRAM_API_KEY` / `CARTESIA_API_KEY` / `XAI_API_KEY`
-   if the credits run out or Grok is wanted.
-4. **New settings** (config.py + `.env.example` + HANDOFF §6): `VOICE_ENABLED` (default 0), `LIVEKIT_*`,
-   `LIVEKIT_SIP_TRUNK_ID`, `PHOTON_VOICE_NUMBER`, `VOICE_MAX_CONCURRENT`, `VOICE_CALLBACK_S`, `VOICE_STT`, `VOICE_TTS`.
-   Secrets only in `.env`; numbers never in git.
+## 6. Exact setup steps (one-time, about 30 min; Soham clicks, nothing here texts or calls anyone)
+**Photon's hackathon guidelines:**
+- "Voice: phone calls run on an SMS number, not on iMessage. Add an SMS number to your project, set up a Voice
+  profile, and connect it over SIP to Retell, ElevenLabs, LiveKit, or Twilio."
+- "the beta is free to use".
+- **Best Voice Agent** ($300 + $100 credits): "real phone calls in and out", judged on "natural turn-taking, low latency,
+  and an agent that remembers the call when the conversation moves back to text". Our design does that by
+  construction: the call and the texts are one thread.
+
+**A. Photon** (app.photon.codes → project `pho_prj_…`, the one in `residents/.env`)
+1. **Add an SMS number.** SMS → buy/add a US number, area code 617 if offered. If it asks for a card or shows a
+   price, stop and decide. The API docs say outbound calls need a payment method (402 ENTITLEMENT_REQUIRED otherwise).
+2. **Voice → Lines:** the new number appears. If there's no default profile: **Set up default → SIP → Create
+   profile**. The line uses the default profile.
+3. **Voice profile → Outbound calls:**
+   - Digest algorithm **SHA-256** → **Enable outbound**.
+   - **Copy the password now** (it's shown once), then **I saved it**.
+   - Also copy the **Username** and the **SIP connection** server + TLS port, e.g. `sip.photon.codes:5061`. Use the
+     SIP connection, *not* the realm.
+4. Leave inbound for step C.
+
+**B. LiveKit Cloud** (cloud.livekit.io, free "Build" plan, no card)
+1. **Create a project.** Settings → API keys → create one. Copy `LIVEKIT_URL` (`wss://<project>.livekit.cloud`),
+   `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`. Also note the project's **SIP URI** (`<id>.sip.livekit.cloud`).
+2. **Telephony → SIP trunks → Create new trunk → Outbound:**
+
+   | Field | Value |
+   |---|---|
+   | Address | `sip.photon.codes:5061`, no `sip:` prefix (the value from A3) |
+   | Transport | **TLS** |
+   | Numbers | the Photon number, `+1617…` (this is the caller ID) |
+   | Media encryption | **enabled** |
+   | Username / Password | the Photon outbound ones from A3 |
+
+   Copy the trunk id `ST_…`.
+3. **Telephony → SIP trunks → Create new trunk → Inbound.** In the JSON editor:
+   ```json
+   {"name": "photon-inbound", "numbers": ["+1617…"],
+    "authUsername": "<pick one>", "authPassword": "<pick a long one>",
+    "mediaEncryption": "SIP_MEDIA_ENCRYPT_ALLOW"}
+   ```
+   Leave Allowed addresses empty.
+4. **Telephony → Dispatch rules → Create:**
+   - type **Individual**, room prefix `ember-call-`, trunk = photon-inbound;
+   - **Add agent** `ember-voice`, with **Restart on failure**.
+
+**C. Photon inbound** (Voice profile → Inbound calls → Enable inbound)
+- **SIP address:** `sips:<id>.sip.livekit.cloud` (from B1)
+- **Transport:** TLS
+- **SIP username / password:** the `authUsername` / `authPassword` from B3 (not the Photon outbound ones)
+- **Media encryption:** Auto
+
+**D. `residents/.env`** (gitignored; never commit). Add:
+```
+VOICE_ENABLED = 1
+PHOTON_VOICE_NUMBER = +1617…
+LIVEKIT_URL = wss://<project>.livekit.cloud
+LIVEKIT_API_KEY = …
+LIVEKIT_API_SECRET = …
+LIVEKIT_SIP_TRUNK_ID = ST_…
+```
+- Keep the Photon outbound password only in LiveKit (our code never needs it); a password manager is fine as a backup.
+- Speech-to-text and text-to-speech come from LiveKit Inference (no extra key; $2.50 free ≈ 50 min). For more
+  minutes or Grok: `DEEPGRAM_API_KEY` / `CARTESIA_API_KEY` / `XAI_API_KEY`.
+
+**E. Check before any code** (the setup alone proves nothing: "A saved SIP destination is not proof of a working call")
+- In LiveKit's dashboard, **Telephony → Calls** / the CLI: `lk sip participant create` with `sip_call_to` = Soham's
+  phone, `wait_until_answered: true`. His phone rings and shows the Photon number. Answer, then hang up: silence is
+  expected (no agent yet).
+- Call the Photon number from another phone: LiveKit shows a room `ember-call-…`. It's silent until the worker runs.
+- Then Photon → **Voice → Recent calls** shows both.
+- iPhone testers: save the Photon number as a contact, or turn off *Silence Unknown Callers*.
+
+**Why LiveKit over ElevenLabs** (Photon's quick-start uses ElevenLabs):
+- ElevenLabs' agent writes its own replies with its own LLM, which breaks D46 and the text/voice parity.
+- Driving it from our backend needs its custom-LLM webhook, i.e. a public URL / tunnel from the laptop.
+- Its free tier has few agent minutes.
+- LiveKit's worker dials out (no tunnel), lets our code supply every sentence, and its free plan covers the drill.
 
 ## 7. Proving it works the same (tests, in this order)
 1. **Speech unit tests:** golden renders for every outbound template (offers, steps, statuses, D60 answers, SAFETY,
@@ -243,8 +303,8 @@ is handled.
   iMessage. This is honest in the write-up, but then the "best voice agent on a Photon number" prize is out.
 
 ## 11. Decisions needed from Soham
-1. **Spend:** add a payment method to Photon and buy one 617 number (plus usage at about $0.013/min)? Required for any
-   Photon voice.
+1. **Number:** add the SMS number in Photon (§6 A1; the beta is free, but stop if it asks for a card). Outbound calls
+   may need a payment method.
 2. **LiveKit:** create the free LiveKit Cloud project and put its keys in `residents/.env`? (Recommended over
    ElevenLabs/Retell for the reasons in §0 and §2.)
 3. **Voice provider:** LiveKit Inference (default), or Grok TTS for the SpaceXAI track?
