@@ -1,223 +1,187 @@
 /**
- * The static stage, drawn once: a white-clay model of the real district (D52). The city is the setting,
- * so it is quiet on purpose: off-white buildings, sage parks, a thin tree layer, strong blue water.
- * The resources and the flood (drawn by IsoView) carry the colour.
+ * The static stage, built once from the real district (D52): a model slab with earth sides, the baked
+ * ground (textures, kerbs, shore, AO), the cast-shadow and lamp-light layers, and every building,
+ * tree and street lamp in one back-to-front container. Returns handles the view tints each frame
+ * for the evening light. The resources and the flood are drawn on top by IsoView.
  */
 
-import { Container, Graphics, Sprite, type Renderer, type Texture } from "pixi.js";
-import type { Diorama, DioBuilding } from "../diorama";
+import { Container, Graphics, Matrix, Sprite, Texture, CanvasSource } from "pixi.js";
+import { buildAtlas, RES, type Atlas, type TreeKind } from "./atlas";
+import { drawBuilding } from "./build3d";
+import type { Diorama, DioBuilding } from "./data";
+import { bakeGround, groundMatrix, P, SHADOW_P, type TreeSpot } from "./ground";
+import { hashN } from "./palette";
 import type { Projector } from "./project";
 
-export const CLAY = {
-  bg: 0x0b0e14,
-  slabLeft: 0x7a6249,
-  slabRight: 0x5f4b37,
-  ground: 0xe2ddd3,
-  grass: 0xc6d2ad,
-  field: 0xb9cc9b,
-  park: 0xbfcfa4,
-  plaza: 0xebe7df,
-  play: 0xe6d9bd,
-  water: 0x5d9cc9,
-  waterEdge: 0x3f7fb0,
-  road: 0xc9c4b9,
-  path: 0xeeeae2,
-  roof: 0xfbfaf6,
-  wallLight: 0xe8e4dc,
-  wallDark: 0xd0cabf,
-  outline: 0xa29c90,
-  tree: [0xa9bb8f, 0x9cb083, 0xb3c49a],
-  treeDark: 0x7f9468,
-} as const;
+const SLAB_M = 4.5;
 
-const SLAB_DEPTH = 34;
-
-const ROAD_W: Record<string, number> = {
-  motorway: 15, trunk: 13, primary: 12, secondary: 10, tertiary: 9, residential: 7, unclassified: 7, living_street: 6, service: 4, unknown: 5,
-};
-const FOOT = new Set(["footway", "cycleway", "pedestrian", "path", "steps", "track", "bridleway"]);
-
-function landFill(k: string): number | null {
-  if (k === "grass" || k === "village_green" || k === "meadow") return CLAY.grass;
-  if (k === "pitch" || k === "stadium" || k === "track") return CLAY.field;
-  if (k === "park" || k === "recreation_ground" || k === "garden" || k === "protected_landscape_seascape" || k === "dog_park" || k === "cemetery") return CLAY.park;
-  if (k === "playground") return CLAY.play;
-  if (k === "pedestrian" || k === "plaza" || k === "university" || k === "school" || k === "college") return CLAY.plaza;
-  return null;
-}
-
-function hash(n: number): number {
-  let x = Math.imul(n | 0, 2654435761) >>> 0;
-  x = Math.imul(x ^ (x >>> 15), 0x2c1b3c6d) >>> 0;
-  return ((x ^ (x >>> 13)) >>> 0) / 4294967296;
-}
+export type Bounds = { x0: number; y0: number; x1: number; y1: number };
+export type BuildingRec = { b: DioBuilding; id: number; holder: Container; lite: Container; full: Container | null; bounds: Bounds };
+export type Cullable = { node: Container; bounds: Bounds };
 
 export type StaticScene = {
-  ground: Container; // slab, land, water, roads (below the flood)
-  sorted: Container; // buildings + trees, back to front (above the flood and trails)
-  slabMask: Graphics; // clip for ground-level dynamic layers
-  slabPoly: number[];
+  buildings: BuildingRec[];
+  cullables: Cullable[];
+  light: { tint: number; lights: number };
+  /** Build (once) and show the detailed version of a building: windows, doors, rooftop units. */
+  ensureFull: (rec: BuildingRec) => Container;
+  atlas: Atlas;
+  slab: Graphics;
+  ground: Sprite;
+  shadow: Sprite;
+  pools: Sprite;
+  objects: Container; // buildings, trees, lamps (+ vehicles and people added by the view), back to front
+  slabMask: Graphics;
+  lit: Container[]; // tinted by the world light
+  glows: Graphics[]; // building windows/doors (additive), alpha = lights
+  lampGlows: Sprite[];
+  labels: Array<{ text: string; at: [number, number, number] }>;
 };
 
-/** Flat ring → screen polygon at height z. */
-function ringPoly(p: Projector, ring: [number, number][], z = 0): number[] {
-  const out: number[] = [];
-  for (const [lon, lat] of ring) {
-    const [x, y] = p.lonlat(lon, lat, z);
-    out.push(x, y);
-  }
-  return out;
-}
+const tex = (canvas: HTMLCanvasElement) => new Texture({ source: new CanvasSource({ resource: canvas, autoGenerateMipmaps: true, scaleMode: "linear" }) });
 
-function treeTexture(renderer: Renderer): Texture {
-  const g = new Graphics();
-  g.ellipse(0, 9, 9, 4.2).fill({ color: 0x000000, alpha: 0.13 });
-  g.rect(-0.9, 2, 1.8, 7).fill(0x8a7258);
-  g.circle(0, -2, 8).fill(0xffffff);
-  g.circle(-2.4, -4.4, 4.2).fill({ color: 0xffffff, alpha: 0.55 });
-  g.circle(2.2, 0.5, 5).fill({ color: 0x000000, alpha: 0.08 });
-  return renderer.generateTexture({ target: g, resolution: 3, antialias: true });
-}
-
-function building(p: Projector, b: DioBuilding, accent?: number): Graphics {
-  const g = new Graphics();
-  const top = b.h;
-  const ab = b.ring.map(([lon, lat]) => p.toAB(lon, lat));
-  // orientation in (a, b): positive area = clockwise on screen
-  let area = 0;
-  for (let i = 0; i < ab.length; i++) {
-    const [a1, b1] = ab[i];
-    const [a2, b2] = ab[(i + 1) % ab.length];
-    area += a1 * b2 - a2 * b1;
-  }
-  const sign = area >= 0 ? 1 : -1;
-  // walls facing the viewer (outward normal · (1, 1) > 0), far ones first
-  const walls: Array<{ d: number; poly: number[]; shade: number }> = [];
-  for (let i = 0; i < ab.length; i++) {
-    const [a1, b1] = ab[i];
-    const [a2, b2] = ab[(i + 1) % ab.length];
-    const da = a2 - a1;
-    const db = b2 - b1;
-    const na = sign * db;
-    const nb = -sign * da;
-    if (na + nb <= 0) continue;
-    const [x1, y1] = p.iso(a1, b1, 0);
-    const [x2, y2] = p.iso(a2, b2, 0);
-    const [x3, y3] = p.iso(a2, b2, top);
-    const [x4, y4] = p.iso(a1, b1, top);
-    const len = Math.hypot(na, nb) || 1;
-    walls.push({ d: a1 + b1 + a2 + b2, poly: [x1, y1, x2, y2, x3, y3, x4, y4], shade: na / len > nb / len ? CLAY.wallLight : CLAY.wallDark });
-  }
-  walls.sort((x, y) => x.d - y.d);
-  for (const wall of walls) {
-    g.poly(wall.poly).fill(accent != null ? mix(accent, wall.shade, 0.35) : wall.shade).stroke({ width: 0.45, color: CLAY.outline, alpha: 0.9 });
-  }
-  g.poly(ringPoly(p, b.ring, top)).fill(accent != null ? mix(accent, 0xffffff, 0.15) : CLAY.roof).stroke({ width: 0.45, color: CLAY.outline, alpha: 0.9 });
-  return g;
-}
-
-export function mix(a: number, b: number, t: number): number {
-  const ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255;
-  const br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
-  return (Math.round(ar + (br - ar) * t) << 16) | (Math.round(ag + (bg - ag) * t) << 8) | Math.round(ab + (bb - ab) * t);
-}
-
-/** Buildings that host a resource (shelter, substation…) get a faint tint so the base reads as a place. */
-export type Accent = { lon: number; lat: number; color: number };
-
-export function buildStatic(renderer: Renderer, data: Diorama, p: Projector, accents: Accent[] = []): StaticScene {
+export function buildStatic(data: Diorama, p: Projector): StaticScene {
+  const atlas = buildAtlas();
   const { a0, a1, b0, b1 } = p.bounds;
-  const corners = [p.iso(a0, b0), p.iso(a1, b0), p.iso(a1, b1), p.iso(a0, b1)];
-  const slabPoly = corners.flat();
+  const inside = (a: number, b: number) => a >= a0 && a <= a1 && b >= b0 && b <= b1;
 
-  const ground = new Container();
-  const slab = new Graphics();
-  // sides: the two faces toward the viewer (a = a1 edge and b = b1 edge)
-  const down = (pt: [number, number]): [number, number] => [pt[0], pt[1] + SLAB_DEPTH];
-  const [ne, se, sw] = [corners[1], corners[2], corners[3]];
-  slab.poly([...ne, ...se, ...down(se), ...down(ne)]).fill(CLAY.slabRight);
-  slab.poly([...se, ...sw, ...down(sw), ...down(se)]).fill(CLAY.slabLeft);
-  slab.poly(slabPoly).fill(CLAY.ground);
-  ground.addChild(slab);
-
-  const land = new Graphics();
-  for (const item of data.land) {
-    const fill = landFill(item.k);
-    if (fill == null) continue;
-    land.poly(ringPoly(p, item.ring)).fill(fill);
-  }
-  ground.addChild(land);
-
-  const water = new Graphics();
-  for (const item of data.water) {
-    if (!item.ring) continue;
-    water.poly(ringPoly(p, item.ring)).fill(CLAY.water);
-    for (const hole of item.holes) water.poly(ringPoly(p, hole)).cut();
-  }
-  ground.addChild(water);
-
-  const roads = new Graphics();
-  const draw = (filter: (k: string) => boolean, width: (k: string) => number, color: number, alpha = 1) => {
-    const byWidth = new Map<number, typeof data.roads>();
-    for (const road of data.roads) {
-      if (!filter(road.k)) continue;
-      const w = width(road.k);
-      byWidth.set(w, [...(byWidth.get(w) ?? []), road]);
+  // buildings first: their cast shadows are baked into the ground
+  const objects = new Container();
+  objects.sortableChildren = true;
+  const lit: Container[] = [];
+  const glows: Graphics[] = [];
+  const shadows: Array<Array<[number, number]>> = [];
+  const footprints: Array<Array<[number, number]>> = [];
+  const labels: StaticScene["labels"] = [];
+  const seen = new Set<string>();
+  const buildings: BuildingRec[] = [];
+  const cullables: Cullable[] = [];
+  const light = { tint: 0xffffff, lights: 0 };
+  data.buildings.forEach((b, i) => {
+    const built = drawBuilding(p, b, i, false);
+    const holder = new Container();
+    holder.zIndex = built.depth;
+    holder.addChild(built.node);
+    objects.addChild(holder);
+    lit.push(built.node.children[0] as Container);
+    let x0 = Infinity;
+    let x1 = -Infinity;
+    let y0 = Infinity;
+    let y1 = -Infinity;
+    for (const [a, bb] of built.foot) {
+      const [x, y] = p.iso(a, bb);
+      x0 = Math.min(x0, x);
+      x1 = Math.max(x1, x);
+      y0 = Math.min(y0, y - built.topM * 1.22 - 2);
+      y1 = Math.max(y1, y + 1);
     }
-    for (const [w, list] of byWidth) {
-      for (const road of list) {
-        const pts = road.path.map(([lon, lat]) => p.lonlat(lon, lat));
-        roads.moveTo(pts[0][0], pts[0][1]);
-        for (let i = 1; i < pts.length; i++) roads.lineTo(pts[i][0], pts[i][1]);
-      }
-      roads.stroke({ width: w, color, alpha, cap: "round", join: "round" });
+    buildings.push({ b, id: i, holder, lite: built.node, full: null, bounds: { x0, y0, x1, y1 } });
+    shadows.push(built.shadow);
+    footprints.push(built.foot);
+    if (built.label && built.labelAt && !seen.has(built.label)) {
+      seen.add(built.label);
+      labels.push({ text: built.label, at: built.labelAt });
     }
-  };
-  draw((k) => FOOT.has(k) && k !== "steps", () => 1.4, CLAY.path, 0.9);
-  draw((k) => !FOOT.has(k), (k) => (ROAD_W[k] ?? 5) * 0.62, CLAY.road);
-  ground.addChild(roads);
-
-  const slabMask = new Graphics().poly(slabPoly).fill(0xffffff);
-
-  // buildings and trees, back to front
-  const sorted = new Container();
-  sorted.sortableChildren = true;
-  const near = (b: DioBuilding) => {
-    let best: Accent | undefined;
-    let dist = 40;
-    for (const accent of accents) {
-      for (const [lon, lat] of b.ring) {
-        const [x1, y1] = p.toAB(lon, lat);
-        const [x2, y2] = p.toAB(accent.lon, accent.lat);
-        const d = Math.hypot(x1 - x2, y1 - y2);
-        if (d < dist) {
-          dist = d;
-          best = accent;
-        }
-      }
-    }
-    return best;
-  };
-  for (const b of data.buildings) {
-    const g = building(p, b, near(b)?.color);
-    const ab = b.ring.map(([lon, lat]) => p.toAB(lon, lat));
-    g.zIndex = Math.max(...ab.map(([a, bb]) => a + bb));
-    sorted.addChild(g);
-  }
-  const tex = treeTexture(renderer);
-  data.trees.forEach((tree, i) => {
-    if (hash(i) > 0.45) return; // a thin tree layer: the trees are setting, not subject
-    const [a, b] = p.toAB(tree[0], tree[1]);
-    if (a < a0 || a > a1 || b < b0 || b > b1) return;
-    const [x, y] = p.iso(a, b);
-    const s = new Sprite(tex);
-    s.anchor.set(0.5, 0.8);
-    const r = Math.min(7, Math.max(2.4, tree[3] * 0.75));
-    s.scale.set(r / 8);
-    s.position.set(x, y);
-    s.tint = CLAY.tree[i % 3];
-    s.zIndex = a + b + 0.5;
-    sorted.addChild(s);
   });
-  return { ground, sorted, slabMask, slabPoly };
+
+  // trees from the city's LiDAR crowns / street-tree inventory
+  const trees: Array<TreeSpot & { kind: TreeKind }> = [];
+  data.trees.forEach((t, i) => {
+    if (hashN(i, 1) > 0.7) return;
+    const [a, b] = p.toAB(t[0], t[1]);
+    if (!inside(a, b)) return;
+    const k = hashN(i, 2);
+    const kind: TreeKind = t[2] < 6 ? "shrub" : k < 0.34 ? "oak" : k < 0.6 ? "oakDark" : k < 0.86 ? "elm" : "pine";
+    trees.push({ a, b, r: Math.max(1.6, Math.min(6, t[3])), h: t[2], kind });
+  });
+  for (const t of trees) {
+    const frame = atlas.tree[t.kind];
+    const s = new Sprite(frame.tex);
+    s.anchor.set(frame.ax, frame.ay);
+    const crown = t.kind === "shrub" ? 0.9 : t.kind === "pine" ? 2.0 : 2.4;
+    const scale = Math.max(0.55, Math.min(1.7, t.r / crown));
+    s.scale.set(scale / RES);
+    const [x, y] = p.iso(t.a, t.b);
+    s.position.set(x, y);
+    s.zIndex = t.a + t.b + 0.3;
+    objects.addChild(s);
+    const h = frame.h * (scale / RES);
+    const w = frame.w * (scale / RES);
+    cullables.push({ node: s, bounds: { x0: x - w / 2, y0: y - h, x1: x + w / 2, y1: y + 2 } });
+  }
+
+  // the ground image, cast shadows and lamp pools
+  const bake = bakeGround(data, p, shadows, trees, footprints);
+  const ground = new Sprite(tex(bake.ground));
+  ground.setFromMatrix(new Matrix(...groundMatrix(p, P)));
+  const shadow = new Sprite(tex(bake.shadow));
+  shadow.setFromMatrix(new Matrix(...groundMatrix(p, SHADOW_P)));
+  shadow.alpha = 0.45;
+  const pools = new Sprite(tex(bake.pools));
+  pools.setFromMatrix(new Matrix(...groundMatrix(p, SHADOW_P)));
+  pools.blendMode = "add";
+  pools.alpha = 0;
+
+  // street lamps (+ their glows, faded in at dusk)
+  const lampGlows: Sprite[] = [];
+  for (const l of bake.lamps) {
+    const post = new Sprite(atlas.lamp.tex);
+    post.anchor.set(atlas.lamp.ax, atlas.lamp.ay);
+    post.scale.set(1 / RES);
+    const [x, y] = p.iso(l.a, l.b);
+    post.position.set(x, y);
+    const c = new Container();
+    c.addChild(post);
+    for (const [r, alpha, tint] of [[3.6, 0.45, 0xffb868], [0.9, 1, 0xfff0d0]] as const) {
+      const g = new Sprite(atlas.glow.tex);
+      g.anchor.set(0.5);
+      g.scale.set((r * 2) / atlas.glow.w);
+      g.position.set(x, y - 4.05 * 1.22);
+      g.tint = tint;
+      g.blendMode = "add";
+      g.alpha = 0;
+      (g as Sprite & { base?: number }).base = alpha;
+      c.addChild(g);
+      lampGlows.push(g);
+    }
+    c.zIndex = l.a + l.b + 0.2;
+    objects.addChild(c);
+    cullables.push({ node: c, bounds: { x0: x - 4, y0: y - 8, x1: x + 4, y1: y + 1 } });
+    lit.push(post as unknown as Container);
+  }
+
+  // slab: the model sits on a block of earth (two visible sides), like a table-top diorama
+  const corners = [p.iso(a0, b0), p.iso(a1, b0), p.iso(a1, b1), p.iso(a0, b1)];
+  const slab = new Graphics();
+  const dz = SLAB_M * 1.22 * 4;
+  const down = (pt: [number, number]): [number, number] => [pt[0], pt[1] + dz];
+  const [ne, se, sw] = [corners[1], corners[2], corners[3]];
+  slab.poly([...ne, ...se, ...down(se), ...down(ne)]).fill(0x5d4632);
+  slab.poly([...se, ...sw, ...down(sw), ...down(se)]).fill(0x735840);
+  slab.poly([...se, ...down(se)]).stroke({ width: 1, color: 0x3b2c1f, alpha: 0.6 });
+  // strata lines
+  for (const f of [0.35, 0.7]) {
+    slab.moveTo(ne[0], ne[1] + dz * f).lineTo(se[0], se[1] + dz * f).lineTo(sw[0], sw[1] + dz * f).stroke({ width: 1.2, color: 0x000000, alpha: 0.18 });
+  }
+  slab.poly(corners.flat()).stroke({ width: 1.4, color: 0xe8dcc4, alpha: 0.5 });
+  const slabMask = new Graphics().poly(corners.flat()).fill(0xffffff);
+
+  const ensureFull = (rec: BuildingRec) => {
+    if (rec.full) return rec.full;
+    const built = drawBuilding(p, rec.b, rec.id, true);
+    const body = built.node.children[0] as Container;
+    body.tint = light.tint;
+    lit.push(body);
+    const glow = (built.node as Container & { glow?: Graphics }).glow;
+    if (glow) {
+      glow.alpha = light.lights;
+      glow.visible = light.lights > 0.01;
+      glows.push(glow);
+    }
+    rec.holder.addChild(built.node);
+    rec.full = built.node;
+    return built.node;
+  };
+
+  return { buildings, cullables, light, ensureFull, atlas, slab, ground, shadow, pools, objects, slabMask, lit: [ground as unknown as Container, slab as unknown as Container, ...lit, ...objects.children.filter((c) => c instanceof Sprite) as unknown as Container[]], glows, lampGlows, labels };
 }
