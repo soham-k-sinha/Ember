@@ -24,7 +24,7 @@ Interfaces: consumes comparison v0.1 and state v0.2; consumes the proposed ws-ev
 Status: done. scatter_point shape is provisional.
 Next: switch the client comment to contracts/ws-events.schema.json on main once PR #11 merges.
 
-## 2026-10-17 04:55 · allston flood on the operator map · branch arnav/operator-ui · commit pending
+## 2026-10-17 04:55 · allston flood on the operator map · branch arnav/operator-ui · commit 8097c5b
 What: Rebased onto main. Fixture mode draws scenarios/allston_flood_v1 (judge household #10296, Cottage Farm, Treehouse shelter) instead of the example_flood snapshot. The clock opens on the 90 min keyframe; flood polygons and closures follow that scenario. The comparison table still reads comparison.fixture.json (nominal columns, B−A = EMBER − baseline, spread not confidence bounds) until Live calls GET /comparison. The WebSocket client follows contracts/ws-events.schema.json: an assignment event is {plan_version, change, assignment_id, assignment}, and scatter_point is {run_id, batch_id, candidate, seed, metrics}. Live posts /disruption {close_edges}, /replan, and /clock, and does not call /simulate. The dev server stays on 43123; residents CORS on main already allows 43123 and 5173.
 Files: web/src/opening.ts, web/src/fixtures.ts, web/src/App.tsx, web/src/live.ts, web/src/model.ts, web/src/components/Panels.tsx, web/src/types.ts, web/scripts/check-ws.ts, web/.env.example, docs/log/arnav.md
 Run: cd web && npm install && npm run dev
