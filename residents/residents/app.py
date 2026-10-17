@@ -124,7 +124,7 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         app.state.hub = Hub()
         app.state.planner = None
         if engine_mode:
-            b = bridge or await run_in_threadpool(EngineBridge, settings.scenario, None, settings.engine_moves)
+            b = bridge or await run_in_threadpool(EngineBridge, settings.scenario)
             app.state.planner = Planner(app.state.store, app.state.hub, b)
             await start_engine(settings, app.state.store, app.state.planner)
         photon = photon_client

@@ -21,12 +21,12 @@ JUDGE = 10296
 
 @pytest.fixture(scope="session")
 def bridge():
-    return EngineBridge(SCENARIO, moves=0)
+    return EngineBridge(SCENARIO)
 
 
 @pytest.fixture
 def esettings(settings):
-    return replace(settings, scenario=SCENARIO, engine_moves=0)
+    return replace(settings, scenario=SCENARIO)
 
 
 @pytest.fixture

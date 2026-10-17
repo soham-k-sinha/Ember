@@ -28,7 +28,6 @@ class Settings:
     scenario: Path | None = field(default_factory=lambda: (
         Path(v) if (v := os.environ.get("SCENARIO", str(REPO_ROOT / "scenarios" / "allston_flood_v1" / "scenario.json"))) else None))
     start_t_s: float = field(default_factory=lambda: float(os.environ.get("START_T_S", "0")))
-    engine_moves: int | None = field(default_factory=lambda: int(v) if (v := os.environ.get("ENGINE_MOVES")) else None)
     # Static mode only: the snapshot the DB is seeded from.
     seed_state: Path = field(default_factory=lambda: Path(os.environ.get("SEED_STATE", CONTRACTS / "fixtures" / "state.fixture.json")))
     reset_on_start: bool = field(default_factory=lambda: _flag("RESET_ON_START", False))
