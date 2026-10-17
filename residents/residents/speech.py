@@ -29,7 +29,7 @@ _RULES: list[tuple[re.Pattern, object]] = [
     (re.compile(r"\b([Rr])eply (?:with|here)\b"), lambda m: _case("tell me", m[1])),
     (re.compile(r"\b([Ss])end (your|a|an|the two) (street address|address|intersection|nearest|cross streets)"),
      lambda m: _case("tell me", m[1]) + f" {m[2]} {m[3]}"),
-    (re.compile(r"\b([Ww]e'll) text you\b"), r"\1 let you know"),
+    (re.compile(r"\b([Ww]e'll|[Ww]e will|will) text you\b"), r"\1 let you know"),
     (re.compile(r"\b([Tt])ext us\b"), lambda m: _case("tell", m[1]) + " us"),
     (re.compile(r"\be\.g\.\s*"), "for example, "),
     (re.compile(r"\b(N|S|E|W) (?=[A-Z][a-z])"), lambda m: _DIR[m[1]] + " "),

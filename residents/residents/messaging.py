@@ -53,6 +53,10 @@ class Messenger:
         self.lobby_hooks: list[LobbyHook] = []
         self.taps: list[Tap] = []
         self.voice = None  # voice.Voice: while a call is live, texts to that phone are said on the call (D61)
+        # D63: one natural reply per inbound turn. `writer(handle, said, drafts, thread)` → the reply, or None to
+        # send the computed messages as they are. None (tests, no API key): every message goes out as computed.
+        self.writer = None
+        self._turns: dict[str, dict] = {}  # handle → {"said": text, "drafts": [...]} while its text is handled
         self._registration_lock = asyncio.Lock()
         # Freeze the old role-only registrations to the existing scenario before a reset.
         for phone in self.store.phones():
@@ -182,7 +186,7 @@ class Messenger:
         self.store.upsert_phone(handle, phone["role"], peer_user_id=inbound.peer_user_id, agent_user_id=inbound.agent_user_id,
                                 space_id=inbound.space_id, last_inbound_at=inbound.created_at or datetime.now(timezone.utc).isoformat())
         if lobby:
-            await self._lobby_inbound(self.store.phone(handle=handle), inbound.text)
+            await self._in_turn(handle, inbound.text, self._lobby_inbound(self.store.phone(handle=handle), inbound.text))
             return None
         if first_contact:
             # Repair markers left by older code that counted blocked sends as delivered.
@@ -190,7 +194,8 @@ class Messenger:
             for q in (self.store.plan_view() or {}).get("info_requests", []):
                 if q["to"] == thread:
                     self.store.kv_delete(f"asked:{q['id']}")
-        return await self._store_inbound(phone["role"], inbound.text, external_id=inbound.external_id, thread=thread)
+        return await self._in_turn(handle, inbound.text, self._store_inbound(
+            phone["role"], inbound.text, external_id=inbound.external_id, thread=thread))
 
     def _before_this_run(self, created_at: str | None) -> bool:
         """A text sent before the last reset/bootstrap belongs to an earlier run; never answer it."""
@@ -220,9 +225,80 @@ class Messenger:
         if thread is None:
             if not unplaced(self.store, phone):
                 raise ValueError(f"{raw_handle} is not bound to anything in the current scenario")
-            await self._lobby_inbound(phone, text)
+            await self._in_turn(phone["handle"], text, self._lobby_inbound(phone, text))
             return None
-        return await self._store_inbound(phone["role"], text, external_id=None, thread=thread)
+        return await self._in_turn(phone["handle"], text, self._store_inbound(phone["role"], text, external_id=None, thread=thread))
+
+    # ---------- one reply per turn (D63) ----------
+    async def _in_turn(self, handle: str, said: str, work):
+        """Run the handling of one inbound text; what it would send that phone is held and goes out as one reply."""
+        if self.writer is None or handle in self._turns:
+            return await work
+        self._turns[handle] = {"said": said, "drafts": []}
+        try:
+            return await work
+        finally:
+            await self._end_turn(handle)
+
+    def _held(self, handle: str | None) -> dict | None:
+        return self._turns.get(handle) if handle else None
+
+    async def _end_turn(self, handle: str) -> None:
+        t = self._turns.pop(handle, None)
+        drafts = t["drafts"] if t else []
+        if not drafts:
+            return
+        live = [d for d in drafts if d["delivery"] in ("sent", "dev")]
+        on_call = self.voice is not None and self.voice.live(handle) is not None
+        reply = None
+        if live:
+            try:
+                reply = await self.writer(handle, t["said"], [d["text"] for d in live], live[-1]["thread"])
+            except Exception:  # noqa: BLE001 - the computed messages are always a correct reply
+                log.exception("reply writer failed")
+                reply = None
+        if reply:
+            text = with_drill_prefix(reply)
+            delivery = live[-1]["delivery"]
+            if on_call:
+                self.voice.capture(handle, text)
+            elif delivery == "sent" and self.photon is not None:
+                delivery = await self._photon_send(handle, text, f"{live[-1]['id']}-r")
+                if delivery == "failed":
+                    for d in live:
+                        if d["id"]:
+                            self.store.set_delivery(d["id"], "failed")
+            thread_ids = [d["id"] for d in live if d["id"]]
+            if thread_ids:
+                self.store.set_said(thread_ids, text)
+            self._tap({"direction": "out", "who": live[-1]["thread"] or handle, "text": text,
+                       "delivery": "voice" if on_call else delivery})
+            for d in drafts:
+                if d not in live:
+                    self._tap({"direction": "out", "who": d["thread"] or handle, "text": d["text"], "delivery": d["delivery"]})
+            return
+        for d in drafts:  # as computed, one by one (exactly the behaviour without a writer)
+            delivery = d["delivery"]
+            if delivery in ("sent", "dev"):
+                if on_call:
+                    self.voice.capture(handle, d["text"])
+                elif delivery == "sent" and self.photon is not None:
+                    delivery = await self._photon_send(handle, d["text"], d["id"] or new_message_id())
+                    if d["id"]:
+                        self.store.set_delivery(d["id"], delivery)
+            self._tap({"direction": "out", "who": d["thread"] or handle, "text": d["text"],
+                       "delivery": "voice" if on_call and delivery in ("sent", "dev") else delivery})
+
+    async def _photon_send(self, handle: str, text: str, key: str) -> str:
+        phone = self.store.phone(handle=handle)
+        if phone is None or not self.opted_in(phone):
+            return "not_opted_in"
+        try:
+            await self.photon.send_text(phone["space_id"], phone["agent_user_id"], text, idempotency_key=f"ember-{key}")
+            return "sent"
+        except Exception as e:  # noqa: BLE001 - a failed send must not break the turn
+            log.error("send to %s failed: %s", handle, e)
+            return "failed"
 
     def lobby_log(self, handle: str) -> list[dict]:
         return json.loads(self.store.kv_get(f"lobby:{handle}") or "[]")
@@ -243,6 +319,14 @@ class Messenger:
         (drill prefix, opt-in); kept in the lobby log. Returns delivery."""
         phone = self.store.phone(handle=handle)
         text = with_drill_prefix(text)
+        turn = self._held(handle)
+        if turn is not None:  # part of this turn's reply (D63)
+            on_call = self.voice is not None and self.voice.live(handle) is not None
+            delivery = ("sent" if on_call else "dev" if self.photon is None else "no_phone" if phone is None
+                        else "not_opted_in" if not self.opted_in(phone) else "sent")
+            self._lobby_append(handle, {"direction": "out", "text": text, "t_s": self._t_s(), "delivery": delivery})
+            turn["drafts"].append({"id": None, "thread": None, "text": text, "delivery": delivery})
+            return delivery
         if self.voice is not None and self.voice.capture(handle, text):
             delivery = "sent"  # said on the live call
         elif self.photon is None:
@@ -317,6 +401,15 @@ class Messenger:
         msg = {"id": new_message_id(), "thread": thread, "direction": "out", "text": with_drill_prefix(text),
                "t_s": self._t_s(), "plan_version": plan_version, "assignment_id": assignment_id, "report_id": None}
         phone = phone_for_thread(self.store, thread)
+        turn = self._held(phone["handle"] if phone else None)
+        if turn is not None:  # part of this turn's reply (D63): recorded now, delivered at the end of the turn
+            on_call = self.voice is not None and self.voice.live(phone["handle"]) is not None
+            delivery = ("sent" if on_call else "dev" if self.photon is None
+                        else "not_opted_in" if not self.opted_in(phone) else "sent")
+            self.store.add_message(msg, delivery=delivery, recipient_handle=phone["handle"])
+            await self.hub.broadcast("message", msg, msg["t_s"])
+            turn["drafts"].append({"id": msg["id"], "thread": thread, "text": msg["text"], "delivery": delivery})
+            return msg, delivery
         spoken = self.voice is not None and phone is not None and self.voice.capture(phone["handle"], msg["text"])
         if spoken:
             delivery = "sent"  # said on the live call (D61); counts as delivered everywhere a text would

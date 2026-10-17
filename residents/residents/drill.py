@@ -167,7 +167,11 @@ class Drill:
                     print(f"  {name}: couldn't place {address!r} in the drill area; not called")
                     continue
                 st.voice.open(handle)  # what placing them would text goes into the call instead
-                thread = await st.locator.place(st.store.phone(handle=handle), found)
+                self._quiet = True     # (and isn't printed: the call opens with the situation below)
+                try:
+                    thread = await st.locator.place(st.store.phone(handle=handle), found)
+                finally:
+                    self._quiet = False
                 st.voice.sessions[handle].outbox.clear()
                 if thread is None:
                     st.voice.end(handle, reason="not placed")
@@ -304,7 +308,7 @@ class Drill:
         if ev["direction"] == "in":
             print(f"\n[{t}] {name} → EMBER: {text}", flush=True)
         elif ev["delivery"] == "voice":
-            if not self.args.dry:  # (pretend calls print the spoken reply as one line)
+            if not self.args.dry and not getattr(self, "_quiet", False):  # (pretend calls print the spoken reply as one line)
                 from .speech import render
                 print(f"\n[{t}] EMBER (call) → {name}: {render(text)}", flush=True)
         else:

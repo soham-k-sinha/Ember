@@ -44,7 +44,7 @@ SESSION_IDLE_S = 300.0           # a call with no turn for this long is over (it
 # Phone call screening (iPhone "Screen Unknown Callers", Google Call Screen) answers first and asks who's calling
 # and why; answering that (once) is what gets the call put through. A person asking "who is this?" gets the same.
 SCREENING = re.compile(r"\b(stay on the line|record (your|it)\b|recorded\b|reason for (your )?call|screening service|"
-                       r"see if (this person|they('re| are)) available|who('s| is) (calling|this)|state your name|"
+                       r"see if (this person|they)( is| are|'re)? (is )?available|i'll see if|who('s| is) (calling|this)|state your name|"
                        r"leave (a|your) (message|name))", re.I)
 WHO_WE_ARE = ("This is EMBER, the HackHarvard flood drill, calling with this phone's evacuation plan. It's a drill, "
               "not a real emergency.")

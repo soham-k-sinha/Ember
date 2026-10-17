@@ -142,8 +142,37 @@ class DevInboundIn(TargetIn):
     handle: str | None = Field(default=None, description="as this registered phone (also before it has a household)")
 
 
+def turn_writer(app: FastAPI, write):
+    """Messenger's per-turn writer (D63): the conversation, the computed messages and a fact sheet → one reply."""
+    from .db import thread_key
+    from .reply import compose
+
+    async def writer(handle: str, said: str, drafts: list[str], thread: dict | None) -> str | None:
+        st = app.state
+        store = st.store
+        history = store.conversation(thread_key(thread), 8) if thread else [
+            {"from": "them" if m["direction"] == "in" else "EMBER", "text": m["text"].removeprefix("[EMBER drill] ")}
+            for m in st.messenger.lobby_log(handle)[-8:]]
+        facts = []
+        view = store.plan_view()
+        if thread and view and st.outbound is not None:
+            status = st.outbound.status_text(view, thread)
+            if status:
+                facts.append(status)
+            if "household_id" in thread:
+                h = next((x for x in store.households() if x["household_id"] == thread["household_id"]), {})
+                facts.append(f"Their household: {h.get('label')}; needs as we have them: {h.get('needs')}")
+        names = [r["name"] for r in store.snapshot()["resources"]] + [f["name"] for f in store.facilities()]
+        channel = "phone call" if st.voice is not None and st.voice.live(handle) is not None else "text message"
+        reply, why = await compose(write, said=said, history=history, drafts=drafts, facts=" ".join(facts),
+                                   names=names, channel=channel)
+        return reply
+
+    return writer
+
+
 def create_app(settings: Settings | None = None, photon_client: PhotonClient | None = None,
-               bridge: EngineBridge | None = None, llm: LLM | None = None) -> FastAPI:
+               bridge: EngineBridge | None = None, llm: LLM | None = None, writer=None) -> FastAPI:
     settings = settings or Settings()
 
     @asynccontextmanager
@@ -186,6 +215,10 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
             app.state.planner.plan_hooks.append(app.state.locator.on_plan)
         from .voice import Voice
         app.state.voice = Voice(app.state.store, app.state.messenger, app.state.outbound, settings)
+        if app.state.planner is not None and settings.reply_enabled and (writer is not None or (
+                settings.anthropic_api_key and settings.extract_enabled)):
+            from .reply import make_writer
+            app.state.messenger.writer = turn_writer(app, writer or make_writer(settings.anthropic_api_key))
         if app.state.planner is not None:  # after messenger + hooks exist: a fresh plan v1 texts its open questions
             await start_engine(settings, app.state.store, app.state.planner)
         app.state.listener = None

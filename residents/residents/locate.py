@@ -113,8 +113,12 @@ class Locator:
             return (text if looks else None), None, {}, False
         last = next((m["text"] for m in reversed(self.messenger.lobby_log(handle)) if m["direction"] == "out"), None)
         try:
+            log_ = self.messenger.lobby_log(handle)
+            history = [{"from": "them" if m["direction"] == "in" else "EMBER", "text": m["text"].removeprefix("[EMBER drill] ")}
+                       for m in log_[:-1][-8:]]
             ex = await self.llm(SYSTEM, build_prompt(text, "resident", {}, last,
-                                                     {"kind": "location", "note": "we don't know where the sender is yet"}))
+                                                     {"kind": "location", "note": "we don't know where the sender is yet"},
+                                                     history))
         except Exception as e:  # noqa: BLE001 - API down: keyword parser for needs/questions, the text as a place if it looks like one
             log.error("location extraction failed: %r", e)
             from . import fallback

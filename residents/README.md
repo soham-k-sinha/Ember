@@ -58,6 +58,14 @@ and <cross street>`, `plan`, `questions`, `tell r1 <text>` (reply as the coordin
 API for the same flow: `POST /phones {role: "resident", handle, locate: true}` registers a phone with no household;
 `POST /dev/inbound {role, handle, text}` texts as that phone (also before it's placed).
 
+## The AI talks, the planner decides (D63)
+Claude Sonnet 5.5 reads each text or spoken turn with the conversation so far and turns it into facts (needs, location,
+yes/no, done, questions); the planner and the guide compute everything that follows, exactly as before. The person
+then gets **one** reply per turn, written by Claude Haiku 5.5 from those computed messages ("I'm sorry about your leg.
+Accessible Van 3 will pick you up at your door in about 3 min…"). A guard sends the computed messages instead if the
+reply mentions any number, vehicle, place or street they don't, drops a YES/DONE ask or a question, or makes a safety
+claim. `REPLY_ENABLED=0` turns the rewriting off.
+
 ## Calls: the same conversation by phone (D61)
 ElevenLabs runs the call on the Photon SMS number (speech, voice, turn-taking); **EMBER's backend is the agent's
 Custom LLM**, so the call says exactly what the thread would text (`residents/speech.py` makes it sound right:

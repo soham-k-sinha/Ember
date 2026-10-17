@@ -23,7 +23,9 @@ from pydantic import BaseModel, Field
 
 log = logging.getLogger("residents.extract")
 
-MODEL = os.environ.get("EXTRACT_MODEL", "claude-opus-5-5")
+# Sonnet 5.5: 44/45 on samples.json at 1.4 s median (Opus 5.5 45/45 at 2.2 s is too slow for a phone call; Haiku 5.5
+# 41/45 missed "we're at the corner now" and "we're fine to walk": a misread here can decline someone's van). D63.
+MODEL = os.environ.get("EXTRACT_MODEL", "claude-sonnet-5-5")
 EFFORT = os.environ.get("EXTRACT_EFFORT", "low")
 CONFIDENCE_MIN = 0.6
 
@@ -67,16 +69,18 @@ class Extraction(BaseModel):
 SYSTEM = """You read text messages sent to EMBER, a flood-response coordination drill in Allston/Cambridge, and turn each message into structured facts. You only extract what the sender said; you never invent facts, plan routes, promise times, or decide who gets picked up.
 
 Fact kinds:
-- need: who needs pickup and what they need (people count, mobility, wheelchair-accessible vehicle, medical).
+- need: who needs pickup and what they need (people count, mobility, wheelchair-accessible vehicle, medical). Only when the message says something about the people (how many, who can't walk, injuries, asking to be picked up); a report about a road or a car alone is a closure_report, not a need.
 - closure_report: a road or street is flooded/blocked. Copy the street name as written into road_hint; a cross street or landmark into cross_street.
 - facility_status: an operator reports their site's power state or how long backup power/fuel lasts.
 - location: where the sender is right now (an address, an intersection, a landmark, coordinates). Copy it as written into address; for an intersection put one street in address and the other in cross_street.
 - done: they report finishing the step we last asked them to do ("done", "we're at the corner", "on the van", "we've arrived", "it's connected").
-- confirm: yes / accepting the instruction we last sent. reject: no / can't do it / declining it.
+- confirm: they accept the pickup or instruction we last sent ("yes", "ok, we'll be ready"). Only when we sent one and they say yes to it: describing themselves ("we're fine to walk to the van") is not a confirm.
+- reject: ONLY when they refuse the pickup or vehicle itself: they don't want to be picked up, don't want that vehicle, or will get out on their own ("no thanks, we'll drive ourselves", "we don't want the van"). A "no" that comes with a problem or a correction is NOT a reject: extract the problem instead. "No, I'm stuck in my house and can't get out", "no, I can't walk", "no, I broke my leg" = need (mobility true, medical true if injured); "no, it's 4 of us" = need (people 4); "no, I'm at Putnam Ave" = location. When unsure between reject and a correction, it's not a reject.
 - question: they ask something; set question_topic (a vague "what's the plan?" / "what do I do?" / "what now?" is plan). For a question about a road or bridge, put its name in road_hint. other: anything else (greetings, thanks, chatter).
 
 Rules:
-- Leave a field null unless the message states it or makes it unambiguous ("me and my mom" = 2 people; "she uses a wheelchair" = mobility and accessible_vehicle true).
+- Leave a field null unless the message states it or makes it unambiguous ("me and my mom" = 2 people; "she uses a wheelchair" = mobility and accessible_vehicle true; "I can't walk" / "I'm stuck inside and can't get out" / "broken leg" = mobility true, they need to be collected at the door; "no one needs an accessible vehicle" = accessible_vehicle false).
+- The conversation so far is in the context: read the new message as a reply in that conversation (who "they", "it", "that" are; what question it answers).
 - A short reply like "3" or "yes" answers the last message we sent or the pending question; use that context.
 - One message can hold several facts (e.g. a need and a closure_report). "No, we want to travel with others, is anyone near me?" is a reject AND a question (topic others).
 - If a word looks garbled or autocorrected (e.g. "we need a Welch's"), don't drop it or guess: ask about it in clarifying_question.
@@ -111,8 +115,11 @@ class ExtractionFailed(RuntimeError):
     pass
 
 
-def build_prompt(text: str, role: str, record: dict, last_outbound: str | None, pending: dict | None) -> str:
+def build_prompt(text: str, role: str, record: dict, last_outbound: str | None, pending: dict | None,
+                 history: list[dict] | None = None) -> str:
     ctx: dict[str, Any] = {"sender_role": role, "record": record}
+    if history:
+        ctx["conversation_so_far"] = history  # oldest first: [{"from": "EMBER" | "them", "text": ...}]
     if last_outbound:
         ctx["last_message_we_sent"] = last_outbound
     if pending:
@@ -221,8 +228,9 @@ def to_outcome(ex: Extraction, *, role: str, thread: dict, text: str, pending: d
 
 
 async def extract(llm: LLM, text: str, *, role: str, thread: dict, record: dict, last_outbound: str | None,
-                  pending: dict | None, resolve_road: RoadResolver, last_assignment_id: str | None) -> Outcome:
-    ex = await llm(SYSTEM, build_prompt(text, role, record, last_outbound, pending))
+                  pending: dict | None, resolve_road: RoadResolver, last_assignment_id: str | None,
+                  history: list[dict] | None = None) -> Outcome:
+    ex = await llm(SYSTEM, build_prompt(text, role, record, last_outbound, pending, history))
     log.info("extracted %s (confidence %.2f) from %r", [f.kind for f in ex.facts], ex.confidence, text[:80])
     return to_outcome(ex, role=role, thread=thread, text=text, pending=pending, resolve_road=resolve_road,
                       last_assignment_id=last_assignment_id, known_needs=record.get("needs"))
