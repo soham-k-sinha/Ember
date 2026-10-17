@@ -72,6 +72,13 @@ def test_keyframes_file_is_inlined(tmp_path, scn):
     assert [k["t_s"] for k in loaded["hazard"]["keyframes"]] == [k["t_s"] for k in scn["hazard"]["keyframes"]]
 
 
+def test_keyframes_file_scenario_validates(tmp_path, scn, town):
+    """Regression (reported by Anshuman): the loaded scenario kept keyframes_file next to keyframes → oneOf failed."""
+    test_keyframes_file_is_inlined(tmp_path, scn)
+    r = validate(load_scenario(tmp_path / "scenario.json"), town)
+    assert r.ok, r.errors
+
+
 def test_flood_closes_more_roads_over_time(town, scn):
     w = World.from_dict(town)
     hz = hazard_from_scenario(w, scn)

@@ -24,7 +24,7 @@ def load_scenario(path: str | Path) -> dict:
     scn = json.loads(path.read_text())
     hz = scn.get("hazard", {})
     if "keyframes_file" in hz:
-        fc = json.loads((path.parent / hz["keyframes_file"]).read_text())
+        fc = json.loads((path.parent / hz.pop("keyframes_file")).read_text())   # pop: schema allows one or the other
         hz["keyframes"] = [{"t_s": float(f["properties"]["t_s"]), "label": f["properties"].get("label", ""),
                             "geometry": f["geometry"]} for f in fc["features"]]
     return scn

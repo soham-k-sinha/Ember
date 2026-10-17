@@ -47,3 +47,11 @@ Run: uv run --project engine ember simulate --scenario contracts/fixtures/scenar
 Interfaces: state fixture values changed (schema unchanged, v0.1; D32). Soham: `from ember_engine.sim import simulate, example_plan`; `simulate(world, scenario, plan, reports=[report.schema objects]).state_at(t)` gives GET /state for any clock. Reports in report.schema shape are applied at observed_at_t_s.
 Status: done. 55 tests pass; example scenario simulates in 0.09 s. On allston_flood_v1 (PR #4): 67 people reached before deadline, 20 unreached, generator connected at 23 min, 0 m³ overflow.
 Next: task 6 baseline, task 7 allocator, task 8 compare.
+
+## 2026-10-17 09:10 · fix keyframes_file validation · branch aryaman/fix-keyframes-file · commit (this PR)
+What: `load_scenario` now removes `keyframes_file` after inlining it, so scenarios that keep keyframes in keyframes.geojson validate (bug reported by Anshuman). Regression test added.
+Files: engine/ember_engine/scenario.py, engine/tests/test_scenario.py
+Run: uv run --project engine pytest -q engine/tests/test_scenario.py
+Interfaces: none changed. Anshuman: `"keyframes_file": "keyframes.geojson"` works now.
+Status: done.
+Next: baseline, allocator, compare.
