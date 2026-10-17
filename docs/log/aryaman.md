@@ -136,3 +136,11 @@ Run: backend + web per HANDOFF, press Live, run the three judge-beat curls → "
 Interfaces: none. Soham: the `state` broadcast at the end of `planner._publish()` is still worth adding (one fewer round trip); the web handles both.
 Status: done.
 Next: EngineSession(..., moves=).
+
+## 2026-10-17 01:55 · EngineSession(..., moves=) · branch aryaman/session-moves · commit (this PR)
+What: HANDOFF issue 2 (Soham's request: his tests went 18 s → 56 s). `EngineSession(scenario, world=, seed=, moves=None)` passes `moves` to every `allocate()` (start, add_report(s), close_road) and to `robust_plan()` → `search()` for `optimize()`. None = allocator default (112 moves scored on the fixture); `moves=5` → 5.
+Files: engine/ember_engine/api.py, engine/ember_engine/daytona/robust.py, engine/tests/test_api.py, docs/log/aryaman.md
+Run: uv run --project engine pytest -q engine/tests/test_api.py
+Interfaces: new optional kwarg only. Soham: `EngineSession(path, world=..., seed=..., moves=int(os.getenv("EMBER_MOVES")) if ... else None)` in engine_bridge.py, e.g. moves=10 in your conftest. Neither file is in the Daytona snapshot hash (still ember-engine-489b50f1ea), so no snapshot rebuild.
+Status: done. 84 engine tests; smoke OK.
+Next: docs/DEMO.md.

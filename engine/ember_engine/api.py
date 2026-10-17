@@ -45,13 +45,15 @@ def assignment_events(plan: dict) -> list[dict]:
 
 
 class EngineSession:
-    def __init__(self, scenario_path: str | Path = DEFAULT_SCENARIO, world=None, seed: int = 0):
+    def __init__(self, scenario_path: str | Path = DEFAULT_SCENARIO, world=None, seed: int = 0,
+                 moves: int | None = None):
         from .daytona.pool import _load_world
         from .scenario import load_scenario
         self.scenario_path = Path(scenario_path)
         self.scn = load_scenario(self.scenario_path)
         self.world = world if world is not None else _load_world()
         self.seed = seed
+        self.moves = moves                 # local-search budget per (re)plan; None = the allocator's default
         self.reports: list[dict] = []      # every report the engine has seen, in arrival order
         self.plan: dict | None = None
         self.versions: list[dict] = []
@@ -64,7 +66,7 @@ class EngineSession:
         from .allocator import allocate
         with self.lock:
             self.reports = []
-            self.plan = allocate(self.world, self.scn, seed=self.seed)
+            self.plan = allocate(self.world, self.scn, seed=self.seed, moves=self.moves)
             self.versions = [self.plan]
             return self._state(0.0)
 
@@ -88,7 +90,7 @@ class EngineSession:
             known = [r for r in self.reports if float(r["observed_at_t_s"]) <= t]
             trigger = "; ".join(f"{r.get('source', 'resident')} report {r['id']}: {r['kind']}" for r in reports)
             self.plan = allocate(self.world, self.scn, reports=known, t_now=t, prev=self.plan, prev_reports=before,
-                                 seed=self.seed, trigger=trigger)
+                                 seed=self.seed, moves=self.moves, trigger=trigger)
             self.versions.append(self.plan)
             return {"plan": self.plan, "assignment_events": assignment_events(self.plan), "state": self._state(t)}
 
@@ -133,7 +135,7 @@ class EngineSession:
             known = [r for r in self.reports if float(r["observed_at_t_s"]) <= t_now]
             plan, _ = robust_plan(self.world, self.scn, known, t_now=t_now, prev=self.plan if t_now > 0 else None,
                                   prev_reports=known, k=k, seeds=seeds, pool=pool, on_point=on_point, seed=self.seed,
-                                  trigger="robust optimization")
+                                  moves=self.moves, trigger="robust optimization")
             if self.plan is not None and t_now <= 0:
                 plan["version"], plan["parent_version"] = self.plan["version"] + 1, self.plan["version"]
             self.plan = plan
