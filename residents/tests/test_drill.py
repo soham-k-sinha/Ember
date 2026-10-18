@@ -1,9 +1,10 @@
-"""The text-driven drill (D56): a resident texts where they are, gets placed on the map, answers the plan's
-question, says YES, then gets one text per step (go to the corner / board / ride / checked in) and
-replies DONE; with auto_clock the sim clock jumps to the next step. Real allocator + simulator, fake LLM,
-fake geocoder, no network."""
+"""The text-driven run (D56, proactive since D100): a resident texts where they are, gets placed on the map, answers
+the one question, and the pickup instruction comes by itself (no YES), then one text per step on the plan's clock
+(2 minutes away / outside / on board / checked in); nobody has to say DONE. Real allocator + simulator, fake LLM, fake
+geocoder, no network."""
 import asyncio
 import json
+import re
 import time
 from dataclasses import replace
 
@@ -16,7 +17,8 @@ from residents.drill import Drill, SetupError, main as drill_main
 from residents.extract import to_outcome
 from residents.guide import STEP_DONE
 from residents.locate import JOIN_LEAD_S
-from residents.messaging import DEV_LINE, IPHONE_ONLY, JOIN_TTL_S
+from residents.messaging import DEV_LINE, DISCLOSURE, IPHONE_ONLY, JOIN_TTL_S
+from residents.outbound import ASK_NEEDS
 from residents.photon import parse_inbound
 from residents.places import Place, parse_coords
 from tests.fake_photon import LINE, PROJECT, FakePhoton, received
@@ -84,14 +86,14 @@ def test_resident_is_placed_where_they_text(drill, solo_bridge, town):
     hid = t["household_id"]
     outs = tap.outs(R1)
     assert outs[-2].startswith("Got it: we have you at Green Street and Sellers Street. Your street")  # their corner
-    assert "Your street is outside the forecast flood area. (Drill tip: to test an evacuation, start over from a spot the water reaches, e.g. " in outs[-2]
-    assert outs[-1] == "How many people are with you, and does anyone need a wheelchair-accessible vehicle?"
+    assert "Your street is outside the forecast flood area. (Tip: to try an evacuation, start over from a spot the water reaches, e.g. " in outs[-2]
+    assert outs[-1] == ASK_NEEDS
     st = drill.get("/state").json()
     h = next(x for x in st["households"] if x["household_id"] == hid)
     assert h["needs"] == "unknown" and h["label"] == "Green Street and Sellers Street (texted in)"
     assert validate_state(st, solo_bridge.scenario, town) == []  # the added household is a valid contract row
     thread_texts = [m["text"] for m in st["messages"] if m["thread"] == t]
-    assert thread_texts[:2] == ["hi", "[EMBER drill] " + outs[0]]  # the pre-placement chat moved into the thread
+    assert thread_texts[:2] == ["hi", f"{DISCLOSURE} {outs[0]}"]  # the pre-placement chat moved into the thread
     assert [h["household_id"] for h in solo_bridge.extra_households] == [hid]
     text(drill, R1, "2 of us")  # not threatened: the plan sends no vehicle, and we say so plainly
     assert "outside the forecast flood area, so no pickup is planned: stay where you are" in tap.outs(R1)[-1]
@@ -103,7 +105,7 @@ def test_flood_zone_placement_says_when_the_water_comes(drill, solo_bridge):
     t = place(drill, tap)
     d = solo_bridge.deadline(t["household_id"])
     assert d is not None
-    assert tap.outs(R1)[-2].endswith(f"Water is forecast to reach your street in about {round((d + 900) / 60)} min.")
+    assert tap.outs(R1)[-2].endswith(f"The river reaches your street in about {round((d + 900) / 60)} min.")
     corners = solo_bridge.flood_corners(3)
     assert len(corners) == 3 and corners[0][0] <= corners[1][0] and " and " in corners[0][1]
 
@@ -112,7 +114,7 @@ def test_outside_or_unknown_place_asks_again(drill):
     tap = Tap(drill)
     register(drill)
     text(drill, R1, "42.0, -75.0")
-    assert "outside the drill area" in tap.outs(R1)[-1]
+    assert "outside the area we cover" in tap.outs(R1)[-1]
     text(drill, R1, "somewhere in Ohio")  # geocoding off in tests → not found
     assert "couldn't find \"somewhere in Ohio\"" in tap.outs(R1)[-1]
     assert thread_of(drill, R1) is None and drill.get("/state").json()["households"] == []
@@ -132,7 +134,7 @@ def test_needs_said_with_the_location_are_kept(drill, solo_bridge):
     text(drill, R1, "2 of us")  # completes the wheelchair need: no head count yet → pending
     h = next(x for x in drill.get("/state").json()["households"] if x["household_id"] == t["household_id"])
     assert h["needs"] == {"people": 2, "mobility": True, "accessible_vehicle": True}
-    assert "will pick you up at your door" in tap.outs(R1)[-1]
+    assert "is coming to your door" in tap.outs(R1)[-1]
 
 
 def test_needs_before_the_location_lead_straight_to_an_offer(drill):
@@ -143,7 +145,7 @@ def test_needs_before_the_location_lead_straight_to_an_offer(drill):
     place(drill, tap)
     outs = tap.outs(R1)
     assert outs[-2].startswith("Got it: we have you at Putnam Avenue and Western Avenue.")
-    assert " will pick you up at " in outs[-1] and "How many people" not in " ".join(outs)
+    assert " picks you up in about " in outs[-1] and "How many people" not in " ".join(outs)
 
 
 def test_two_phones_never_share_a_building(drill):
@@ -155,29 +157,28 @@ def test_two_phones_never_share_a_building(drill):
 
 
 # ---------- step-by-step directions ----------
-def test_guided_rescue_moves_the_clock_one_step_at_a_time(drill):
+def test_steps_go_out_on_the_plans_clock(drill):
+    """A busy person who never says yes or done: the instruction, then every step when the clock reaches it."""
     tap = Tap(drill)
     register(drill)
     t = place(drill, tap)
     text(drill, R1, "2 of us")
     offer = tap.outs(R1)[-1]
-    assert " will pick you up at the corner of " in offer and "Reply YES" in offer
-    text(drill, R1, "yes")
-    o = outcome(drill, t)
+    assert re.match(r"[\w ]+ picks you up in about \d+ min\. Pack medications, ID and your phone, then ", offer), offer
+    assert "Reply" not in offer and "YES" not in offer
+    o = outcome(drill, t)                                         # silence means we proceed: it's confirmed
     assert 0 < o["arrive_t"] < o["pickup_t"] < o["complete_t"]
-    step1 = tap.outs(R1)[-1]
-    assert step1.startswith("Confirmed: ") and "Step 1 of 4: Pack medications" in step1 and "the pickup point" in step1
-    assert clock(drill) == 0.0
-    text(drill, R1, "we're at the corner now")  # in their words (LLM "done") → clock → the vehicle arrives
-    assert clock(drill) == o["arrive_t"] and tap.outs(R1)[-1].startswith("Step 2 of 4: ")
-    text(drill, R1, "done")                     # aboard → the pickup is complete
-    assert clock(drill) == o["pickup_t"] and tap.outs(R1)[-1].startswith("Step 3 of 4: You're on your way to ")
-    text(drill, R1, "DONE")                     # arrived → checked in
-    assert clock(drill) == o["complete_t"] and tap.outs(R1)[-1].startswith("Step 4 of 4: You're checked in at ")
+    steps = [(o["arrive_t"] - 120, " is 2 minutes away. Go to the corner of "), (o["arrive_t"], " now. Tell the driver your address and "
+             "that you are 2, then get in."), (o["pickup_t"], "You're on board, on your way to "),
+             (o["complete_t"], "You're checked in at ")]
+    for t_s, words in steps:
+        assert clock(drill) < t_s
+        drill.post("/clock", json={"t_s": t_s})
+        assert words in tap.outs(R1)[-1], (words, tap.outs(R1)[-1])
     h = next(x for x in drill.get("/state").json()["households"] if x["household_id"] == t["household_id"])
     assert h["status"] == "safe"
-    g = drill.app.state.guide.state(f"household:{t['household_id']}")
-    assert g["finished"] and g["done"] == [0, 1, 2]
+    assert drill.app.state.guide.state(f"household:{t['household_id']}")["finished"]
+    assert not any("Reply" in x or "DONE" in x or "YES" in x for x in tap.outs(R1))
     n = len(tap.outs(R1))
     drill.post("/replan")  # a later replan must not tell them their (finished) ride is "no longer coming"
     assert not any("no longer coming" in x for x in tap.outs(R1)[n:])
@@ -206,8 +207,7 @@ def test_walking_directions_to_the_corner(drill, solo_bridge):
     t = thread_of(drill, R1)
     node = solo_bridge.household_node(t["household_id"])
     text(drill, R1, "2 of us")
-    text(drill, R1, "yes")
-    step1 = next(x for x in tap.outs(R1) if "Step 1 of 4" in x)
+    step1 = next(x for x in tap.outs(R1) if " picks you up " in x)
     m = re.search(r"walk to the pickup point: (the corner of .+?), about (\d+) m (\S+) of you \(about (\d+) min on foot\)", step1)
     assert m, step1
     nlon, nlat = g.nodes[node]
@@ -220,52 +220,30 @@ def test_wheelchair_pickup_is_at_the_door(drill):
     register(drill)
     place(drill, tap)
     text(drill, R1, "me and my dad, he uses a wheelchair")
-    assert "Accessible Van 3 will pick you up at your door" in tap.outs(R1)[-1]
-    text(drill, R1, "yes")
-    assert any("Step 1 of 4: Stay inside at Putnam Avenue and Western Avenue" in x for x in tap.outs(R1))
+    assert tap.outs(R1)[-1].startswith("Accessible Van 3 is coming to your door in about ")
+    assert "Be ready at the door with medications, ID, your phone and the wheelchair." in tap.outs(R1)[-1]
 
 
-def test_manual_clock_waits_for_the_clock(settings, solo_bridge):
+def test_done_and_yes_are_understood_never_needed(settings, solo_bridge):
     with make(settings, solo_bridge, auto=False) as c:
         tap = Tap(c)
-        register(c)
+        for h in (R1, R2):
+            register(c, h)
         t = place(c, tap)
-        text(c, R1, "2 of us")
-        text(c, R1, "yes")
+        place(c, tap, R2, CALLENDER)
+        for h in (R1, R2):
+            text(c, h, "2 of us")
         o = outcome(c, t)
-        text(c, R1, "done")
-        assert clock(c) == 0.0
-        assert tap.outs(R1)[-1] == f"Thanks. We'll text you the next step in about {round(o['arrive_t'] / 60)} min."
+        g = c.app.state.guide.state(f"household:{t['household_id']}")
+        for w in ("done", "yes"):
+            text(c, R1, w)
+            assert re.fullmatch(rf"Thanks\. [\w ]+ gets to you in about {round(o['arrive_t'] / 60)} min\.", tap.outs(R1)[-1])
+        assert clock(c) == 0.0 and c.app.state.guide.state(f"household:{t['household_id']}") == g  # nothing moved on
+        a = next(x for x in c.app.state.store.current_plan()["assignments"] if x["target"] == t)
+        r = c.post(f"/assignments/{a['id']}/confirm", json={})
+        assert r.status_code == 200 and r.json()["reason"] == "already confirmed"  # the instruction already did
         c.post("/clock", json={"t_s": o["arrive_t"]})  # the web's playback reaches the arrival
-        assert tap.outs(R1)[-1].startswith("Step 2 of 4: ")
-
-
-def test_clock_waits_until_everyone_is_done(drill):
-    tap = Tap(drill)
-    for h in (R1, R2):
-        register(drill, h)
-    place(drill, tap, R1, PUTNAM)
-    place(drill, tap, R2, CALLENDER)
-    for h in (R1, R2):
-        text(drill, h, "just me")
-        text(drill, h, "yes")
-    guide = drill.app.state.guide
-    assert len(guide.awaiting()) == 2
-    text(drill, R1, "done")
-    assert clock(drill) == 0.0 and tap.outs(R1)[-1].startswith("Thanks. We'll text you the next step")
-    text(drill, R2, "done")
-    assert clock(drill) > 0.0  # the last one EMBER waited on → the next event
-
-
-def test_confirm_on_the_console_texts_step_one(drill):
-    tap = Tap(drill)
-    register(drill)
-    t = place(drill, tap)
-    text(drill, R1, "2 of us")
-    a = next(x for x in drill.get("/plan/current").json()["assignments"] if x["target"] == t)
-    r = drill.post(f"/assignments/{a['id']}/confirm", json={})
-    assert r.status_code == 200, r.text
-    assert "Step 1 of 4" in tap.outs(R1)[-1]
+        assert " now. Tell the driver your address" in tap.outs(R1)[-1]
 
 
 def test_operator_gets_generator_steps(drill):
@@ -273,13 +251,13 @@ def test_operator_gets_generator_steps(drill):
     assert drill.post("/phones", json={"role": "operator", "handle": OP, "facility_id": "mt-auburn"}).status_code == 200
     text(drill, OP, "on backup, 40 minutes of fuel left", role="operator")
     offer = tap.outs(OP)[-1]
-    assert "is on its way to you" in offer and "Reply YES" in offer
-    text(drill, OP, "yes", role="operator")
-    assert "Step 1 of 3: Have someone meet the crew" in tap.outs(OP)[-1]
-    text(drill, OP, "done", role="operator")
-    assert tap.outs(OP)[-1].startswith("Step 2 of 3: ") and "to connect it" in tap.outs(OP)[-1]
-    text(drill, OP, "done", role="operator")
-    assert tap.outs(OP)[-1].startswith("Step 3 of 3: Mount Auburn Hospital is on ")
+    assert " is on its way to Mount Auburn Hospital, arriving in about " in offer and "Have someone meet the crew" in offer
+    assert "Reply" not in offer
+    guide = drill.app.state.guide
+    drill.post("/clock", json={"t_s": drill.portal.call(guide.next_event_t)})
+    assert " has arrived. The crew needs about " in tap.outs(OP)[-1]
+    drill.post("/clock", json={"t_s": drill.portal.call(guide.next_event_t)})
+    assert tap.outs(OP)[-1].startswith("Mount Auburn Hospital is on ")
     drill.app.state.intake.llm.script["thanks"] = ex(fact("other"))
     text(drill, OP, "thanks", role="operator")
     assert tap.outs(OP)[-1].startswith("Mount Auburn Hospital is on Generator")
@@ -290,13 +268,12 @@ def test_a_moved_pickup_says_why(drill):
     register(drill)
     thread = place(drill, tap, R1, CALLENDER)
     text(drill, R1, "just me")
-    text(drill, R1, "yes")
     p = drill.app.state.planner
     _, plan = drill.portal.call(p.close_road, p.bridge.resolve_road("Callender St", None, thread["household_id"]), "resident")
     assert plan["trigger"] == "Resident (Callender Street): road blocked"
     a = next(x for x in drill.app.state.store.current_plan()["assignments"] if x["target"] == thread and x["status"] == "confirmed")
     update = drill.app.state.outbound.compose(a, thread, p.now(), plan["version"])
-    assert update.startswith("Update: Callender Street was reported blocked, so Van "), update
+    assert update.startswith("Your pickup changed: Callender Street was reported blocked, so Van "), update
 
 
 # ---------- runs: reset and restart ----------
@@ -308,7 +285,8 @@ def test_reset_starts_from_scratch(drill, solo_bridge):
     assert thread_of(drill, R1) is None and solo_bridge.extra_households == []
     assert all(h["household_id"] != t["household_id"] for h in drill.get("/state").json()["households"])
     assert drill.app.state.store.kv_prefix("located:") == {} and drill.app.state.store.kv_get("extra_households") is None
-    assert tap.outs(R1)[-1].startswith("Welcome to the EMBER flood drill.")  # asked again (dev delivery)
+    assert tap.outs(R1)[-1].startswith("Where are you right now?")  # asked again (dev delivery)
+    assert tap.events[-1]["text"].startswith(DISCLOSURE)            # a new run: the notice once more (D100)
     assert place(drill, tap) == t  # and placed again
 
 
@@ -318,13 +296,12 @@ def test_restart_keeps_the_people_who_texted_in(settings, solo_bridge):
         register(c)
         t = place(c, tap)
         text(c, R1, "2 of us")
-        text(c, R1, "yes")
     solo_bridge.set_extra_households([])  # as if the process restarted with a fresh engine
     with make(settings, solo_bridge) as c:  # same DB, no reset
         assert [h["household_id"] for h in solo_bridge.extra_households] == [t["household_id"]]
         assert thread_of(c, R1) == t
         assert any(h["household_id"] == t["household_id"] for h in c.get("/state").json()["households"])
-        assert c.app.state.guide.awaiting() == [f"household:{t['household_id']}"]
+        assert c.app.state.guide.guiding(t)
 
 
 # ---------- Photon: the lobby opts the phone in and replies on the shared line ----------
@@ -344,8 +321,9 @@ def test_unplaced_phone_opts_in_and_is_answered_over_photon(settings, solo_bridg
         assert len(fp.sends()) == 1
         deliver(c, received("m-2", R1, GREEN))
         texts = [x["content"]["text"] for x in fp.sends()]
-        assert texts[-2].startswith("[EMBER drill] Got it: we have you at Green Street and Sellers Street.")
-        assert texts[-1].startswith("[EMBER drill] How many people are with you")
+        assert texts[0].startswith(DISCLOSURE) and not any(DISCLOSURE in x for x in texts[1:])  # once, on the first text
+        assert texts[-2].startswith("Got it: we have you at Green Street and Sellers Street.")
+        assert texts[-1] == ASK_NEEDS
         assert thread_of(c, R1) is not None
 
 
@@ -363,7 +341,7 @@ def test_console_commands(drill, capsys):
     run("@r1 yes")
     run("status")
     out = capsys.readouterr().out
-    assert "r1: household #" in out and "step 1 of 4 · waiting for DONE" in out
+    assert "r1: household #" in out and "step 1 of 5" in out
     run("+5")
     assert clock(drill) == 300.0
     run("n")
@@ -504,9 +482,9 @@ def pair(drill):
 def test_offers_say_why_and_who_is_ahead(pair):
     c, tap, t1, t2 = pair
     assert t1 != t2
-    o2, o1 = next(x for x in reversed(tap.outs(R2)) if "will pick you up" in x), tap.outs(R1)[-1]
-    assert o2.startswith("Accessible Van 3 will pick you up at your door")
-    assert "Your street isn't forecast to flood, so this is a precaution; reply NO if you'd rather stay put." in o2
+    o2, o1 = next(x for x in reversed(tap.outs(R2)) if "is coming to your door" in x), tap.outs(R1)[-1]
+    assert o2.startswith("Accessible Van 3 is coming to your door")
+    assert "Your street isn't forecast to flood, so this is a precaution; tell us if you'd rather stay put." in o2
     assert "Accessible Van 3 is the only wheelchair-accessible vehicle that fits 3 people; it picks up 1 other household first" in o1, o1
     assert "at your corner" in o1
 
@@ -530,7 +508,7 @@ def test_questions_are_answered_from_the_plan(pair):
     text(c, R1, "is the bridge open?")  # labelled `other`: a coordinator, and where they stand meanwhile (D60)
     assert tap.outs(R1)[-1].startswith("Our plan doesn't cover that, so we've passed your question to a coordinator, "
                                        "who will reply here. Meanwhile, here's where you stand: Accessible Van 3 is "
-                                       "assigned to pick you up"), tap.outs(R1)[-1]
+                                       "coming to your door in about "), tap.outs(R1)[-1]
 
 
 def test_no_to_the_only_vehicle_is_checked_and_the_question_answered(pair):
@@ -538,14 +516,15 @@ def test_no_to_the_only_vehicle_is_checked_and_the_question_answered(pair):
     n = len(tap.outs(R1))
     text(c, R1, "no, we want to travel with others, is there another person near me?")
     new = tap.outs(R1)[n:]
-    assert new[0].startswith("1 other household in this drill is within 300 m of you (1 at your pickup corner).")
+    assert new[0].startswith("1 other household we're helping is within 300 m of you (1 at your pickup corner).")
     assert "Accessible Van 3 also picks up 1 of them (1 before you, 0 after)" in new[0]
     # engine D59 shares trips, but 4 + 3 people don't fit the van's 6 seats: say so, not "one household per trip"
     assert "on separate trips: together you'd be 7 people and it has 6 seats." in new[0], new[0]
-    assert new[1].startswith("Accessible Van 3 is the only wheelchair-accessible vehicle that can take 3 people with a wheelchair.")
+    assert new[1].startswith("Accessible Van 3 is the only wheelchair-accessible vehicle that can take 3 people with a wheelchair,")
     assert c.app.state.store.kv_get(f"rejected:household:{t1['household_id']}") is None  # not banned
-    text(c, R1, "yes")  # keep it
-    assert any("Confirmed: Accessible Van 3 is coming to your door" in x for x in tap.outs(R1)[n:])
+    assert new[1].endswith("It's still coming unless you say no again.")
+    text(c, R1, "yes")  # keep it: understood, never needed
+    assert tap.outs(R1)[-1].startswith("Thanks. Accessible Van 3 gets to you in about ")
 
 
 def test_declined_anyway_then_yes_takes_it_back(pair):
@@ -558,10 +537,10 @@ def test_declined_anyway_then_yes_takes_it_back(pair):
     assert "Accessible Van 3 (you declined it)" in tap.outs(R1)[-1]
     status = c.app.state.outbound.status_text(c.app.state.store.plan_view(), t1)
     assert status.startswith("You declined Accessible Van 3, the only vehicle that can take 3 people, wheelchair-accessible vehicle")
-    assert "Reply YES if you want Accessible Van 3 after all" in status
+    assert "Tell us if you want Accessible Van 3 after all" in status
     text(c, R1, "yes")
     assert c.app.state.store.kv_get(key) == "[]"
-    assert any("Confirmed: Accessible Van 3 is coming to your door" in x for x in tap.outs(R1)[-3:]), tap.outs(R1)[-3:]
+    assert any(x.startswith("Accessible Van 3 is coming to your door") for x in tap.outs(R1)[-3:]), tap.outs(R1)[-3:]
 
 
 def test_no_with_another_vehicle_free_declines_at_once(drill):
@@ -583,7 +562,7 @@ def test_garbled_need_plans_what_is_clear_and_asks_about_the_rest(drill):
     place(drill, tap)
     text(drill, R1, "4 people and we need a Welch's")
     outs = tap.outs(R1)
-    assert " will pick you up at " in outs[-2]
+    assert " picks you up in about " in outs[-2]
     assert outs[-1] == "Did you mean you need a wheelchair-accessible vehicle?"
 
 
@@ -661,7 +640,7 @@ def test_register_then_text_places_three_players(lobby, solo_bridge):
     assert c.app.state.store.plan(2)["trigger"] == "Players 1, 2, 3 joined"
     for h in phones:  # every reply goes back over iMessage, on the space their text came from
         texts = [x["content"]["text"] for x in fp.sends() if x["spaceId"] == f"pho_spc_{h[-4:]}"]
-        assert texts[0].startswith(f"[EMBER drill] Welcome to the EMBER flood drill. You're Player {ps[h]['player']}:")
+        assert texts[0].startswith(f"{DISCLOSURE} You're Player {ps[h]['player']}, living by ")
         assert "How many people are with you" in texts[-1]                  # the plan asks its own question
 
 
@@ -731,7 +710,7 @@ def test_reset_places_players_who_texted(lobby):
     assert c.app.state.store.plan_versions() == [1, 2]
     texts = [x["content"]["text"] for x in fp.sends()]
     assert not any("Where are you right now?" in t for t in texts)          # never asked where they are
-    assert sum("You're Player 1:" in t for t in texts) == 2
+    assert sum("You're Player 1," in t for t in texts) == 2
 
 
 def test_dev_join_without_photon(settings, solo_bridge):
@@ -745,8 +724,9 @@ def test_dev_join_without_photon(settings, solo_bridge):
         assert c.app.state.store.plan(2)["trigger"] == "Player 1 joined"
 
 
-def test_an_undelivered_text_becomes_a_call(lobby):
-    """D90: Photon refuses a text after its retries → the voice manager calls them with that instruction."""
+def test_a_player_is_called_and_an_undelivered_text_becomes_a_call(lobby):
+    """D100: a player who joins is called right away (first contact); the text says so. D90: Photon refuses a text after
+    its retries → the voice manager calls them with that text."""
     import httpx
     c, fp = lobby
     v = c.app.state.voice
@@ -758,19 +738,27 @@ def test_an_undelivered_text_becomes_a_call(lobby):
         seen.append(json.loads(req.content or b"null"))
         return httpx.Response(200, json={"success": True, "conversation_id": "conv_9", "sip_call_id": "s"})
     v.http = httpx.AsyncClient(transport=httpx.MockTransport(eleven))
+
+    def openings():
+        return [(b["to_number"], b["conversation_initiation_client_data"]["conversation_config_override"]["agent"]["first_message"])
+                for b in seen if b and "to_number" in b]
     h = "+16175550201"
     join(c, h)
-    assert seen == []                                                       # delivered texts never call
+    [joined] = [x["content"]["text"] for x in fp.sends()]
+    assert re.fullmatch(rf"{re.escape(DISCLOSURE)} You're Player 1, living by [^;]+; the river reaches your street in about "
+                        rf"\d+ min\. We're calling you now\.", joined), joined
+    [(to, first)] = openings()                                              # the question is on the call, not texted
+    assert to == h and first.startswith("This is EMBER, an automated assistant in a live flood simulation. The river reaches ")
+    assert first.endswith(ASK_NEEDS)
+    c.portal.call(v.hang_up, h)                                             # nobody answered: a retry later, no text yet
+    assert len(fp.sends()) == 1
     hid = players(c)[h]["household_id"]
     fp.reject_sends = True
     r = c.post("/ask", json={"role": "resident", "household_id": hid, "question": "Is anyone with you on oxygen?"})
     assert r.json()["delivery"] == "failed"
-    [body] = seen
-    assert body["to_number"] == h
-    first = body["conversation_initiation_client_data"]["conversation_config_override"]["agent"]["first_message"]
-    assert first == "Hi, this is EMBER, an automated assistant for the flood drill, calling because our text to you didn't go " \
-                    "through. Is anyone with you on oxygen?", first
+    assert openings()[-1] == (h, "Hi, it's EMBER. Our text to you didn't go through, so I'm calling with it. Is anyone "
+                                 "with you on oxygen?")
     assert c.get("/calls").json()["live"][0]["reason"] == "undelivered"
     c.portal.call(v.hang_up, h)                                             # nobody answered
     c.post("/ask", json={"role": "resident", "household_id": hid, "question": "Are you still at home?"})
-    assert len(seen) == 1                                                   # one call per (phone, reason) per cooldown
+    assert len(openings()) == 2                                             # one call-back per phone per cooldown

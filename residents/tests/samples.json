@@ -1,5 +1,5 @@
 {
- "_doc": "51 messages (#21 is DEMO.md beat 4, verbatim; #22-27 are the drill's location and DONE replies; #28-32 question topics, a decline with a question, a garbled need; #33-45 the D60 topics plan / flood / roads / safety / other, #33, #34 and #37 verbatim from the 2026-10-17 run; #46-51 the 2026-10-17 phone call, with the conversation as history: a 'no' that is a problem or a correction is not a decline) a resident or operator might text during the drill, with the expected extraction. `expect.kinds` = fact kinds in order; other keys are checked on the fact of that kind. `context` = what we last sent / what we're waiting on. `gold` = what is true when it differs from the ideal extraction (#32: \"Welch's\" is a wheelchair; scripts/eval_sim.py simulates it). Run: uv run python scripts/eval_extract.py",
+ "_doc": "59 messages (#21 is DEMO.md beat 4, verbatim; #22-27 are the drill's location and DONE replies; #28-32 question topics, a decline with a question, a garbled need; #33-45 the D60 topics plan / flood / roads / safety / other, #33, #34 and #37 verbatim from the 2026-10-17 run; #46-51 the 2026-10-17 phone call, with the conversation as history: a 'no' that is a problem or a correction is not a decline) a resident or operator might text during the drill, with the expected extraction. `expect.kinds` = fact kinds in order; other keys are checked on the fact of that kind. `context` = what we last sent / what we're waiting on. `gold` = what is true when it differs from the ideal extraction (#32: \"Welch's\" is a wheelchair; scripts/eval_sim.py simulates it). Run: uv run python scripts/eval_extract.py #52-56 cover urgent speech and scoped negative needs (D102); #42 now requires urgency as well as a safety question. Historical model scores used the original 51-message set. #57-59 cover ordinary spoken counts and hesitation heard in the authorized rehearsal; no real phone identifiers are included.",
  "samples": [
   {
    "role": "resident",
@@ -432,7 +432,7 @@
    "role": "resident",
    "text": "what happens now?",
    "context": {
-    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse (drill shelter). Reply YES to confirm, or tell us what changed. (plan v3)"
+    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse. Reply YES to confirm, or tell us what changed. (plan v3)"
    },
    "expect": {
     "kinds": [
@@ -471,7 +471,7 @@
    "role": "resident",
    "text": "will the water reach my street?",
    "context": {
-    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse (drill shelter). Reply YES to confirm, or tell us what changed. (plan v3)"
+    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse. Reply YES to confirm, or tell us what changed. (plan v3)"
    },
    "expect": {
     "kinds": [
@@ -484,7 +484,7 @@
    "role": "resident",
    "text": "is River St open?",
    "context": {
-    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse (drill shelter). Reply YES to confirm, or tell us what changed. (plan v3)"
+    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse. Reply YES to confirm, or tell us what changed. (plan v3)"
    },
    "expect": {
     "kinds": [
@@ -512,7 +512,7 @@
    "role": "resident",
    "text": "is it safe to drive to my sister's place?",
    "context": {
-    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse (drill shelter). Reply YES to confirm, or tell us what changed. (plan v3)"
+    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse. Reply YES to confirm, or tell us what changed. (plan v3)"
    },
    "expect": {
     "kinds": [
@@ -529,6 +529,7 @@
    },
    "expect": {
     "kinds": [
+     "urgent",
      "question"
     ],
     "question_topic": "safety"
@@ -551,7 +552,7 @@
    "role": "resident",
    "text": "can I bring my cat?",
    "context": {
-    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse (drill shelter). Reply YES to confirm, or tell us what changed. (plan v3)"
+    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse. Reply YES to confirm, or tell us what changed. (plan v3)"
    },
    "expect": {
     "kinds": [
@@ -564,7 +565,7 @@
    "role": "resident",
    "text": "what should I pack?",
    "context": {
-    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse (drill shelter). Reply YES to confirm, or tell us what changed. (plan v3)"
+    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse. Reply YES to confirm, or tell us what changed. (plan v3)"
    },
    "expect": {
     "kinds": [
@@ -577,7 +578,7 @@
    "role": "resident",
    "text": "Um, we are three people, and no one needs a, a vehi- uh, no one needs an accessible vehicle.",
    "context": {
-    "last_outbound": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed.",
+    "last_outbound": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed.",
     "history": [
      {
       "from": "EMBER",
@@ -589,7 +590,7 @@
      },
      {
       "from": "EMBER",
-      "text": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
+      "text": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
      }
     ]
    },
@@ -605,7 +606,7 @@
    "role": "resident",
    "text": "No, uh, that's not okay because I'm currently stuck in my house and I can't get out.",
    "context": {
-    "last_outbound": "Van 1 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed.",
+    "last_outbound": "Van 1 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed.",
     "history": [
      {
       "from": "EMBER",
@@ -617,7 +618,7 @@
      },
      {
       "from": "EMBER",
-      "text": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
+      "text": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
      },
      {
       "from": "them",
@@ -625,7 +626,7 @@
      },
      {
       "from": "EMBER",
-      "text": "Van 1 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
+      "text": "Van 1 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
      }
     ]
    },
@@ -640,7 +641,7 @@
    "role": "resident",
    "text": "No, um, actually, I'm injured right now. I've got, like, I've got a broken leg. I can't walk, so I can't make it out of the house.",
    "context": {
-    "last_outbound": "Accessible Van 3 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed.",
+    "last_outbound": "Accessible Van 3 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed.",
     "history": [
      {
       "from": "EMBER",
@@ -652,7 +653,7 @@
      },
      {
       "from": "EMBER",
-      "text": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
+      "text": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
      }
     ]
    },
@@ -668,7 +669,7 @@
    "role": "resident",
    "text": "no thanks, we'll drive ourselves to my sister's",
    "context": {
-    "last_outbound": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed.",
+    "last_outbound": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed.",
     "history": [
      {
       "from": "EMBER",
@@ -680,7 +681,7 @@
      },
      {
       "from": "EMBER",
-      "text": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
+      "text": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
      }
     ]
    },
@@ -694,7 +695,7 @@
    "role": "resident",
    "text": "No.",
    "context": {
-    "last_outbound": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed.",
+    "last_outbound": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed.",
     "history": [
      {
       "from": "EMBER",
@@ -706,7 +707,7 @@
      },
      {
       "from": "EMBER",
-      "text": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
+      "text": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
      }
     ]
    },
@@ -720,7 +721,7 @@
    "role": "resident",
    "text": "no, it's actually 4 of us",
    "context": {
-    "last_outbound": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed.",
+    "last_outbound": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed.",
     "history": [
      {
       "from": "EMBER",
@@ -732,10 +733,92 @@
      },
      {
       "from": "EMBER",
-      "text": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
+      "text": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
      }
     ]
    },
+   "expect": {
+    "kinds": [
+     "need"
+    ],
+    "people": 4
+   }
+  },
+  {
+   "role": "resident",
+   "text": "the water is at our door, please hurry",
+   "expect": {
+    "kinds": [
+     "urgent"
+    ]
+   }
+  },
+  {
+   "role": "resident",
+   "text": "no help has arrived, please hurry",
+   "expect": {
+    "kinds": [
+     "urgent"
+    ]
+   }
+  },
+  {
+   "role": "resident",
+   "text": "nobody needs help, but water is at our door",
+   "expect": {
+    "kinds": [
+     "urgent"
+    ]
+   }
+  },
+  {
+   "role": "resident",
+   "text": "no wheelchair, I need oxygen",
+   "expect": {
+    "kinds": [
+     "need"
+    ],
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": true
+   }
+  },
+  {
+   "role": "resident",
+   "text": "no one needs an accessible vehicle",
+   "expect": {
+    "kinds": [
+     "need"
+    ],
+    "mobility": false,
+    "accessible_vehicle": false
+   }
+  },
+  {
+   "role": "resident",
+   "text": "We are four, and we need one w- wheelchair.",
+   "expect": {
+    "kinds": [
+     "need"
+    ],
+    "people": 4,
+    "mobility": true,
+    "accessible_vehicle": true
+   }
+  },
+  {
+   "role": "resident",
+   "text": "Uh, four.",
+   "expect": {
+    "kinds": [
+     "need"
+    ],
+    "people": 4
+   }
+  },
+  {
+   "role": "resident",
+   "text": "Um, we're four.",
    "expect": {
     "kinds": [
      "need"

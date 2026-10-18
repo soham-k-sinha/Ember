@@ -560,15 +560,18 @@ export function App() {
     }
   }
 
-  /** 50 seeds × 5 plans = 250 worlds by default; the stress test sends 2000 seeds = 10,000 worlds. */
+  /** Paired worlds per plan: 50 by default, 2000 for the large test; distinct plans determine total runs. */
   async function optimize(seeds?: number) {
     dispatch({ type: "tab", tab: "proof" });
     if (!live) {
       toast("Optimize runs on the backend (Daytona, or the local pool): switch to Live in settings.");
       return;
     }
+    dispatch({ type: "playing", playing: false });
     dispatch({ type: "busy", busy: seeds ? "stress" : "optimize" });
     try {
+      // Stress-test one point in time. Synchronize the paused playhead before starting the batch.
+      await postJson(`${root}/clock`, { t_s: clock.get() }, 20000);
       try {
         await postJson(`${root}/optimize${seeds ? `?seeds=${seeds}` : ""}`, {}, 15000);
       } catch (error) {
@@ -579,7 +582,14 @@ export function App() {
       let last: unknown = null;
       for (;;) {
         await new Promise((resolve) => window.setTimeout(resolve, 1000));
-        const body = await getJson(`${root}/optimize`);
+        let body: unknown;
+        try {
+          body = await getJson(`${root}/optimize`, 20000);
+        } catch (error) {
+          // A busy backend or a short connection loss must not hide a batch still streaming over WS.
+          if (Date.now() > deadline) throw error;
+          continue;
+        }
         if (typeof body === "object" && body !== null && (body as { running?: unknown }).running === false) {
           last = (body as { last?: unknown }).last ?? null;
           break;
@@ -633,7 +643,8 @@ export function App() {
           <strong>EMBER</strong>
           <span>Allston flood · live simulation</span>
         </p>
-        <Transport clock={clock} playing={model.playing} onPlay={(playing) => dispatch({ type: "playing", playing })} />
+        <Transport clock={clock} playing={model.playing} disabled={model.busy === "stress" || model.busy === "optimize"}
+          onPlay={(playing) => dispatch({ type: "playing", playing })} />
         <label className="switch">
           <input
             type="checkbox"
@@ -762,11 +773,11 @@ export function App() {
 }
 
 /** Play, scrub and the clock: follows every frame, so the scrubber never lags the stage. */
-function Transport(props: { clock: Clock; playing: boolean; onPlay: (playing: boolean) => void }) {
+function Transport(props: { clock: Clock; playing: boolean; disabled?: boolean; onPlay: (playing: boolean) => void }) {
   const t = useClock(props.clock);
   return (
     <div className="transport">
-      <button className="play" aria-label={props.playing ? "Pause" : "Play"} onClick={() => props.onPlay(!props.playing)}>
+      <button className="play" disabled={props.disabled} aria-label={props.playing ? "Pause" : "Play"} onClick={() => props.onPlay(!props.playing)}>
         {props.playing ? "❚❚" : "▶"}
       </button>
       <input
@@ -776,11 +787,12 @@ function Transport(props: { clock: Clock; playing: boolean; onPlay: (playing: bo
         max={scenario.t_end_s}
         step={scenario.tick_s ?? 60}
         value={t}
+        disabled={props.disabled}
         onChange={(event) => props.clock.set(Number(event.target.value))}
       />
       <p className="time">
         {formatSim(t)}
-        <small>{clockLabel(t)}</small>
+        <small>{props.disabled ? "Paused for stress test" : clockLabel(t)}</small>
       </p>
     </div>
   );

@@ -18,6 +18,7 @@ This module knows nothing about Ember state; `messaging.py` decides what an inbo
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import random
 import time
@@ -128,8 +129,28 @@ class PhotonClient:
     async def create_assignment(self, handle: str, generation: int = 0) -> dict:
         """Map a tester's phone onto a shared iMessage line (one seat). Idempotent per handle and generation: after a
         release the next generation creates a new assignment instead of replaying the released one."""
-        return await self._request("POST", "platforms/imessage/assignments", json={"handle": handle},
-                                   idempotency_key=f"ember-assign-{handle}" + (f"-{generation}" if generation else ""))
+        path = "platforms/imessage/assignments"
+        try:
+            return await self._request("POST", path, json={"handle": handle},
+                                       idempotency_key=f"ember-assign-{handle}" + (f"-{generation}" if generation else ""))
+        except PhotonError as error:
+            if error.status != 409 or not isinstance(error.body, dict) or error.body.get("code") != "ASSIGNMENT_EXISTS":
+                raise
+            # A different DB or an expired idempotency cache may have provisioned this handle already.
+            # Recover that live seat without releasing it or assigning a second line.
+            params: dict = {"pageSize": 200}
+            seen = set()
+            while True:
+                page = await self._request("GET", path, params=params)
+                for assignment in page.get("assignments", []):
+                    if assignment.get("handle") == handle and not assignment.get("releasedAt"):
+                        return assignment
+                token = page.get("nextPageToken")
+                if not token or token in seen:
+                    break
+                seen.add(token)
+                params["pageToken"] = token
+            raise
 
     async def release_assignment(self, assignment_id: str) -> dict:
         """Free an assignment's seat and handle (DELETE; repeating it is safe)."""
@@ -194,7 +215,8 @@ class PhotonListener:
         for t in self._tasks:
             t.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
-        await self._close_sio()
+        with contextlib.suppress(asyncio.CancelledError):  # its read loop went down with the tasks: a clean shutdown anyway
+            await self._close_sio()
 
     # ---------- socket ----------
     def _make_sio(self) -> Any:

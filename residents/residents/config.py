@@ -61,8 +61,8 @@ class Settings:
     chalk_env_id: str = field(default_factory=lambda: os.environ.get("CHALK_ENV_ID", ""))
     # Residents who text their location (D56): address lookups through OSM Nominatim (off in tests).
     geocode_enabled: bool = field(default_factory=lambda: _flag("GEOCODE", True))
-    # The drill: no synthetic scenario households (only the people who text in), and a DONE from the last
-    # person anyone waited on moves the sim clock to the next step.
+    # The drill console: no synthetic scenario households (only the people who text in); AUTO_CLOCK also tells a
+    # tester outside the flood where to start over.
     drill_residents: tuple[str, ...] = field(default_factory=lambda: _csv("DRILL_RESIDENTS"))  # ember-drill's phones
     drill_operators: tuple[str, ...] = field(default_factory=lambda: _csv("DRILL_OPERATORS"))  # PHONE@FACILITY
     drill_solo: bool = field(default_factory=lambda: _flag("DRILL_SOLO", False))
@@ -73,13 +73,17 @@ class Settings:
     elevenlabs_agent_id: str = field(default_factory=lambda: os.environ.get("ELEVENLABS_AGENT_ID", ""))
     elevenlabs_phone_number_id: str = field(default_factory=lambda: os.environ.get("ELEVENLABS_PHONE_NUMBER_ID", ""))
     voice_port: int = field(default_factory=lambda: int(os.environ.get("VOICE_PORT", "8100")))
-    # someone who calls the number but isn't registered becomes a resident to be located (judges can call in)
+    # someone who calls the number but isn't registered joins as the next player, placed like POST /join (D100)
     voice_admit_callers: bool = field(default_factory=lambda: _flag("VOICE_ADMIT_CALLERS", True))
     # Multiplayer (D89): POST /join registers a phone on the shared iMessage line, then its first text to that line places
     # it as Player N. Seats: every Photon assignment, team phones too (the free plan has 25, D92)
     max_players: int = field(default_factory=lambda: int(os.environ.get("MAX_PLAYERS", "25")))
-    # D80: EMBER calls the most at-risk residents itself, at most this many calls at once (0: never calls first)
-    voice_max_concurrent: int = field(default_factory=lambda: int(os.environ.get("VOICE_MAX_CONCURRENT", "2")))
+    # D100: calls first (first contact, the pickup, a changed pickup, "2 minutes away"), at most this many at once, the rest
+    # queued earliest deadline first (0: never calls first, everything by text)
+    voice_max_concurrent: int = field(default_factory=lambda: int(os.environ.get("VOICE_MAX_CONCURRENT", "3")))
+    # how often (wall s) the backend asks ElevenLabs which calls are over and dials queued calls and retries (0: only on
+    # plan and clock changes)
+    voice_poll_s: float = field(default_factory=lambda: float(os.environ.get("VOICE_POLL_S", "5")))
     # D76: one natural reply per turn, written by Claude Haiku from the computed messages and checked by a guard
     reply_enabled: bool = field(default_factory=lambda: _flag("REPLY_ENABLED", True))
     reply_model: str = field(default_factory=lambda: os.environ.get("REPLY_MODEL", "claude-haiku-5-5"))

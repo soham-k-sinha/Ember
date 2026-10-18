@@ -65,8 +65,10 @@ def test_compare_and_optimize(session):
     assert c["scenario_id"] == session.scn["scenario_id"] and len(c["per_seed"]) == 2
     pts = []
     out = session.optimize(on_point=pts.append, seeds=3, k=2, pool=LocalPool(1, world=session.world))
-    assert len(pts) == 9 and out["plan"]["search"]["robust"]["jobs"] == 9
-    assert all(p["n_total"] == 9 for p in pts)
+    robust = out["plan"]["search"]["robust"]
+    assert "c00-trip" in robust["candidates"]  # published version preserves the new generator's timing comparison
+    assert len(pts) == robust["jobs"] == 12  # two candidates + delayed staging + baseline, three paired worlds each
+    assert all(p["n_total"] == 12 for p in pts)
     v = out["plan"]["version"]   # optimize at t=0 replaces the current version: points carry the new one
     assert all(p["plan_version"] == v and p["batch_id"] == f"v{v}" for p in pts)
     assert out["plan"]["search"]["robust"]["batch_id"] == f"v{v}"

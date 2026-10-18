@@ -22,7 +22,7 @@ from .db import Store, thread_key
 from . import fallback
 from .extract import LLM, Outcome, extract, to_outcome
 from .guide import STEP_DONE
-from .messaging import Messenger
+from .messaging import Messenger, plain
 from .outbound import Outbound
 from .planner import Planner, ReportError
 
@@ -32,8 +32,8 @@ log = logging.getLogger("residents.intake")
 YES_ONLY = re.compile(r"^\s*(yes|yeah|yep|yup|sure|ok|okay|confirm(ed)?|yes please|yes,? confirm)\s*[.!]*\s*$", re.I)
 SORRY = "Sorry, we couldn't read that. Could you say it another way?"
 # the LLM is unavailable and the keyword parser found nothing: ask for something it can read (never a loop of SORRY)
-HELP = ("Sorry, I didn't catch that. Short answers work best, like \"yes\", \"no\", \"done\", \"2 people, one "
-        "wheelchair\", or \"what's the plan?\"")
+HELP = ("Sorry, I didn't catch that. Short answers work best, like \"2 of us, one in a wheelchair\", \"no\" or "
+        "\"what's the plan?\"")
 _outage = {"logged": 0.0}  # one console line per minute while the LLM is down, not one per text
 PLANNER_DOWN = "Got your message. Our planner hit a problem; a coordinator is looking at it and will text you."
 ESCALATED = "Our plan doesn't cover that, so we've passed your question to a coordinator, who will reply here."
@@ -47,7 +47,7 @@ class Intake:
                  guide=None):
         self.store, self.messenger, self.planner, self.llm = store, messenger, planner, llm
         self.outbound = outbound
-        self.guide = guide  # step-by-step directions after a YES (guide.Guide), optional
+        self.guide = guide  # step-by-step directions on the plan's clock (guide.Guide), optional
         self.escalation_hooks: list[Callable[[dict], Any]] = []  # a question went to the coordinators (drill console)
         # one message at a time, end to end: the next text must see what the previous one changed
         # (known needs, pending questions, the new plan). Photon's worker is serial; HTTP isn't.
@@ -69,7 +69,7 @@ class Intake:
         anyway"), and a YES after declining takes the decline back (D57)."""
         async def ack(a: dict) -> None:
             if self.guide is not None and rep["kind"] == "confirm":
-                await self.guide.start(a, thread)  # "Confirmed: … Step 1 of 4: …"
+                await self.guide.start(a, thread)  # they never got the instruction: send it now
             elif self.outbound is not None:
                 await self.outbound.ack(a, rep["kind"], thread)
 
@@ -88,6 +88,8 @@ class Intake:
         res = await self.planner.respond(rep["assignment_id"], rep["kind"], rep.get("plan_version"), on_applied=ack)
         if res["stale"] and self.outbound is not None:
             await self.outbound.latest(thread)
+        elif not res["applied"] and res["assignment"] is not None and self.outbound is not None:
+            await self.outbound.ack(res["assignment"], rep["kind"], thread)  # a yes to what's already going ahead (D100)
 
     async def _check_decline(self, a: dict, thread: dict) -> None:
         """They said no to the only vehicle that fits them: make sure, instead of leaving them with nothing."""
@@ -102,9 +104,9 @@ class Intake:
         await self.messenger.send_message(
             thread, f"{who} is the only {'wheelchair-accessible ' if chair else ''}vehicle that can take "
                     f"{n.get('people') or 1} {'person' if n.get('people') == 1 else 'people'}"
-                    f"{' with a wheelchair' if chair else ''}. If you decline it, we have no other way to pick you up"
-                    f"{' before the water reaches your street' if flood else ''}. Reply YES to keep it, or NO to "
-                    f"decline anyway.", self.store.meta().get("plan_version"), a["id"])
+                    f"{' with a wheelchair' if chair else ''}, and we have no other way to pick you up"
+                    f"{' before the water reaches your street' if flood else ''}. It's still coming unless you say no "
+                    f"again.", self.store.meta().get("plan_version"), a["id"])
 
     def _undo_decline(self, a: dict, thread: dict) -> None:
         """YES after a NO: the vehicle may be offered to them again; the assignment goes back to offered."""
@@ -161,8 +163,8 @@ class Intake:
     async def _on_inbound(self, msg: dict, role: str) -> Outcome | None:
         thread = msg["thread"]
         key = thread_key(thread)
-        if self.guide is not None and self.guide.awaiting_done(thread) and STEP_DONE.match(msg["text"]):
-            await self.guide.done(thread)  # "done" / "here" / "yes" while a step waits on them: no LLM needed
+        if self.guide is not None and self.guide.guiding(thread) and STEP_DONE.match(msg["text"]):
+            await self.guide.done(thread)  # "done" / "here" / "yes" while a pickup is under way: no LLM needed
             return None
         pending_raw = self.store.kv_get(f"pending:{key}")
         pending = json.loads(pending_raw) if pending_raw else None
@@ -202,6 +204,8 @@ class Intake:
 
     async def _handle(self, msg: dict, role: str, thread: dict, key: str, out: Outcome, pending: dict | None) -> Outcome:
         """What was understood (by the model, the keyword parser or the YES fast path) → reports, replan, replies."""
+        if self.messenger.revising_thread(thread):  # a call's revised words (D100): the facts count, a yes / no already did
+            out.reports = [r for r in out.reports if r["kind"] not in ("confirm", "reject")]
         if out.step_done and self.guide is not None and await self.guide.done(thread):  # "we're at the corner now"
             if not out.reports and not out.question:
                 return out
@@ -261,7 +265,9 @@ class Intake:
             await self.messenger.send_message(thread, out.question, version)  # finish the fact first
         elif replanned:
             if not texted and self.outbound is not None:  # never leave a fact unanswered
-                if not await self.outbound.send_status(thread, prefix="Got it. "):
+                if not stored and self.guide is not None and await self.guide.done(thread, lead="Got it."):
+                    pass  # nothing new while their pickup is under way: a short "got it" and the ETA, not the whole plan
+                elif not await self.outbound.send_status(thread, prefix="Got it. "):
                     await self.messenger.send_message(thread, "Got it, thanks.", version)
             if out.follow_up:
                 await self.messenger.send_message(thread, out.follow_up, version)
@@ -280,10 +286,10 @@ class Intake:
         """Nothing readable without the LLM: repeat what we need from them (the plan's open question, else where they
         stand, e.g. the offer waiting for their YES), with examples, never the same apology twice in a row."""
         view = self.store.plan_view() or {}
-        q = next((x["question"] for x in view.get("info_requests", []) if x["to"] == thread), None) or (
+        q = next((Outbound.ask(x) for x in view.get("info_requests", []) if x["to"] == thread), None) or (
             self.outbound.status_text(view, thread) if view and self.outbound is not None else None)
         text = f"Sorry, I didn't catch that. {q}" if q else HELP
-        if last_out and last_out.removeprefix("[EMBER drill] ").startswith(text[:40]):
+        if last_out and plain(last_out).startswith(text[:40]):
             text = HELP if q else "Sorry, I still didn't catch that. Try a few words, like \"yes\" or \"done\"."
         await self.messenger.send_message(thread, text, self.store.meta().get("plan_version"))
 

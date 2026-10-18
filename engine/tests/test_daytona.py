@@ -68,10 +68,14 @@ def test_distinct_runs_each_plan_once():
     assert list(distinct(cands, 2)) == ["c00", "c02"]               # c01 only cancels work: the same plan as c00
 
 
-def test_every_job_completes_and_picks_a_plan(world, scn, town):
+@pytest.mark.parametrize("version", [None, 7])
+def test_every_job_completes_and_picks_a_plan(world, scn, town, version):
     streamed = []
-    plan, pts = robust_plan(world, scn, k=4, seeds=20, pool=LocalPool(1, world=world), on_point=streamed.append)
+    plan, pts = robust_plan(world, scn, k=4, seeds=20, pool=LocalPool(1, world=world), on_point=streamed.append, version=version)
     assert len(pts) == 120 and len(streamed) == 120                # 4 candidates + c00 staged late + baseline × 20 seeds
+    assert plan["version"] == (version or 1)
+    assert all(a["plan_version"] == plan["version"] for a in plan["assignments"])
+    assert all(p["plan_version"] == plan["version"] for p in pts)
     r = plan["search"]["robust"]
     assert r["jobs"] == 120 and r["chosen"] in {c for c in r["candidates"] if c != "baseline"}
     row = {x["candidate"]: x for x in r["ranking"]}                 # D94: same rescues, so only overflow separates them

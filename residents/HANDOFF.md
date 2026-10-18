@@ -1,6 +1,6 @@
 # residents/ HANDOFF: the backend in one page for the next agent
 
-Last updated: Sat 2026-10-17, late night (integration of D74–D84). Team-wide status, run commands and measured numbers:
+Calls-first continuation: 2026-10-18, D100. See `docs/CALLS_FIRST_HANDOFF.md` for the takeover branch and validation. Earlier integration notes below remain historical. Team-wide status, run commands and measured numbers:
 `docs/HANDOFF.md`. API, drill, calls and Photon setup: `residents/README.md`. Decisions: `docs/DECISIONS.md`.
 Aryaman is the sole owner of the repo (D77).
 
@@ -22,7 +22,11 @@ residents/  Photon ⇄ phones · ElevenLabs ⇄ calls · HTTP + WS /ws ⇄ web/ 
 ```
 
 ## Rules enforced here (beyond CLAUDE.md)
-- Every outbound text starts with **`[EMBER drill]`** and carries its `plan_version`. Offers stay provisional until YES.
+- Calls first (D100): first contact, the pickup, a changed pickup and "2 minutes away" are calls; a short text follows.
+  The first text a phone gets in a run starts with "EMBER flood simulation, live demo, not a real emergency." and the
+  first call with "This is EMBER, an automated assistant in a live flood simulation."; nothing else says "drill".
+  Every outbound text carries its `plan_version`. No YES or DONE is ever required: an instruction that reaches them is
+  `confirmed`, steps go out on the plan's clock.
 - Replies are worded by the model but decided by the planner: the guard in `reply.py` rejects any number, vehicle,
   facility or street not in the computed messages and falls back to the computed text.
 - Secrets live only in `residents/.env` (gitignored). Never commit keys or real phone numbers (tests use 555 numbers).
@@ -46,8 +50,8 @@ residents/  Photon ⇄ phones · ElevenLabs ⇄ calls · HTTP + WS /ws ⇄ web/ 
 | `intake.py` | Inbound hook, serialized: extract → reports → one replan per text → reply; YES/NO → confirm/reject (D57). |
 | `outbound.py` | Plan hook: texts a phone only when its instruction materially changed (D44); records changes for pickup-changed calls. |
 | `locate.py` / `places.py` | The lobby: where are you → a building → a household of the run (D56); players are placed on a flood-zone building (D78). |
-| `guide.py` / `briefing.py` | Steps after YES with DONE (D56); every question answered from the plan (D57/D60). |
-| `voice.py` / `speech.py` | Calls (D74): Custom-LLM endpoint, call manager that calls the most at-risk first (D80), `GET /calls {live, recent}`; text → speakable words. |
+| `guide.py` / `briefing.py` | Clock-driven pickup instructions and later steps without required YES/DONE (D100); every question answered from the plan (D57/D60). |
+| `voice.py` / `speech.py` | Calls (D74): Custom-LLM endpoint, calls-first manager with deadline-ordered queues, one missed-call retry and written follow-ups (D100), `GET /calls {live, recent}`; text → speakable words. |
 | `photon.py` / `threads.py` | Photon transport (REST, Socket.IO, polling fallback) and phone ↔ household/facility bindings. |
 | `drill.py` | `uv run ember-drill` (README "The drill"). |
 | `scripts/` | `sim_calls.py` (six calls end to end, no ElevenLabs or LLM), `eval_sim.py` (simulator-graded text → fact eval, D83), `eval_extract.py` (live accuracy, paid). |
@@ -61,7 +65,7 @@ RESET_ON_START=1 PHOTON_ENABLED=1 uv run uvicorn residents.app:app --port 8000  
 ```
 Settings worth knowing: `SCENARIO` (empty = static fixture mode), `START_T_S`, `ENGINE_MOVES`, `DB_PATH`,
 `RESET_ON_START`, `PHOTON_ENABLED`, `EXTRACT_ENABLED`, `REPLY_ENABLED`,
-`MAX_PLAYERS` (25), `VOICE_MAX_CONCURRENT` (2; 0 = never call first), `VOICE_PORT`, `CHALK_ROUTER_KEY` + `CHALK_ENV_ID`.
+`MAX_PLAYERS` (25), `VOICE_MAX_CONCURRENT` (3; 0 = never call first), `VOICE_POLL_S` (5 wall-s), `VOICE_PORT`, `CHALK_ROUTER_KEY` + `CHALK_ENV_ID`.
 
 ## Key data (allston_flood_v1)
 - Fleet, all at EMS 14: `van-1`, `van-2`, `van-3` (**the only wheelchair-accessible vehicle**), `truck-1`, `crew-1`,

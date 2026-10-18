@@ -187,7 +187,7 @@ function Feed(props: { state: StateSnapshot; plans: PlanSnapshot[]; playback: Pl
         </details>
       ) : null}
       {items.length === 0 ? (
-        <p className="empty">Nothing yet. When someone texts the EMBER line, their words, the fact EMBER takes from them and the new plan appear here.</p>
+        <p className="empty">Nothing yet. When someone calls or texts EMBER, their words, the fact EMBER takes from them and the new plan appear here.</p>
       ) : (
         <ol className="feed">
           {items.map((item) => (
@@ -745,7 +745,7 @@ function Proof(props: {
             {props.busy === "optimize" ? "Running…" : optimizeLabel}
           </button>
           <button className="ghost" disabled={props.busy != null} onClick={() => props.onOptimize(2000)}>
-            {props.busy === "stress" ? "Running…" : "Stress test 10,000 worlds"}
+            {props.busy === "stress" ? "Running…" : "Large stress test"}
           </button>
         </div>
         {props.busy === "optimize" || props.busy === "stress" ? (
@@ -754,7 +754,7 @@ function Proof(props: {
           <Throughput robust={result} />
         ) : (
           <p className="throughput">
-            Press {optimizeLabel} to stress-test this plan on 250 worlds (5 plans × 50), or on 10,000: the top candidate plans and the baseline, with travel times, flood timing, backup endurance and a vehicle failing perturbed.
+            Press {optimizeLabel} for 50 perturbed worlds per plan, or Large stress test for 2,000 per plan. The top distinct plans, alternative generator timing when available, and the baseline use the same worlds. Total runs depend on the number of plans; travel times, flood timing, backup endurance and a vehicle failing are perturbed.
           </p>
         )}
         {points.length > 0 ? <ScatterChart points={points} chosen={result?.chosen ?? null} /> : null}

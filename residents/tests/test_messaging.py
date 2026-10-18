@@ -8,6 +8,7 @@ from ember_engine.scenario import load_scenario
 from ember_engine.state import validate_state
 from residents.app import create_app
 from residents.config import CONTRACTS
+from residents.messaging import DISCLOSURE
 from residents.threads import normalize_handle
 from tests.fake_photon import LINE, FakePhoton, received
 from tests.helpers import deliver
@@ -66,7 +67,7 @@ def test_no_send_before_opt_in(app_client, fp, fixture_state):
     r = app_client.post("/messages", json={"thread": {"household_id": judge["household_id"]}, "text": "Stay put.", "plan_version": 3})
     body = r.json()
     assert body["delivery"] == "not_opted_in" and fp.sends() == []
-    assert body["message"]["text"] == "[EMBER drill] Stay put."  # stored + shown anyway
+    assert body["message"]["text"] == "Stay put."  # stored + shown anyway (never texted, so no notice used up)
 
 
 def test_inbound_opts_in_then_outbound_is_sent(app_client, fp, fixture_state):
@@ -86,7 +87,9 @@ def test_inbound_opts_in_then_outbound_is_sent(app_client, fp, fixture_state):
     assert r["delivery"] == "sent"
     [send] = fp.sends()
     assert send["spaceId"] == "pho_spc_0120" and send["senderId"] == "pho_usr_line"
-    assert send["content"]["text"] == "[EMBER drill] Van 3 is coming." and send["_key"] == f"ember-{r['message']['id']}"
+    assert send["content"]["text"] == f"{DISCLOSURE} Van 3 is coming." and send["_key"] == f"ember-{r['message']['id']}"
+    again = app_client.post("/messages", json={"thread": {"household_id": judge_id}, "text": "It's outside."}).json()
+    assert again["message"]["text"] == "It's outside."  # the notice is on the first text only (D100)
     store = app_client.app.state.store
     assert store.message_delivery(r["message"]["id"]) == ("sent", "pho_msg_out1")
 
@@ -150,7 +153,7 @@ def test_phones_survive_reset(app_client):
 
 def test_dev_mode_never_calls_photon(client):
     r = client.post("/messages", json={"thread": {"household_id": 492}, "text": "x"}).json()
-    assert r["delivery"] == "dev" and r["message"]["text"].startswith("[EMBER drill]")
+    assert r["delivery"] == "dev" and r["message"]["text"] == "x"  # as written: no phone, no notice
 
 
 def test_inbound_hooks_run(app_client):

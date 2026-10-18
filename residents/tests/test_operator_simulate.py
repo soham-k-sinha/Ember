@@ -1,12 +1,15 @@
 """Task 6 (scripted operator prompts), Task 7 (POST /simulate), and /optimize not blocking the rest."""
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 
 import pytest
 from fastapi.testclient import TestClient
 
 from residents.app import DEFAULT_ASK, create_app
+from residents.messaging import DISCLOSURE
+from residents.outbound import ASK_NEEDS
 from residents.contracts import def_errors
 from tests.helpers import JUDGE, SCENARIO, FakeLLM, ex, fact, judge_need
 
@@ -48,22 +51,22 @@ def test_simulate_ember_and_baseline(oc):
 def test_ask_uses_the_plans_question_and_marks_it(oc):
     q = next(q for q in oc.get("/state").json()["plan"]["info_requests"] if q["to"] == {"household_id": JUDGE})
     r = oc.post("/ask", json={"role": "resident"}).json()
-    assert r["info_request"] == q["id"] and r["message"]["text"] == f"[EMBER drill] {q['question']}" and r["delivery"] == "dev"
+    assert r["info_request"] == q["id"] and r["message"]["text"] == f"{DISCLOSURE} {ASK_NEEDS}" and r["delivery"] == "dev"
     oc.post("/dev/inbound", json={"role": "resident", "text": "hi"})
-    assert sum(q["question"] in m["text"] for m in outs(oc, {"household_id": JUDGE})) == 1   # not asked again
+    assert sum(ASK_NEEDS in m["text"] for m in outs(oc, {"household_id": JUDGE})) == 1   # not asked again
 
 
 def test_ask_operator_then_reply_replans(oc):
     r = oc.post("/ask", json={"role": "operator"}).json()
     assert r["message"]["thread"] == OP
-    assert r["message"]["text"] in (f"[EMBER drill] {DEFAULT_ASK['operator']}",) or r["info_request"]
+    assert r["message"]["text"] in (f"{DISCLOSURE} {DEFAULT_ASK['operator']}",) or r["info_request"]
     oc.post("/dev/inbound", json={"role": "operator", "text": "about 90 minutes of diesel"})
     st = oc.get("/state").json()
     rep = next(x for x in st["reports"] if x["source"] == "operator")
     assert rep["kind"] == "facility_status" and rep["payload"]["set"]["backup_endurance_s"] == 5400
     assert st["plan_version"] == 2 and outs(oc, OP)[-1]["direction"] == "out"   # and the operator got an answer
     custom = oc.post("/ask", json={"role": "operator", "question": "Is your generator fuelled?"}).json()
-    assert custom["message"]["text"] == "[EMBER drill] Is your generator fuelled?" and custom["info_request"] is None
+    assert custom["message"]["text"] == "Is your generator fuelled?" and custom["info_request"] is None
 
 
 def _slow_optimize(c, seconds):
@@ -88,7 +91,7 @@ def _wait_done(c, timeout=60):
     raise AssertionError("optimize never finished")
 
 
-def test_optimize_does_not_block_clock_or_reports(oc):
+def test_clock_keeps_working_and_supersedes_an_older_optimization(oc):
     real, started = _slow_optimize(oc, 2.0)
     try:
         assert oc.post("/optimize?seeds=2&k=2").status_code == 202
@@ -97,7 +100,9 @@ def test_optimize_does_not_block_clock_or_reports(oc):
         assert oc.post("/clock", json={"t_s": 600}).status_code == 200     # the web's play loop keeps working
         assert time.time() - t0 < 1.0
         last = _wait_done(oc)
-        assert last["error"] is None and last["plan_version"] == 2
+        assert oc.get("/state").json()["t_s"] == 600  # an old optimization must never rewind the live clock
+        assert last["plan_version"] is None and "clock changed" in last["error"]
+        assert oc.get("/state").json()["plan_version"] == 1
     finally:
         oc.app.state.planner.bridge.optimize = real
 
@@ -114,3 +119,53 @@ def test_report_during_optimize_supersedes_it(oc):
         assert st["plan_version"] == 2 and st["plan"]["trigger"] == "Judge: 2 people, wheelchair"  # the newer facts win
     finally:
         oc.app.state.planner.bridge.optimize = real
+
+
+def test_a_confirmation_during_optimize_is_not_overwritten(oc):
+    real, started = _slow_optimize(oc, 2.0)
+    try:
+        before = oc.get("/state").json()
+        assignment = next(a for a in before["plan"]["assignments"] if a["status"] in ("proposed", "offered"))
+        oc.post("/optimize?seeds=2&k=2")
+        assert started.wait(5)
+        result = oc.portal.call(oc.app.state.planner.respond, assignment["id"], "confirm")
+        assert result["applied"]
+        last = _wait_done(oc)
+        assert last["plan_version"] is None and "assignments changed" in last["error"]
+        state = oc.get("/state").json()
+        assert state["plan_version"] == before["plan_version"]
+        assert next(a for a in state["plan"]["assignments"] if a["id"] == assignment["id"])["status"] == "confirmed"
+    finally:
+        oc.app.state.planner.bridge.optimize = real
+
+
+@pytest.mark.parametrize("transport", ["http", "ws"])
+def test_a_snapshot_waits_for_a_reset_to_finish(oc, transport):
+    bridge = oc.app.state.planner.bridge
+    real = bridge.plan
+    started, release = threading.Event(), threading.Event()
+
+    def slow(*args, **kwargs):
+        started.set()
+        assert release.wait(10)
+        return real(*args, **kwargs)
+
+    bridge.plan = slow
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        resetting = pool.submit(oc.post, "/dev/reset")
+        try:
+            assert started.wait(5)
+            timer = threading.Timer(0.2, release.set)
+            timer.start()
+            if transport == "http":
+                state = oc.get("/state").json()
+            else:
+                with oc.websocket_connect("/ws") as ws:
+                    event = ws.receive_json()
+                    assert event["type"] == "state"
+                    state = event["data"]
+            assert state["plan_version"] == 1 and state["t_s"] == 0
+            assert resetting.result(timeout=10).status_code == 200
+        finally:
+            release.set()
+            bridge.plan = real

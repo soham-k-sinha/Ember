@@ -27,13 +27,14 @@ def example_state(town: dict, scn: dict, t_s: float = 4800.0) -> dict:
     judge = next(h for h in st["households"] if h["judge"])
     st["messages"] = [{"id": "m-1", "thread": {"household_id": judge["household_id"]}, "direction": "out", "t_s": 60.0,
                        "plan_version": st["plan_version"], "assignment_id": None, "report_id": None,
-                       "text": "[EMBER drill] Flood warning for your street. How many people are with you, and does anyone "
-                               "need a wheelchair-accessible vehicle? Reply here."}]
+                       "text": "EMBER flood simulation, live demo, not a real emergency. Flood warning for your street. "
+                               "How many people are with you, and does anyone need a wheelchair or medical help?"}]
     hosp = [f for f in st["facilities"] if f["type"] == "hospital"]
     if hosp:
         st["messages"].append({"id": "m-2", "thread": {"facility_id": hosp[0]["id"]}, "direction": "out", "t_s": 60.0,
                                "plan_version": st["plan_version"], "assignment_id": None, "report_id": None,
-                               "text": "[EMBER drill] Flood expected near your site. How many hours of backup fuel do you have right now?"})
+                               "text": "EMBER flood simulation, live demo, not a real emergency. Flood expected near your site. "
+                                       "How many hours of backup fuel do you have right now?"})
     return st
 
 

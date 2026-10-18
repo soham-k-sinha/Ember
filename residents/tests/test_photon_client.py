@@ -19,6 +19,45 @@ async def test_create_assignment_request_shape():
     assert a["assignedPhoneNumber"] == LINE
 
 
+async def test_existing_assignment_is_recovered_across_databases_and_pages():
+    requests = []
+    active = {"handle": "+16175550120", "assignmentId": "existing", "assignedPhoneNumber": LINE}
+
+    def handler(req):
+        requests.append(req)
+        if req.method == "POST":
+            return httpx.Response(409, json={"code": "ASSIGNMENT_EXISTS"})
+        if req.url.params.get("pageToken") == "next":
+            return httpx.Response(200, json={"assignments": [active]})
+        return httpx.Response(200, json={"assignments": [dict(active, releasedAt="2026-10-17T00:00:00Z")],
+                                         "nextPageToken": "next"})
+
+    c = PhotonClient("k", PROJECT, transport=httpx.MockTransport(handler))
+    try:
+        assert await c.create_assignment(active["handle"]) == active
+        assert [r.method for r in requests] == ["POST", "GET", "GET"]
+    finally:
+        await c.aclose()
+
+
+@pytest.mark.parametrize("code", ["ASSIGNMENT_EXISTS", "PROJECT_FULL"])
+async def test_an_assignment_conflict_without_a_live_match_is_not_hidden(code):
+    calls = []
+
+    def handler(req):
+        calls.append(req.method)
+        return httpx.Response(409, json={"code": code}) if req.method == "POST" else httpx.Response(200, json={"assignments": []})
+
+    c = PhotonClient("k", PROJECT, transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(PhotonError) as error:
+            await c.create_assignment("+16175550120")
+        assert error.value.body["code"] == code
+        assert calls == (["POST", "GET"] if code == "ASSIGNMENT_EXISTS" else ["POST"])
+    finally:
+        await c.aclose()
+
+
 async def test_send_text_shape():
     fp = FakePhoton(); c = fp.client()
     res = await c.send_text("pho_spc_1", "pho_usr_line", "[EMBER drill] hi", idempotency_key="ember-m-1")

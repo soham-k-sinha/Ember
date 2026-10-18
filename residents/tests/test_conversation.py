@@ -11,6 +11,8 @@ from fastapi.testclient import TestClient
 
 from residents.app import create_app
 from residents.extract import Extraction, Fact, to_outcome
+from residents.messaging import DISCLOSURE
+from residents.outbound import ASK_NEEDS
 from tests.helpers import JUDGE, SCENARIO, FakeLLM, ex, fact
 
 JT = {"household_id": JUDGE}
@@ -63,16 +65,16 @@ def test_partial_need_keeps_what_we_knew():
 
 def test_live_conversation_replayed(judge_phone):
     c = judge_phone
-    q = next(q for q in c.get("/state").json()["plan"]["info_requests"] if q["to"] == JT)
+    assert any(q["to"] == JT for q in c.get("/state").json()["plan"]["info_requests"])
 
-    # 1. "Hi" → the plan's own question (people + wheelchair), not the model's generic prompt
-    assert say(c, "Hi") == [f"[EMBER drill] {q['question']}"]
+    # 1. "Hi" → the plan's own question (people, wheelchair or medical help), not the model's generic prompt
+    assert say(c, "Hi") == [f"{DISCLOSURE} {ASK_NEEDS}"]
 
     # 2. the fact → a replan AND a reply, whatever the plan could do for them
     replies = say(c, "2 of us, my mom uses a wheelchair")
     assert c.get("/state").json()["plan_version"] == 2 and len(replies) >= 1
-    assert any(r.startswith("[EMBER drill] Got it. We have your details (2 people, wheelchair-accessible vehicle)")
-               or "Accessible Van 3 will pick you up" in r for r in replies)
+    assert any(r.startswith("Got it. We have your details (2 people, wheelchair-accessible vehicle)")
+               or r.startswith("Accessible Van 3 is coming to your door") for r in replies)
 
     # 3. "Hello?" → where they stand, not "do you need a pickup?" again
     [r] = say(c, "Hello?")
@@ -90,7 +92,7 @@ def test_every_fact_gets_a_reply_even_when_nothing_changed(judge_phone):
     c = judge_phone
     say(c, "2 of us, my mom uses a wheelchair")
     replies = say(c, "Yes, 2 people")            # same need again: plan may not change for them
-    assert len(replies) == 1 and replies[0].startswith("[EMBER drill] ")
+    assert len(replies) == 1 and replies[0].startswith("Got it. ")
 
 
 def test_question_goes_to_coordinators_with_status(settings, bridge):
@@ -101,7 +103,7 @@ def test_question_goes_to_coordinators_with_status(settings, bridge):
         c.post("/phones", json={"role": "resident", "handle": "6175550120"})
         say(c, "2 of us, my mom uses a wheelchair")
         [r] = say(c, "is the western ave bridge open?")  # no topic → `other`: queued, and never only that (D60)
-        assert r.startswith("[EMBER drill] Our plan doesn't cover that, so we've passed your question to a "
+        assert r.startswith("Our plan doesn't cover that, so we've passed your question to a "
                             "coordinator, who will reply here. Meanwhile, here's where you stand: "), r
         assert c.get("/questions").json()[0]["text"] == "is the western ave bridge open?"
 
@@ -127,6 +129,6 @@ def test_tuned_demo_beat_through_the_text_pipeline(settings, full_bridge):
         gb = {a["id"]: a["eta_s"] for a in v1["assignments"] if a["task"] == "protect"}
         ga = {a["id"]: a["eta_s"] for a in v2["assignments"] if a["task"] == "protect"}
         assert set(ga) != set(gb) or any(abs(ga.get(i, 1e9) - e) > 120 for i, e in gb.items())
-        assert any("Accessible Van 3 will pick you up" in r for r in replies)
+        assert any(r.startswith(f"{DISCLOSURE} Accessible Van 3 is coming to your door") for r in replies), replies
         closure = next(r for r in st["reports"] if r["kind"] == "closure_report")
         assert len(closure["payload"]["edge_ids"]) <= 4

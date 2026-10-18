@@ -401,3 +401,26 @@ What: the header reads "Allston flood · live simulation", the join card reads "
 Interfaces: none.
 Status: web tsc + build + npm test pass. Label stacking not yet seen with live players. PR #55 open.
 Next: merge once CI is green and the user approves; confirm fps in real Chrome with ?perf.
+
+## 2026-10-18 · Calls-first takeover, integration and delivery fixes (D100–D101) · branch codex/call-first-takeover
+What: at Aryaman's request, Codex preserved the unfinished aryaman/call-first diff, applied it onto main c0ca991, kept the latest stage/traffic work, and renumbered the colliding D99 voice decision to D100. Calls first, one retry, clock-driven guidance without required YES/DONE, first-contact disclosure and speech revision guards are integrated. Reproduced and fixed duplicate concurrent dials, updates lost during dialing, discarded first caller needs, idle calls without follow-ups, and obsolete queued arrival warnings; six regression tests include retry with a paused clock. Aligned engine/fixture questions and rehearsal docs.
+Files: residents/ (call flow + tests), engine/ember_engine/{allocator/explain,state}.py (wording only), contracts/fixtures + state schema description, scenario facility names, web join/feed copy, docs/CALLS_FIRST_HANDOFF.md, docs/{DEMO,QA,HANDOFF,voice_transcripts,DECISIONS}.md, README.md.
+Run: full residents suite 307 passed; full engine suite 106 passed + smoke; web build + all four npm checks; e2e.py --skip-optimize 74/74 against an isolated keyless backend; sim_calls.py five-person scenario completed; ruff + diff check clean.
+Interfaces: no contract shape change; state schema description corrected. D100 adds VOICE_POLL_S (5 wall-s) and defaults VOICE_MAX_CONCURRENT to 3. Snapshot remains ember-engine-d9ea4508c1.
+Status: done locally on the takeover branch; original Claude worktrees and main untouched. No real calls/texts, provider reconfiguration, paid model calls or Daytona runs.
+Next: docs/CALLS_FIRST_HANDOFF.md lists the precise real-phone/provider checks; resume from this worktree rather than the older unfinished branches.
+
+### 2026-10-18 — Codex product polish (D102–D103)
+
+Scoped negative needs, explicit corrections, urgency and unknown-assistance clarification in the fallback; expanded the simulator eval to 56 messages with explicit urgency checks and honest clarification scoring. Fixed the voice-only goodbye, rejected clock-stale optimization results, paused the UI for stress tests and retried transient status failures. Added district loading/error/retry/flat-map recovery, retryable asset caching, phone layouts, bounded map labels, and web behavior checks in CI. Browser exercised the local 250-world batch and both district recovery paths; the expanded fallback eval reports 50 pass, 6 clarification, 0 fail and 56/56 urgency matches. Full verification and live limitations are in `docs/POLISH_QA.md`.
+
+### 2026-10-18 — Codex optimization, reset and live preflight (D104–D106)
+
+Fixed fresh-optimization assignment versions and restored the delayed-generator comparison online. Large stress-test labels and e2e counts now follow paired worlds × actual plans; historical timing claims are kept separate. Guarded confirmations against stale optimization, and state/WS reads against reset’s empty interval. Added explicit local-pool e2e mode: the full large replay passed 82/82 checks (cap skipped at MAX_PLAYERS=25), with 10,000 local runs streamed; engine suite 107 passed. Photon live preflight reproduced ASSIGNMENT_EXISTS for previously registered phones; registration now recovers their live assignments with paginated lookup and leaves unrelated seats untouched. Private live-call data stays outside the repo.
+
+### 2026-10-18 04:40 · Calls that end, short and safe (D107)
+What: took over Codex's calls-first branch (D100–D106) as `aryaman/calls-first`; replayed the 4 real ElevenLabs calls from 03:26–03:45 and fixed what they showed: okay/silence/voicemail end the call, the police/911 line, a one-line off-topic answer, a shorter opening question.
+Interfaces: needs question text changed in engine explain, seed state and contract fixtures (same schema).
+Status: residents 359+ pass, engine 107, web build + checks, ruff clean; sim_calls re-run (docs/voice_transcripts.md).
+Next: Daytona snapshot, e2e --big, merge, live call test.
+

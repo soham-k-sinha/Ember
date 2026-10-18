@@ -332,6 +332,10 @@ class Planner:
                 now_version = self.store.meta().get("plan_version")
                 if now_version != start_version:  # a report replanned meanwhile: don't overwrite newer facts
                     raise RuntimeError(f"superseded: plan moved v{start_version} → v{now_version} during the optimization")
+                if abs(self.now() - t_now) > 1e-6:
+                    raise RuntimeError("superseded: the simulation clock changed during the stress test; pause it and try again")
+                if self.store.current_plan() != prev:
+                    raise RuntimeError("superseded: assignments changed during the stress test; try again")
                 state = await self._store_plan(plan, known, t_now)
             view = await self._publish(state, "robust optimization", t0)
             self.last_optimize = {"plan_version": view["version"], "points": len(sent), "wall_s": round(time.time() - t0, 2),

@@ -1,5 +1,6 @@
-"""Task 5: YES / NO to an offered instruction (by text or via the API), stale replies, and declines that
-are never re-offered. Real allocator on allston_flood_v1; the LLM is faked."""
+"""Task 5, proactive since D100: an instruction that reaches the person is confirmed (silence means we proceed); YES is
+understood, never needed; NO declines, and a declined vehicle is never re-offered; stale API answers are refused. Real
+allocator on allston_flood_v1; the LLM is faked."""
 import json
 from dataclasses import replace
 
@@ -7,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from residents.app import create_app
+from residents.messaging import DISCLOSURE
 from tests.helpers import JUDGE, SCENARIO, FakeLLM, ex, fact, judge_need
 
 JT = {"household_id": JUDGE}
@@ -35,38 +37,36 @@ def text(c, t):
     return c.post("/dev/inbound", json={"role": "resident", "text": t}).json()["message"]
 
 
-def test_yes_confirms_acks_and_sticks(cc):
+def test_silence_confirms_yes_is_understood_and_it_sticks(cc):
     offer = outs(cc)[-1]
-    assert judge_asg(cc)["status"] == "offered"
-    text(cc, "yes")
-    st = cc.get("/state").json()
+    assert offer["text"].startswith(f"{DISCLOSURE} Accessible Van 3 is coming to your door") and "Reply" not in offer["text"]
     a = judge_asg(cc)
-    assert a["id"] == offer["assignment_id"] and a["status"] == "confirmed"
-    assert next(h for h in st["households"] if h["household_id"] == JUDGE)["status"] == "confirmed"
-    rep = next(r for r in st["reports"] if r["kind"] == "confirm")
-    assert rep["assignment_id"] == offer["assignment_id"] and rep["plan_version"] == 2
-    assert outs(cc)[-1]["text"].startswith("[EMBER drill] Confirmed: Accessible Van 3 is coming to you")
+    assert a["id"] == offer["assignment_id"] and a["status"] == "confirmed"   # it reached them: we proceed
+    text(cc, "yes")
+    assert outs(cc)[-1]["text"].startswith("Thanks. Accessible Van 3 gets to you in about ")
     cc.post("/replan")                                     # the allocator keeps confirmed work
+    st = cc.get("/state").json()
+    assert next(h for h in st["households"] if h["household_id"] == JUDGE)["status"] == "confirmed"
     a2 = judge_asg(cc)
     assert (a2["id"], a2["resource_id"], a2["status"]) == (a["id"], a["resource_id"], "confirmed")
     later = outs(cc)[2:]
     # the allocator may move confirmed work earlier (ETA change ≥ 10 min → an update text), but never re-asks
-    assert all(m["text"].startswith("[EMBER drill] Update: Accessible Van 3 is now arriving") for m in later)
+    assert all(m["text"].startswith("Your pickup changed: ") and "Accessible Van 3 is now arriving" in m["text"] for m in later)
     assert len(later) <= 1
 
 
 def test_no_rejects_replans_and_never_reoffers_that_vehicle(cc):
     offer = outs(cc)[-1]
     text(cc, "no thanks")  # the only wheelchair-accessible vehicle: EMBER makes sure first (D57)
-    assert cc.get("/state").json()["plan_version"] == 2 and judge_asg(cc)["status"] == "offered"
-    assert outs(cc)[-1]["text"].startswith("[EMBER drill] Accessible Van 3 is the only wheelchair-accessible vehicle")
-    assert "Reply YES to keep it, or NO to decline anyway" in outs(cc)[-1]["text"]
+    assert cc.get("/state").json()["plan_version"] == 2 and judge_asg(cc)["status"] == "confirmed"
+    assert outs(cc)[-1]["text"].startswith("Accessible Van 3 is the only wheelchair-accessible vehicle")
+    assert outs(cc)[-1]["text"].endswith("It's still coming unless you say no again.")
     text(cc, "no thanks")  # declined anyway
     st = cc.get("/state").json()
     assert st["plan_version"] == 3                         # reject → replan
     acks = [m["text"] for m in outs(cc)[2:]]
-    assert acks[0].startswith("[EMBER drill] Understood, we won't send Accessible Van 3")
-    assert not any("Accessible Van 3 will pick you up" in t for t in acks)     # never re-offered
+    assert acks[0].startswith("Understood, we won't send Accessible Van 3")
+    assert not any("Accessible Van 3 is coming" in t for t in acks)     # never re-offered
     van3 = [a for a in st["plan"]["assignments"] if a["target"] == JT and a["resource_id"] == "van-3"]
     assert all(a["status"] == "rejected" for a in van3)   # if the allocator re-proposes it, it stays declined
     assert json.loads(cc.app.state.store.kv_get(f"rejected:household:{JUDGE}")) == ["van-3"]
@@ -85,30 +85,26 @@ def _retarget_in_current_plan(c, assignment_id, new_resource):
     return v
 
 
-def test_stale_yes_is_not_applied_and_gets_the_latest(cc):
+def test_a_stale_answer_is_not_applied(cc):
     offer = outs(cc)[-1]
-    v = _retarget_in_current_plan(cc, offer["assignment_id"], "van-1")
-    r = cc.post(f"/assignments/{offer['assignment_id']}/confirm", json={"plan_version": 2})
-    assert r.status_code == 409 and "changed" in r.json()["detail"]
-    n = len(outs(cc))
-    text(cc, "YES")                                        # their reply carries plan_version 2 (the offer's)
-    raw = cc.app.state.store.plan(v)
-    assert next(a for a in raw["assignments"] if a["id"] == offer["assignment_id"])["status"] != "confirmed"
-    assert len(outs(cc)) == n + 1                          # the latest instruction, re-sent
+    _retarget_in_current_plan(cc, offer["assignment_id"], "van-1")
+    for decision in ("confirm", "reject"):
+        r = cc.post(f"/assignments/{offer['assignment_id']}/{decision}", json={"plan_version": 2})
+        assert r.status_code == 409 and "changed" in r.json()["detail"]
+    assert cc.app.state.store.kv_get(f"rejected:household:{JUDGE}") is None
 
 
 def test_old_version_but_unchanged_assignment_is_applied(cc):
     offer = outs(cc)[-1]
     cc.post("/replan")                                     # v3, same assignment
-    r = cc.post(f"/assignments/{offer['assignment_id']}/confirm", json={"plan_version": 2})
-    assert r.status_code == 200 and r.json()["applied"] and r.json()["assignment"]["status"] == "confirmed"
+    r = cc.post(f"/assignments/{offer['assignment_id']}/reject", json={"plan_version": 2})
+    assert r.status_code == 200 and r.json()["applied"] and r.json()["assignment"]["status"] == "rejected"
 
 
 def test_api_errors_and_idempotence(cc):
     aid = outs(cc)[-1]["assignment_id"]
     assert cc.post("/assignments/nope/confirm").status_code == 409
-    assert cc.post(f"/assignments/{aid}/confirm").json()["applied"] is True
-    again = cc.post(f"/assignments/{aid}/confirm")
+    again = cc.post(f"/assignments/{aid}/confirm")        # the instruction reached them: already confirmed
     assert again.status_code == 200 and again.json()["applied"] is False and again.json()["reason"] == "already confirmed"
     r = cc.post(f"/assignments/{aid}/reject")             # changing their mind after confirming is allowed
     assert r.json()["applied"] and r.json()["plan_version"] == 3

@@ -12,15 +12,14 @@ Stage/Flat map), the stage, a floating score card (reached before water, still w
 of the Charles, each vs baseline), the latest-change strip (the reporter's own outcome first), the **Join the flood**
 card (number → Join → QR → "Player N joined") with the player roster, and three tabs: **Feed** (text in → fact → new plan →
 text out, open needs), **Plan** (vehicles, plan versions; click anything on the stage or in a list for its inspector and
-rationale) and **Proof** (Run comparison; **Pre-season stress test** at 0:00, **Optimize** later; **Stress test 10,000
-worlds**; the scatter and a throughput tile).
+rationale) and **Proof** (Run comparison; **Pre-season stress test** at 0:00, **Optimize** later; **Large stress test**; the scatter and a throughput tile).
 
 ## 0 · Setup (T−15 min)
 | # | Who | Action | Expected | Blocker / fallback | ✓ |
 |---|---|---|---|---|---|
-| 0.1 | A | `cd engine && uv sync --extra dev && uv run pytest -q`; `cd residents && uv run pytest -q`; `engine/scripts/e2e.py --big` against a fresh backend (HANDOFF § Run) | engine 106, residents 301 pass; e2e 83/83 | **blocker**: fix or cut the beat | |
+| 0.1 | A | `cd engine && uv sync --extra dev && uv run pytest -q`; `cd residents && uv run pytest -q`; `engine/scripts/e2e.py --big` against a fresh backend (HANDOFF § Run) | all checks pass; latest local/keyless checks are in POLISH_QA.md; historical real-Daytona e2e 83/83 | **blocker**: fix or cut the beat | |
 | 0.2 | A | both `.env` files on the backend machine | `DAYTONA_API_KEY`, `EMBER_DAYTONA_WORKERS`, `PHOTON_*`, `ANTHROPIC_API_KEY`, `ELEVENLABS_*` present (names only) | Daytona missing → local pool; Photon/model missing → DEMO fallbacks | |
-| 0.3 | A | `cd engine && uv run ember daytona-snapshot` | "ready" in seconds (`ember-engine-d9ea4508c1`) | build takes ~90 s; never let a stress test be first to need it | |
+| 0.3 | A | `cd engine && uv run ember daytona-snapshot` | "ready" (`ember-engine-1892f8194d`, new after D104; not rebuilt during takeover) | build takes ~90 s; never let a stress test be first to need it | |
 | 0.4 | S | start backend (DEMO § Before going on stage) | plan v1, listener connected, no pool warm-up error | | |
 | 0.5 | A | `curl localhost:8000/health` | `mode: engine`, `extraction: on`, `photon: enabled`, listener connected, `max_players: 25`, `players` | **blocker** for real phones → `/dev/inbound` | |
 | 0.6 | S | `curl localhost:8000/phones` | resident and operator phones opted in | not opted in → that phone texts its line first | |
@@ -31,8 +30,8 @@ worlds**; the scatter and a throughput tile).
 | # | Who | Action | Expected | Blocker / fallback | ✓ |
 |---|---|---|---|---|---|
 | 1.1 | A | read the score card | 78 reached before water (baseline 58); **Kept out of the Charles 2,317 m³** (sewage 0 vs baseline 2,317) | different → re-measure DEMO.md | |
-| 1.2 | A | Proof tab → **Stress test 10,000 worlds** | heading "Stress test · Daytona · 90 sandboxes"; "n / 10,000 worlds back"; done in 3–4 s fan-out (5–8 s wall); throughput tile with "laptop ~24 s measured" | **blocker** `local-fallback` → press **Pre-season stress test** (250 worlds) and say "local pool"; "superseded" → press again | |
-| 1.3 | A | read the verdict | **Robust pick · c03 15.7 / Forecast plan · c00 30.3** (worst-20 % people not reached, baseline 40.8), 14.6 fewer; a new plan version, still 78 reached on the forecast | | |
+| 1.2 | A | Proof tab → **Large stress test** | clock pauses; heading names the actual pool; every world streams; total is 2,000 × distinct plans including timing comparison and baseline (up to 12,000) | **blocker** `local-fallback` → use the smaller default test and say "local pool"; "superseded" → retry while paused | |
+| 1.3 | A | read the verdict | Read the current measured worst-20% comparison (historical round-3 result: c03 15.7 vs c00 30.3, baseline 40.8); a new plan version, still 78 reached on the forecast | | |
 
 ## 2 · Household rescue (0:50–1:30)
 | # | Who | Action | Expected | Blocker / fallback | ✓ |
@@ -62,8 +61,8 @@ worlds**; the scatter and a throughput tile).
 ## 5 · EMBER calls first (2:30–2:55)
 | # | Who | Action | Expected | Blocker / fallback | ✓ |
 |---|---|---|---|---|---|
-| 5.1 | X | `POST /calls {"handle": …}` to X's opted-in phone, on speaker | rings in < 10 s; roster shows **on call**; EMBER opens "Hi, this is EMBER, an automated assistant for the flood drill" and that thread's open question | no ring → read the Margaret excerpt (`docs/voice_transcripts.md`) | |
-| 5.2 | X | answer "yes", hang up | "As promised" text arrives after the call | | |
+| 5.1 | X | `POST /calls {"handle": …}` to X's opted-in phone, on speaker | rings in < 10 s; roster shows **on call**; the first call opens "This is EMBER, an automated assistant in a live flood simulation." and asks how many people and whether anyone needs medical or mobility help | no ring → read Maria's first-contact excerpt (`docs/voice_transcripts.md`) | |
+| 5.2 | X | give the head count and care needs, then hang up | the computed instruction is spoken; a "From our call:" text follows; no YES/DONE needed | | |
 | 5.3 | X | total time | ≤ 3:00 | | |
 
 ## 6 · Reset between rehearsals
