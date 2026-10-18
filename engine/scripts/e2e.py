@@ -1,14 +1,16 @@
 """End-to-end check of the running stack: backend (engine mode) + engine + Daytona/local pool + WebSocket.
 
 Drives a live backend over HTTP and WS the way the website and the phones do, and checks every step against the
-contracts and the demo story. No real phones: texts go through /reports, /disruption and /dev/inbound. Use a fresh DB:
-players (D78) survive resets, and MAX_PLAYERS=3 makes the cap check run.
+contracts and the demo story. No real phones, LLM or calls: texts go through /reports, /disruption and /dev/inbound,
+and the empty keys below beat residents/.env. Use a fresh DB: players (D78) survive resets, and MAX_PLAYERS=3 makes the
+cap check run. Daytona is real when engine/.env has its key.
 
-    cd residents && DB_PATH=/tmp/e2e.db RESET_ON_START=1 PHOTON_ENABLED=0 EXTRACT_ENABLED=0 ELEVENLABS_API_KEY= \
-        MAX_PLAYERS=3 uv run uvicorn residents.app:app --port 8000
+    cd residents && DB_PATH=/tmp/e2e.db RESET_ON_START=1 PHOTON_ENABLED=0 EXTRACT_ENABLED=0 MAX_PLAYERS=3 \
+        ANTHROPIC_API_KEY= ELEVENLABS_API_KEY= ELEVENLABS_AGENT_ID= ELEVENLABS_PHONE_NUMBER_ID= \
+        uv run uvicorn residents.app:app --port 8000
     cd residents && uv run python ../engine/scripts/e2e.py [--base http://127.0.0.1:8000] [--skip-optimize]
 
-Exit code 0 = every check passed. Re-run it after any merge, and on the machine with the Photon/Anthropic keys.
+Exit code 0 = every check passed. Re-run it after any merge.
 """
 
 from __future__ import annotations

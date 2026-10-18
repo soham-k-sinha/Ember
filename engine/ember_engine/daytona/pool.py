@@ -36,6 +36,7 @@ PKG_DIR = ENGINE_DIR / "ember_engine"
 CANONICAL_TOWN = ENGINE_DIR / "data" / "town.json.gz"
 SNAPSHOT_PREFIX = "ember-engine"
 PREP_TIMEOUT_S, BATCH_TIMEOUT_S, JOB_TIMEOUT_S = 180, 60, 60
+SETUP_TRIES = 3
 LABELS = {"app": "ember", "role": "robustness"}
 ORPHAN_IDLE_MIN = 3
 log = logging.getLogger(__name__)
@@ -233,13 +234,18 @@ class DaytonaPool:
             raise RuntimeError("no Daytona sandbox came up: " + "; ".join(self.log[-3:]))
 
     async def _setup(self, code: str) -> None:
-        """Register the batch on every sandbox; dead ones (past their TTL, deleted elsewhere) are deleted and dropped."""
-        ok = await asyncio.gather(*(s.code_interpreter.run_code(code, timeout=BATCH_TIMEOUT_S) for s in self.sandboxes), return_exceptions=True)
-        up = [not isinstance(r, BaseException) and not r.error for r in ok]
-        if not all(up):
-            self.log.append(f"dropped {up.count(False)} of {len(up)} sandboxes that failed the batch setup")
-            await asyncio.gather(*(self.client.delete(s, timeout=60) for s, u in zip(self.sandboxes, up) if not u), return_exceptions=True)
-            self.sandboxes = [s for s, u in zip(self.sandboxes, up) if u]
+        """Register the batch on every sandbox. Failures are retried (with 90 at once, Daytona closes some connections
+        with 1006); ones that still fail (past their TTL, deleted elsewhere) are deleted and dropped."""
+        todo = self.sandboxes
+        for _ in range(SETUP_TRIES):
+            ok = await asyncio.gather(*(s.code_interpreter.run_code(code, timeout=BATCH_TIMEOUT_S) for s in todo), return_exceptions=True)
+            todo = [s for s, r in zip(todo, ok) if isinstance(r, BaseException) or r.error]
+            if not todo:
+                return
+        self.log.append(f"dropped {len(todo)} of {len(self.sandboxes)} sandboxes that failed the batch setup")
+        await asyncio.gather(*(self.client.delete(s, timeout=60) for s in todo), return_exceptions=True)
+        dead = {id(s) for s in todo}
+        self.sandboxes = [s for s in self.sandboxes if id(s) not in dead]
 
     async def aclose(self):
         if self.client is not None:

@@ -166,6 +166,21 @@ def test_warm_pool_runs_chunks_and_replaces_dead_sandboxes(world, scn):
     assert {p["worker"] for p in pts} <= {"fake-0", "fake-1"} and "dropped 2 of 2" in pool.log[0]
 
 
+def test_a_dropped_connection_during_batch_setup_keeps_the_sandbox(world, scn):
+    pool = FakeDaytonaPool(2, local_fallback_world=world)
+    asyncio.run(pool.astart())
+    first = list(pool.sandboxes)
+    ci = first[0].code_interpreter
+    real = ci.run_code
+
+    async def once(code, timeout=None):   # the batch setup's connection closes once (1006 under load)
+        ci.run_code = real
+        raise ConnectionError("WebSocket connection closed unexpectedly (close code 1006)")
+    ci.run_code = once
+    pts = asyncio.run(pool.arun("v1", scn, {"c00": {"assignments": []}}, [], J.make_jobs("v1", ["c00"], [1, 2], scn, world.n_edges)))
+    assert len(pts) == 2 and pool.sandboxes == first and not pool.log
+
+
 def test_get_pool_falls_back_to_local(monkeypatch):
     monkeypatch.delenv("DAYTONA_API_KEY", raising=False)
     monkeypatch.setattr("ember_engine.daytona.pool.load_env", lambda *a, **k: None)
