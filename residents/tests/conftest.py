@@ -43,7 +43,7 @@ def settings(tmp_path: Path) -> Settings:
     return Settings(db_path=tmp_path / "ember.db", seed_state=FIXTURE, reset_on_start=False,
                     dev_endpoints=True, photon_enabled=False, scenario=None,
                     extract_enabled=False, anthropic_api_key="", retry_every_s=3600.0, geocode_enabled=False,
-                    join_number="", elevenlabs_api_key="")  # never dial: tests that call inject a fake ElevenLabs
+                    elevenlabs_api_key="")  # never dial: tests that call inject a fake ElevenLabs
 
 
 @pytest.fixture(scope="session")

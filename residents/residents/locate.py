@@ -9,8 +9,8 @@ A phone registered with `locate` has no household. Its texts come here (Messenge
    if they already said, makes an offer. From then on the normal path (Intake) handles their texts.
 Nothing is guessed: no place, or a place outside the town → we ask again.
 
-A drill player (texted the join phrase, D78) isn't asked: we choose where they live, a free town building
-the forecast flood reaches, and a burst of joins shares one replan.
+A drill player (registered with POST /join, then texted the shared line, D89) isn't asked: we choose where
+they live, a free town building the forecast flood reaches, and a burst of joins shares one replan.
 """
 
 from __future__ import annotations
@@ -82,8 +82,8 @@ class Locator:
 
     async def on_plan(self, view: dict, raw: dict | None = None) -> None:
         if view.get("version") == 1:  # a fresh run (startup reseed / reset): players get a new building, others start over
-            for p in self.store.phones():
-                if player(self.store, p["handle"]):
+            for p in self.store.phones():  # players who have texted the line; the others are placed when they do
+                if player(self.store, p["handle"]) and self.store.kv_get(f"joined:{p['handle']}"):
                     await self.on_lobby(p, "")
             await self.welcome()
 

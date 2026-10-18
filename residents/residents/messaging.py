@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
@@ -27,12 +28,14 @@ log = logging.getLogger("residents.messaging")
 
 DRILL = "[EMBER drill]"
 RUN_STARTED_KEY = "run_started_at"  # wall-clock UTC ISO of the last bootstrap (startup reseed / reset)
-JOIN_PHRASE = "join ember"  # an unknown phone texting this becomes a drill player (D78)
 FULL = "Thanks for joining! The EMBER flood drill is full right now; watch it on the big screen."
+# POST /join with Photon off (dev, tests): the line a registered player would text. Fictional (555-01xx).
+DEV_LINE = "+16175550100"
+E164 = re.compile(r"\+[1-9]\d{7,14}")
 
 
-def joins(text: str) -> bool:
-    return JOIN_PHRASE in " ".join(text.lower().split())
+class DrillFull(Exception):
+    """POST /join over MAX_PLAYERS (each player holds a Photon shared-line seat; the free plan has 25)."""
 
 
 # Called after a new inbound message is stored: (message, role). Task 3/4 hang extraction + replan here.
@@ -128,6 +131,37 @@ class Messenger:
             self.store.upsert_phone(handle, role, **fields)
             return next(p for p in self.phones_view() if p["handle"] == handle)
 
+    async def register_player(self, raw_handle: str) -> dict:
+        """POST /join (D89): a phone becomes a drill player before it texts. A shared iMessage line only delivers
+        texts from handles it has an assignment for, so: Photon assignment first (one phone per household, D55),
+        Player N (join order, kv `player:<handle>`, kept across resets), then its first text to `assigned_number`
+        places it (Locator). Idempotent per handle; over max_players raises DrillFull; a team phone can't join."""
+        handle = normalize_handle(raw_handle)
+        if not E164.fullmatch(handle):
+            raise ValueError(f"{raw_handle!r} is not a phone number (E.164, e.g. +16175550123)")
+        async with self._registration_lock:
+            previous = self.store.phone(handle=handle)
+            n = player(self.store, handle)
+            if previous is not None and n is None:
+                raise PhoneConflict("This phone is already a team phone in the drill; it can't join as a player.")
+            if n is None:
+                numbers = [int(v) for v in self.store.kv_prefix("player:").values()]
+                if len(numbers) >= self.max_players:
+                    raise DrillFull(f"drill is full ({self.max_players} players)")
+                n = max(numbers, default=0) + 1
+            fields: dict[str, str | None] = {} if previous else {"scenario_id": self.store.meta().get("scenario_id")}
+            if self.photon is not None and not (previous and previous["assigned_number"]):
+                a = await self.photon.create_assignment(handle)  # PhotonError: nothing stored, no seat taken
+                fields.update(assignment_id=a.get("assignmentId"), assigned_number=a.get("assignedPhoneNumber"))
+            phone = self.store.upsert_phone(handle, "resident", **fields)
+            if previous is None:
+                self.store.kv_set(f"player:{handle}", str(n))
+                log.info("%s registered as player %d", handle, n)
+        thread = phone_thread(self.store, phone)
+        return {"handle": handle, "player": n, "assigned_number": phone["assigned_number"] or DEV_LINE,
+                "dev": self.photon is None, "household_id": (thread or {}).get("household_id"),
+                "texted": bool(self.store.kv_get(f"joined:{handle}"))}
+
     @staticmethod
     def opted_in(phone: dict) -> bool:
         return bool(phone["last_inbound_at"] and phone["space_id"] and phone["agent_user_id"])
@@ -138,7 +172,9 @@ class Messenger:
             thread = phone_thread(self.store, p)
             ready = self.opted_in(p)
             action = None if ready else self._opt_in_instruction(p)
-            if thread is None and unplaced(self.store, p):
+            if thread is None and unplaced(self.store, p) and player(self.store, p["handle"]):
+                action = f"Waiting for this player's first text (JOIN EMBER) to {p['assigned_number'] or DEV_LINE}."
+            elif thread is None and unplaced(self.store, p):
                 action = (action if self.photon is not None else None) or "Waiting for this resident's location: they text where they are (address or intersection)."
             elif thread is None:
                 action = "This phone's household/facility is not in the current scenario."
@@ -173,7 +209,7 @@ class Messenger:
         except ValueError:
             handle = inbound.handle
         phone = self.store.phone(handle=handle)
-        if phone is None and not joins(inbound.text):
+        if phone is None:  # players register first (POST /join, D89): a shared line never delivers strangers
             log.warning("text from unregistered handle %s ignored", handle)
             return None
         if self.store.has_external_id(inbound.external_id) or self.store.inbound_seen(inbound.external_id):
@@ -182,8 +218,6 @@ class Messenger:
         if self._before_this_run(inbound.created_at):
             log.warning("ignoring %s from %s: sent %s, before this run started (%s)", inbound.external_id, handle,
                         inbound.created_at, self.store.kv_get(RUN_STARTED_KEY))
-            return None
-        if phone is None and (phone := await self._join(handle, inbound)) is None:
             return None
         thread = phone_thread(self.store, phone)
         lobby = thread is None and unplaced(self.store, phone)
@@ -206,29 +240,6 @@ class Messenger:
         return await self._in_turn(handle, inbound.text, self._store_inbound(
             phone["role"], inbound.text, external_id=inbound.external_id, thread=thread))
 
-    async def _join(self, handle: str, inbound: Inbound | None = None) -> dict | None:
-        """An unknown phone texted the join phrase: a drill player, unplaced until the Locator gives it a
-        building (D78). Over max_players it is told the drill is full and stays unregistered."""
-        async with self._registration_lock:
-            numbers = [int(v) for v in self.store.kv_prefix("player:").values()]
-            if len(numbers) < self.max_players:
-                n = max(numbers, default=0) + 1
-                self.store.kv_set(f"player:{handle}", str(n))
-                log.info("%s joined the drill as player %d", handle, n)
-                return self.store.upsert_phone(handle, "resident", scenario_id=self.store.meta().get("scenario_id"))
-        text = with_drill_prefix(FULL)
-        delivery = "dev"
-        if self.photon is not None and inbound is not None:  # they texted first, so the line may answer them
-            try:
-                await self.photon.send_text(inbound.space_id, inbound.agent_user_id, text,
-                                            idempotency_key=f"ember-{inbound.external_id}-full")
-                delivery = "sent"
-            except Exception as e:  # noqa: BLE001 - nothing else depends on this reply
-                log.error("'drill full' to %s failed: %s", handle, e)
-                delivery = "failed"
-        self._tap({"direction": "out", "who": handle, "text": text, "delivery": delivery})
-        return None
-
     def _before_this_run(self, created_at: str | None) -> bool:
         """A text sent before the last reset/bootstrap belongs to an earlier run; never answer it."""
         started = self.store.kv_get(RUN_STARTED_KEY)
@@ -249,13 +260,11 @@ class Messenger:
 
     async def phone_inbound(self, raw_handle: str, text: str) -> dict | None:
         """Dev / drill console: a text "from" a phone, without Photon (no opt-in learned). Placed phones go the
-        normal path; unplaced ones to the lobby (location first); an unknown one only by joining (D78)."""
+        normal path; unplaced ones to the lobby (players are placed, others asked where they are)."""
         handle = normalize_handle(raw_handle)
         phone = self.store.phone(handle=handle)
-        if phone is None and joins(text) and (phone := await self._join(handle)) is None:
-            return None
         if phone is None:
-            raise ValueError(f"{raw_handle} is not a registered phone")
+            raise ValueError(f"{raw_handle} is not a registered phone (players: POST /join first)")
         thread = phone_thread(self.store, phone)
         if thread is None:
             if not unplaced(self.store, phone):
@@ -303,6 +312,7 @@ class Messenger:
                     for d in live:
                         if d["id"]:
                             self.store.set_delivery(d["id"], "failed")
+                    await self._undelivered(handle, text)
             thread_ids = [d["id"] for d in live if d["id"]]
             if thread_ids:
                 self.store.set_said(thread_ids, text)
@@ -321,6 +331,8 @@ class Messenger:
                     delivery = await self._photon_send(handle, d["text"], d["id"] or new_message_id())
                     if d["id"]:
                         self.store.set_delivery(d["id"], delivery)
+                    if delivery == "failed":
+                        await self._undelivered(handle, d["text"])
             self._tap({"direction": "out", "who": d["thread"] or handle, "text": d["text"],
                        "delivery": "voice" if on_call and delivery in ("sent", "dev") else delivery})
 
@@ -334,6 +346,15 @@ class Messenger:
         except Exception as e:  # noqa: BLE001 - a failed send must not break the turn
             log.error("send to %s failed: %s", handle, e)
             return "failed"
+
+    async def _undelivered(self, handle: str, text: str) -> None:
+        """D90: Photon refused a text after its retries: the voice manager may call them with it instead."""
+        if self.voice is None:
+            return
+        try:
+            await self.voice.undelivered(handle, text)
+        except Exception:  # noqa: BLE001 - the text stays failed and is retried; the plan goes on
+            log.exception("call-back for an undelivered text to %s failed", handle)
 
     def _route(self, phone: dict | None) -> str:
         """Where a message to this phone goes now: "voice" (its call is live, D74), "dev" (Photon off),
@@ -355,6 +376,8 @@ class Messenger:
     async def _lobby_inbound(self, phone: dict, text: str) -> None:
         """A text from a phone with no household yet: kept in the phone's lobby log (moved into its
         household's thread once placed) and handed to the Locator."""
+        if player(self.store, phone["handle"]):
+            self.store.kv_set(f"joined:{phone['handle']}", "1")  # texted the line: placed now and after each reset
         self._lobby_append(phone["handle"], {"direction": "in", "text": text.strip(), "t_s": self._t_s()})
         self._tap({"direction": "in", "who": phone["handle"], "text": text.strip(), "delivery": None})
         for hook in self.lobby_hooks:
@@ -377,6 +400,8 @@ class Messenger:
             delivery = "sent"  # said on the live call
         elif route == "photon":
             delivery = await self._photon_send(handle, text, new_message_id())
+            if delivery == "failed":
+                await self._undelivered(handle, text)
         else:
             delivery = route
         self._lobby_append(handle, {"direction": "out", "text": text, "t_s": self._t_s(), "delivery": delivery})
@@ -466,4 +491,6 @@ class Messenger:
             log.error("send %s to %s failed: %s", msg["id"], thread_key(thread), e)
             self.store.set_delivery(msg["id"], delivery)
         self._tap({"direction": "out", "who": thread, "text": msg["text"], "delivery": delivery})
+        if delivery == "failed":
+            await self._undelivered(phone["handle"], msg["text"])  # type: ignore[index]
         return msg, delivery

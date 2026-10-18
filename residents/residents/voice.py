@@ -50,6 +50,7 @@ WHY = {"no_reply": "calling because the water reaches your street in about {mins
        "mobility": "calling about your wheelchair-accessible pickup",
        "medical": "calling about your pickup, because of the medical needs you told us about",
        "pickup_changed": "calling because your pickup has changed",
+       "undelivered": "calling because our text to you didn't go through",
        "console": "calling about your evacuation plan"}
 PROMISE = "I'll text you this too."
 # What a caller says that is about the call, not a message for the thread; the call answers it itself:
@@ -93,7 +94,7 @@ SYSTEM_PROMPT = ("EMBER-CALL caller={{system__caller_id}} called={{system__calle
 class Session:
     handle: str
     conversation_id: str | None = None
-    reason: str = "inbound"      # inbound | console | no_reply | mobility | pickup_changed
+    reason: str = "inbound"      # inbound | console | no_reply | mobility | pickup_changed | undelivered
     started_t_s: float = 0.0
     reports_at: int = 0          # reports before the call: the ones after it are what the call changed
     outbox: list[str] = field(default_factory=list)
@@ -340,6 +341,29 @@ class Voice:
             except (RuntimeError, ValueError, httpx.HTTPError) as e:
                 log.warning("proactive call to %s (%s) failed: %s", handle, reason, e)
         return placed
+
+    async def undelivered(self, handle: str, text: str) -> dict | None:
+        """D90: a text Photon refused after its retries is said on a call instead (Messenger tells us). Same rules
+        as D80: a resident's real number, no call already on, VOICE_MAX_CONCURRENT, COOLDOWN_S per (phone, reason)."""
+        if not self.configured() or not handle.startswith("+") or self.live(handle) is not None:
+            return None
+        phone = self.store.phone(handle=handle)
+        if phone is None or phone["role"] != "resident":
+            return None
+        now = self._t_s()
+        last = self.store.kv_get(f"call:{handle}:undelivered")
+        if last is not None and now - float(last) < COOLDOWN_S:
+            return None
+        if sum(1 for h in list(self.sessions) if self.live(h)) >= self.settings.voice_max_concurrent:
+            return None
+        self.store.kv_set(f"call:{handle}:undelivered", str(now))
+        self.open(handle, reason="undelivered").outbox.append(text)  # the opening says this text, nothing else
+        try:
+            return await self.call(handle, "undelivered")
+        except (RuntimeError, ValueError, httpx.HTTPError) as e:
+            self.end(handle, reason="dial failed")
+            log.warning("call-back to %s for an undelivered text failed: %s", handle, e)
+            return None
 
     def _due(self, phone: dict, now: float) -> tuple[float, str, str] | None:
         """(deadline, handle, reason) when this resident should get a call now, else None."""
