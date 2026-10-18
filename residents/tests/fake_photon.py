@@ -25,6 +25,8 @@ class FakePhoton:
             return httpx.Response(201, json={"assignmentId": f"asg-{body['handle'][-4:]}", "assignedPhoneNumber": LINE,
                                              "handle": body["handle"], "platform": "imessage", "projectId": PROJECT,
                                              "createdAt": "2026-10-17T00:00:00Z", "updatedAt": "2026-10-17T00:00:00Z"})
+        if path.startswith("platforms/imessage/assignments/") and req.method == "DELETE":
+            return httpx.Response(200, json={"assignmentId": path.rsplit("/", 1)[-1], "releasedAt": "2026-10-17T00:10:00Z"})
         if path == "messages" and req.method == "POST":
             if self.reject_sends:
                 return httpx.Response(403, json={"code": "SHARED_LINE_NOT_OPTED_IN"})

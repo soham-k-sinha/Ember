@@ -125,10 +125,16 @@ class PhotonClient:
         raise AssertionError("unreachable")
 
     # ---------- REST ----------
-    async def create_assignment(self, handle: str) -> dict:
-        """Map a tester's phone onto a shared iMessage line. Idempotent per handle."""
+    async def create_assignment(self, handle: str, generation: int = 0) -> dict:
+        """Map a tester's phone onto a shared iMessage line (one seat). Idempotent per handle and generation: after a
+        release the next generation creates a new assignment instead of replaying the released one."""
         return await self._request("POST", "platforms/imessage/assignments", json={"handle": handle},
-                                   idempotency_key=f"ember-assign-{handle}")
+                                   idempotency_key=f"ember-assign-{handle}" + (f"-{generation}" if generation else ""))
+
+    async def release_assignment(self, assignment_id: str) -> dict:
+        """Free an assignment's seat and handle (DELETE; repeating it is safe)."""
+        return await self._request("DELETE", f"platforms/imessage/assignments/{assignment_id}")
+
 
     async def send_text(self, space_id: str, sender_id: str, text: str, idempotency_key: str) -> dict:
         return await self._request("POST", "messages", idempotency_key=idempotency_key, json={

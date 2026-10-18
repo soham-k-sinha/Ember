@@ -4,6 +4,7 @@ replies DONE; with auto_clock the sim clock jumps to the next step. Real allocat
 fake geocoder, no network."""
 import asyncio
 import json
+import time
 from dataclasses import replace
 
 import pytest
@@ -15,10 +16,10 @@ from residents.drill import Drill, SetupError, main as drill_main
 from residents.extract import to_outcome
 from residents.guide import STEP_DONE
 from residents.locate import JOIN_LEAD_S
-from residents.messaging import DEV_LINE
+from residents.messaging import DEV_LINE, IPHONE_ONLY, JOIN_TTL_S
 from residents.photon import parse_inbound
 from residents.places import Place, parse_coords
-from tests.fake_photon import LINE, FakePhoton, received
+from tests.fake_photon import LINE, PROJECT, FakePhoton, received
 from tests.test_engine import SCENARIO, bridge  # noqa: F401
 from tests.test_extract import FakeLLM, ex, fact
 from tests.test_messaging import deliver
@@ -769,6 +770,28 @@ def test_a_team_phone_cannot_join(lobby):
     c, _ = lobby
     register(c, R1)
     assert c.post("/join", json={"handle": R1}).status_code == 409
+
+
+def test_team_phones_hold_seats_and_players_who_never_text_give_theirs_back(lobby):
+    """D92: every Photon assignment holds a seat (so the 25th join is a 409, never Photon's 502), and a registration that
+    hasn't texted within JOIN_TTL_S is released (Photon DELETE) to make room; one that texted keeps its seat."""
+    c, fp = lobby
+    c.app.state.messenger.max_players = 3
+    register(c, R1)                                                         # a team phone: one seat
+    [reg] = register_players(c, "+16175550201")
+    assert reg["note"] == IPHONE_ONLY
+    join(c, "+16175550202")
+    assert c.post("/join", json={"handle": "+16175550203"}).status_code == 409
+    store = c.app.state.store
+    for h in ("+16175550201", "+16175550202"):                              # 11 min ago
+        store.kv_set(f"registered:{h}", str(time.time() - JOIN_TTL_S - 60))
+    [late] = register_players(c, "+16175550203")
+    released = [r.url.path for r in fp.requests if r.method == "DELETE"]
+    assert released == [f"/v1/projects/{PROJECT}/platforms/imessage/assignments/asg-0201"] and late["player"] == 3
+    assert store.phone(handle="+16175550201") is None and store.phone(handle="+16175550202") is not None
+    c.app.state.messenger.max_players = 4
+    [back] = register_players(c, "+16175550201")                           # a released phone may join again: a new seat
+    assert back["player"] == 4 and assignments(fp)[-1].headers["idempotency-key"] == "ember-assign-+16175550201-1"
 
 
 def test_reset_places_players_who_texted(lobby):

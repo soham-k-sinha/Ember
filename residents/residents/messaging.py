@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
@@ -31,11 +32,13 @@ RUN_STARTED_KEY = "run_started_at"  # wall-clock UTC ISO of the last bootstrap (
 FULL = "Thanks for joining! The EMBER flood drill is full right now; watch it on the big screen."
 # POST /join with Photon off (dev, tests): the line a registered player would text. Fictional (555-01xx).
 DEV_LINE = "+16175550100"
+IPHONE_ONLY = "iPhone (iMessage) only: an Android phone texts by SMS, which never reaches this line."
+JOIN_TTL_S = 600.0  # a player who hasn't texted the line this long after POST /join (wall clock) gives the seat back
 E164 = re.compile(r"\+[1-9]\d{7,14}")
 
 
 class DrillFull(Exception):
-    """POST /join over MAX_PLAYERS (each player holds a Photon shared-line seat; the free plan has 25)."""
+    """POST /join with every seat taken (each Photon assignment, team phones too, holds one of MAX_PLAYERS seats)."""
 
 
 # Called after a new inbound message is stored: (message, role). Task 3/4 hang extraction + replan here.
@@ -135,7 +138,9 @@ class Messenger:
         """POST /join (D89): a phone becomes a drill player before it texts. A shared iMessage line only delivers
         texts from handles it has an assignment for, so: Photon assignment first (one phone per household, D55),
         Player N (join order, kv `player:<handle>`, kept across resets), then its first text to `assigned_number`
-        places it (Locator). Idempotent per handle; over max_players raises DrillFull; a team phone can't join."""
+        places it (Locator). Idempotent per handle; a team phone can't join. Every Photon assignment holds a seat, so
+        with max_players seats taken (team phones count) it raises DrillFull instead of Photon refusing the next one;
+        a player who never texts within JOIN_TTL_S gives theirs back first (D92)."""
         handle = normalize_handle(raw_handle)
         if not E164.fullmatch(handle):
             raise ValueError(f"{raw_handle!r} is not a phone number (E.164, e.g. +16175550123)")
@@ -145,22 +150,43 @@ class Messenger:
             if previous is not None and n is None:
                 raise PhoneConflict("This phone is already a team phone in the drill; it can't join as a player.")
             if n is None:
-                numbers = [int(v) for v in self.store.kv_prefix("player:").values()]
-                if len(numbers) >= self.max_players:
-                    raise DrillFull(f"drill is full ({self.max_players} players)")
-                n = max(numbers, default=0) + 1
+                await self._release_stale()
+                if sum(1 for p in self.store.phones() if p["assignment_id"] or player(self.store, p["handle"])) >= self.max_players:
+                    raise DrillFull(f"drill is full ({self.max_players} seats)")
+                n = max((int(v) for v in self.store.kv_prefix("player:").values()), default=0) + 1
             fields: dict[str, str | None] = {} if previous else {"scenario_id": self.store.meta().get("scenario_id")}
             if self.photon is not None and not (previous and previous["assigned_number"]):
-                a = await self.photon.create_assignment(handle)  # PhotonError: nothing stored, no seat taken
+                a = await self.photon.create_assignment(handle, int(self.store.kv_get(f"released:{handle}") or 0))
+
                 fields.update(assignment_id=a.get("assignmentId"), assigned_number=a.get("assignedPhoneNumber"))
             phone = self.store.upsert_phone(handle, "resident", **fields)
             if previous is None:
                 self.store.kv_set(f"player:{handle}", str(n))
+                self.store.kv_set(f"registered:{handle}", str(time.time()))
                 log.info("%s registered as player %d", handle, n)
         thread = phone_thread(self.store, phone)
         return {"handle": handle, "player": n, "assigned_number": phone["assigned_number"] or DEV_LINE,
                 "dev": self.photon is None, "household_id": (thread or {}).get("household_id"),
-                "texted": bool(self.store.kv_get(f"joined:{handle}"))}
+                "texted": bool(self.store.kv_get(f"joined:{handle}")), "note": IPHONE_ONLY}
+
+    async def _release_stale(self) -> None:
+        """(registration lock held) Players who registered but never texted within JOIN_TTL_S: their Photon assignment
+        is released and the registration forgotten, so a walk-away or an Android scan can't keep a seat."""
+        for key, at in self.store.kv_prefix("registered:").items():
+            handle = key.removeprefix("registered:")
+            phone = self.store.phone(handle=handle)
+            if self.store.kv_get(f"joined:{handle}") or time.time() - float(at) < JOIN_TTL_S:
+                continue
+            if self.photon is not None and phone and phone["assignment_id"]:
+                try:
+                    await self.photon.release_assignment(phone["assignment_id"])
+                except PhotonError as e:
+                    log.warning("releasing %s's seat failed: %s", handle, e)
+                    continue
+            self.store.delete_phone(handle)
+            self.store.kv_set(f"released:{handle}", str(int(self.store.kv_get(f"released:{handle}") or 0) + 1))
+            log.info("released %s: registered %.0f min ago, never texted", handle, (time.time() - float(at)) / 60)
+
 
     @staticmethod
     def opted_in(phone: dict) -> bool:

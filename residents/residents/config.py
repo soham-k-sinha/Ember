@@ -75,8 +75,8 @@ class Settings:
     voice_port: int = field(default_factory=lambda: int(os.environ.get("VOICE_PORT", "8100")))
     # someone who calls the number but isn't registered becomes a resident to be located (judges can call in)
     voice_admit_callers: bool = field(default_factory=lambda: _flag("VOICE_ADMIT_CALLERS", True))
-    # Multiplayer (D89): POST /join registers a phone on the shared iMessage line (one Photon seat each; the free
-    # plan has 25), then its first text to that line places it as Player N
+    # Multiplayer (D89): POST /join registers a phone on the shared iMessage line, then its first text to that line places
+    # it as Player N. Seats: every Photon assignment, team phones too (the free plan has 25, D92)
     max_players: int = field(default_factory=lambda: int(os.environ.get("MAX_PLAYERS", "25")))
     # D80: EMBER calls the most at-risk residents itself, at most this many calls at once (0: never calls first)
     voice_max_concurrent: int = field(default_factory=lambda: int(os.environ.get("VOICE_MAX_CONCURRENT", "2")))
