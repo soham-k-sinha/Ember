@@ -106,7 +106,8 @@ ended_t_s}]}`. Six calls end to end without ElevenLabs or an LLM: `uv run python
 | `POST /reports` | a structured fact (`report.schema.json`; `id`/`observed_at_t_s` default to new/the clock). `need` / `closure_report` / `facility_status` → replan → WS `report`, `plan`, one `assignment` per change, `metrics` |
 | `POST /disruption` | judge's map controls: `{"close_edges": [edge ids]}` (reverse direction closed too) or `{"facility_id", "set": {...}}` → report → replan |
 | `POST /replan` | replan now (no new fact) |
-| `POST /optimize?seeds=20&k=4` → 202 | robust fan-out (top-k candidates × perturbed worlds + baseline; Daytona if engine/.env has a key, else local processes). Streams WS `scatter_point`, then `plan`. Runs outside the planner lock on its own engine session + World (clock / texts / replans keep flowing); if a replan lands meanwhile the result is discarded as superseded. 409 while running; `GET /optimize` = `{running, last}` |
+| `POST /optimize?seeds=50&k=4` → 202 (seeds 1..2000, k 1..8) | robust fan-out (top-k candidates × perturbed worlds + baseline; Daytona if engine/.env has a key, else local processes). Streams WS `scatter_point`, then `plan`. Runs outside the planner lock on its own engine session + World (clock / texts / replans keep flowing); if a replan lands meanwhile the result is discarded as superseded. 409 while running; `GET /optimize` = `{running, last}` |
+| `POST /join {handle}` | multiplayer (D89): register a phone (E.164) as a drill player on the shared iMessage line → `{handle, player, assigned_number, dev, household_id, texted}`; its first text to `assigned_number` places it. Idempotent; 409 when full (`MAX_PLAYERS`) or for a team phone; 422 for a non-phone |
 | `POST /simulate {planner: ember\|baseline}` | projected metrics over the horizon for the current plan or the incident-by-incident baseline, with every report known by the clock |
 | `POST /ask {role, household_id?, facility_id?, question?}` | prompt a specific household/facility. A role alone works with at most one active registration of that role; multiple matches → 422. Returns delivery status, assigned_number and action_needed; blocked sends do not consume the plan's question. |
 | `POST /clock {t_s}` | move the sim clock (play / scrub); broadcasts `state` |
@@ -126,10 +127,14 @@ ended_t_s}]}`. Six calls end to end without ElevenLabs or an LLM: `uv run python
 3. Each tester texts anything to their `assigned_number` (Photon's opt-in rule: a shared line can't text first). `GET /phones` then shows `opted_in: true`.
 4. `GET /health` → `photon_listener.socket` should be `subscribed`; if the socket is down for 5 s, the backend polls `GET /messages` every 2 s instead.
 
-**Join by QR (D78):** a phone we don't know that texts "JOIN EMBER" to `JOIN_NUMBER` (default `PHOTON_VOICE_NUMBER`,
-the SMS number: a shared iMessage line only delivers assigned handles) becomes Player N, up to `MAX_PLAYERS` (30), on a
-free building in the forecast flood that we choose; the plan then asks its own question. Over the cap: "the drill is
-full". `/dev/reset` places players again. Replies on the SMS number need the line's SMS campaign (Photon).
+**Join: register, then text (D89, amends D78):** a shared iMessage line only delivers texts from handles it has an
+assignment for, so the web's join card sends `POST /join {handle}` first: the phone gets a Photon assignment (one seat,
+one household, D55) and Player N (join order), and the answer is `{assigned_number, player}`. The QR then opens
+`sms:<assigned_number>?&body=JOIN%20EMBER` (iMessage on an iPhone). That first text (any text) places the phone on a
+free building in the forecast flood that we choose, and the plan asks its own question; a burst of joins shares one
+replan. Idempotent per phone; over `MAX_PLAYERS` (25, Photon's free-plan seats) → 409 "drill is full". Texts from
+phones that never registered are ignored. With Photon off, `/join` returns a dev line and `/dev/inbound` with that
+handle places it. `/dev/reset` places again every player who has texted.
 
 Inbound texts are deduped by Photon message id; the event cursor is saved after each handled event and survives restarts and `/dev/reset`.
 

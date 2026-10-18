@@ -9,8 +9,8 @@ FastAPI + SQLite. The DB is the source of truth; the engine session is resumed f
 People take part by text (Photon 2.0) and by phone call (ElevenLabs on the Photon SMS number, EMBER as its Custom
 LLM, D74). One LLM call turns a message into structured facts; the deterministic planner replans; each person gets
 one reply per turn, worded by a second model from the computed messages and checked by a guard (D76). When the model
-is unavailable or not configured, a keyword parser returns the same `Extraction` (D75, D85). Strangers join by texting "JOIN EMBER" to the SMS
-number (D78).
+is unavailable or not configured, a keyword parser returns the same `Extraction` (D75, D85). Players register with `POST /join`
+(the web's join card), then text "JOIN EMBER" to the shared iMessage line it returns (D89).
 
 ```
 scenarios/allston_flood_v1  +  engine/data/town.json.gz
@@ -60,8 +60,8 @@ uv run ember-drill --dry                       # a whole drill, nothing sent; ty
 RESET_ON_START=1 PHOTON_ENABLED=1 uv run uvicorn residents.app:app --port 8000   # demo backend (docs/HANDOFF.md has the full command)
 ```
 Settings worth knowing: `SCENARIO` (empty = static fixture mode), `START_T_S`, `ENGINE_MOVES`, `DB_PATH`,
-`RESET_ON_START`, `PHOTON_ENABLED`, `EXTRACT_ENABLED`, `REPLY_ENABLED`, `JOIN_NUMBER` (default `PHOTON_VOICE_NUMBER`),
-`MAX_PLAYERS` (30), `VOICE_MAX_CONCURRENT` (2; 0 = never call first), `VOICE_PORT`, `CHALK_ROUTER_KEY` + `CHALK_ENV_ID`.
+`RESET_ON_START`, `PHOTON_ENABLED`, `EXTRACT_ENABLED`, `REPLY_ENABLED`,
+`MAX_PLAYERS` (25), `VOICE_MAX_CONCURRENT` (2; 0 = never call first), `VOICE_PORT`, `CHALK_ROUTER_KEY` + `CHALK_ENV_ID`.
 
 ## Key data (allston_flood_v1)
 - Fleet, all at EMS 14: `van-1`, `van-2`, `van-3` (**the only wheelchair-accessible vehicle**), `truck-1`, `crew-1`,

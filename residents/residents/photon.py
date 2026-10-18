@@ -9,8 +9,8 @@ Shapes are from https://api.photon.codes/openapi.json and photon.codes/docs/beta
                     connect, then `delivery(event, {seq})`. Events can be redelivered → dedupe by message id.
                     Process serially; persist `seq` only after the handler succeeded.
 - Fallback:         GET messages?direction=received&createdSince=… every 2 s while the socket is down.
-- Join line (D78):  a shared iMessage line only delivers texts from handles assigned to it; the project's SMS
-                    number delivers `message.received` (platform sms) from any sender, so unknown phones join there.
+- Joining (D89):    a shared iMessage line only delivers texts from handles assigned to it, so a player is
+                    registered first (POST /join → create_assignment), then texts the line.
 
 This module knows nothing about Ember state; `messaging.py` decides what an inbound message means.
 """
@@ -136,7 +136,7 @@ class PhotonClient:
             "content": {"type": "text", "format": "plain", "text": text}})
 
     async def list_received(self, since: datetime) -> list[dict]:
-        """Received messages on every line (the SMS join line too) created at/after `since`, oldest first
+        """Received messages on every line created at/after `since`, oldest first
         (first page only; we poll every 2 s)."""
         res = await self._request("GET", "messages", params={
             "direction": "received", "orderBy": "created_at", "order": "asc",
