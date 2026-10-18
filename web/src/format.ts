@@ -70,9 +70,9 @@ export function planTiming(plan: PlanSnapshot): string {
   return seconds == null ? "" : `replanned in ${seconds.toFixed(1)} s`;
 }
 
-/** Sewage kept out of the Charles before the hospital call, as the backend froze it (undefined on a backend without it). */
+/** Sewage kept out of the Charles before the hospital call: plan.search.kept_before_tradeoff_m3, frozen by the planner (D92). */
 export function keptBeforeTradeoff(plan: PlanSnapshot | null | undefined): number | undefined {
-  return plan?.metrics?.kept_before_tradeoff_m3 ?? (plan?.search as { kept_before_tradeoff_m3?: number } | undefined)?.kept_before_tradeoff_m3;
+  return (plan?.search as { kept_before_tradeoff_m3?: number | null } | undefined)?.kept_before_tradeoff_m3 ?? undefined;
 }
 
 /** The plan gave up a facility (the overflow, for the hospital) and says so in `unresolved`. */
