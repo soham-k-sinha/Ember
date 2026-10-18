@@ -424,3 +424,9 @@ Interfaces: needs question text changed in engine explain, seed state and contra
 Status: residents 359+ pass, engine 107, web build + checks, ruff clean; sim_calls re-run (docs/voice_transcripts.md).
 Next: Daytona snapshot, e2e --big, merge, live call test.
 
+### 2026-10-18 06:40 · Calls that stay in the flood and answer anything (D111) · branch aryaman/smart-calls
+What: after the one opening line, nothing on a call or text says simulation, demo, "I can't", 911 or (on a call) coordinator, except "If this is a real emergency, please hang up and call 911." when someone says it is real. A hurt caller hears who is coming to the door and one thing to do (deterministic, fast path); any other question goes to residents/residents/talk.py: the reply model (Haiku via Chalk, 3.5 s) answers from a sheet of what EMBER knows, guarded (D76 + no coordinator/dead end/unplanned help, ≤ 2 sentences), else an in-world template. Short call questions skip the reading model. Ambulance kind counts as a vehicle (wording: paramedics).
+Files: residents/residents/{talk,voice,intake,fallback,speech,reply,briefing,messaging,guide,app,db}.py, residents/tests/{test_voice,test_fallback,test_questions,test_drill}.py, residents/scripts/sim_calls.py, docs/voice_transcripts.md (Ana: police + hurt leg).
+Run: residents full suite, ruff; sim_calls re-run; 27 real model calls to tune the prompt (0.7–1.6 s, median 1.0 s).
+Interfaces: none (no contract change). New create_app(talker=) for tests.
+Next: live call check of the police / hurt-leg / dog questions; merge with the D112 (arrival pause) and D113 (web) branches.
