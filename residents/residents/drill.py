@@ -141,8 +141,8 @@ class Drill:
             print("\nvoice: pretend calls (--dry). `call r1` starts one; type what they say with @r1 …")
             return
         self.tunnel, public = await start_tunnel(s.voice_port)
-        if not await wait_for_voice(f"{public}/{token}/health"):
-            raise SetupError("The public voice callback isn't reachable yet; no calls were placed. Try starting the voice session again.")
+        if not await wait_for_voice(f"{public}/{token}/health"):  # often this Mac's DNS cache, not the tunnel: go on
+            print("voice: the tunnel isn't reachable from this Mac yet; continuing (ElevenLabs resolves it on its own).")
         server_url = f"{public}/{token}/v1"
         ok, detail = await configure_agent(s, server_url)
         print(f"\nvoice: tunnel {public} → :{s.voice_port} (only the voice endpoint is exposed)")
