@@ -17,53 +17,39 @@ rationale) and **Proof** (Run comparison; **Pre-season stress test** at 0:00, **
 ## 0 · Setup (T−15 min)
 | # | Who | Action | Expected | Blocker / fallback | ✓ |
 |---|---|---|---|---|---|
-| 0.1 | A | `cd engine && uv sync --extra dev && uv run pytest -q`; `cd residents && uv run pytest -q`; `engine/scripts/e2e.py --big` against a fresh backend (HANDOFF § Run) | all checks pass; latest local/keyless checks are in POLISH_QA.md; historical real-Daytona e2e 83/83 | **blocker**: fix or cut the beat | |
-| 0.2 | A | both `.env` files on the backend machine | `DAYTONA_API_KEY`, `EMBER_DAYTONA_WORKERS`, `PHOTON_*`, `ANTHROPIC_API_KEY`, `ELEVENLABS_*` present (names only) | Daytona missing → local pool; Photon/model missing → DEMO fallbacks | |
-| 0.3 | A | `cd engine && uv run ember daytona-snapshot` | "ready" (`ember-engine-1892f8194d`, new after D104; not rebuilt during takeover) | build takes ~90 s; never let a stress test be first to need it | |
-| 0.4 | S | start backend (DEMO § Before going on stage) | plan v1, listener connected, no pool warm-up error | | |
-| 0.5 | A | `curl localhost:8000/health` | `mode: engine`, `extraction: on`, `photon: enabled`, listener connected, `max_players: 25`, `players` | **blocker** for real phones → `/dev/inbound` | |
-| 0.6 | S | `curl localhost:8000/phones` | resident and operator phones opted in | not opted in → that phone texts its line first | |
-| 0.7 | A | web with `VITE_API_BASE`, open `/?live` full-screen | stage on the Treehouse, LIVE dot, plan v1 on the score card, join card with a number field and "iPhone (iMessage) only" | WS fails → reload | |
-| 0.8 | A | clock stays at **0:00**; wait ~5 s after any reset | judge phone has EMBER's question for #10296; Proof shows **Pre-season stress test** | missing question → `POST /replan` once | |
+| 0.1 | A | `cd engine && uv sync --extra dev && uv run pytest -q`; `cd residents && uv run pytest -q` | all pass | **blocker**: fix or cut the beat | |
+| 0.2 | A | ElevenLabs credits left; both `.env` files present (names only) | a test call doesn't stop with "exceeds your quota limit" | no credits → no calls: read `docs/voice_transcripts.md` | |
+| 0.3 | A | quit every other app; `cd engine && uv run ember daytona-snapshot` | "ready" | build ~60 s; never let the stress test be first to need it | |
+| 0.4 | A | start the backend (DEMO § Before going on stage 4) | "voice: residents can call +13465660512" | "isn't reachable yet" → start again | |
+| 0.5 | A | `curl localhost:8000/health` | `mode: engine`, `extraction: on`, `voice_number: "+13465660512"` | `voice_number: null` → ElevenLabs keys | |
+| 0.6 | A | web with `VITE_API_BASE`, `/?live` full-screen, `?perf` once | join card: **Call (346) 566-0512** + QR; fps ≥ 50 | WS fails → reload | |
+| 0.7 | X | dial the number from a team phone, answer the question, say "okay" | answer in ~1 s; "I'll text you all of this now. Take care." then it hangs up | then `/dev/reset` | |
 
-## 1 · Framing and pre-season stress test (0:00–0:50)
+## 1 · Framing (0:00–0:15)
 | # | Who | Action | Expected | Blocker / fallback | ✓ |
 |---|---|---|---|---|---|
-| 1.1 | A | read the score card | 78 reached before water (baseline 58); **Kept out of the Charles 2,317 m³** (sewage 0 vs baseline 2,317) | different → re-measure DEMO.md | |
-| 1.2 | A | Proof tab → **Large stress test** | clock pauses; heading names the actual pool; every world streams; total is 2,000 × distinct plans including timing comparison and baseline (up to 12,000) | **blocker** `local-fallback` → use the smaller default test and say "local pool"; "superseded" → retry while paused | |
-| 1.3 | A | read the verdict | Read the current measured worst-20% comparison (historical round-3 result: c03 15.7 vs c00 30.3, baseline 40.8); a new plan version, still 78 reached on the forecast | | |
+| 1.1 | A | read the score card | 78 reached before water (baseline 58); 2,317 m³ kept out of the Charles | different → re-measure | |
 
-## 2 · Household rescue (0:50–1:30)
+## 2 · Everyone joins and talks to EMBER (0:15–1:30)
 | # | Who | Action | Expected | Blocker / fallback | ✓ |
 |---|---|---|---|---|---|
 | 2.1 | A | scrub to **5:00**, paused | clock 5:00 | | |
-| 2.2 | J | resident phone: "2 of us, one is in a wheelchair, River St is blocked" | Feed shows text in → fact within ~5 s | **blocker** >10 s → X sends DEMO § Replay 2b (`household_id` 10296) | |
-| 2.3 | A | watch, no reload | latest-change strip: **Judge → Accessible Van 3, pickup in 95 min** (replanned in ~0.7 s); River St red (next version, ~0.7 s) | no change → Replay 2c | |
-| 2.4 | A | click #10296 (inspector) | Accessible Van 3 | no van → Replay 2c | |
-| 2.5 | A | Plan tab → Generator 1 (inspector) | rerouted, ETA 14 → 25 min, "route changed: road reported closed" | | |
-| 2.6 | A | score card | reached 80; **Kept out of the Charles 5,167 m³** | | |
-| 2.7 | J | resident phone | instruction naming Accessible Van 3 and a pickup time; Feed shows text out | no text → show the Feed | |
+| 2.2 | J | 2–3 phones scan the QR / dial (346) 566-0512 | each: "This is EMBER, an automated assistant in a live flood simulation…"; roster shows Player N **on call** | no answer in 10 s → console `call r1` to a team phone | |
+| 2.3 | J | one says "4 of us, my mom's in a wheelchair" | reply in ~1 s: **Accessible Van 3** coming to the door; Feed: words → fact → new plan | > 3 s → the model is reading a long sentence; keep it short | |
+| 2.4 | J | another says "River St is flooded" | River St red; another player's pickup changes and EMBER calls them with why | | |
+| 2.5 | J | each says "okay" | goodbye spoken, call ends; a "From our call:" text follows (iMessage players) | | |
 
 ## 3 · Infrastructure power loss (1:30–2:00)
 | # | Who | Action | Expected | Blocker / fallback | ✓ |
 |---|---|---|---|---|---|
-| 3.1 | A | scrub to **15:00** | clock 15:00, state refreshes | | |
-| 3.2 | S | operator phone: "Mount Auburn facilities: we lost grid power, we're on backup and it has about 10 minutes left" | Feed text in → fact ~5 s | >10 s → Replay 3b (`/dev/inbound` operator) | |
-| 3.3 | A | strip, then Plan tab → Generator 1 (inspector) | **Mount Auburn Hospital → Generator 1, on site in 8 min**; "chosen over Cottage Farm …" | rationale says "down at 120 min" → structured Replay 3c | |
-| 3.4 | A | score card | hospital outage ≈ 13 min (baseline 27); sewage tile **5,167 m³ kept out · before the hospital call**; Proof overflow row 9,600 vs 9,600 m³ (stated) | | |
-| 3.5 | A | Feed → open needs | Cottage Farm: "the only compatible generator is protecting mt-auburn" | | |
+| 3.1 | A | scrub to **15:00** | clock 15:00 | | |
+| 3.2 | S | operator phone: "Mount Auburn facilities: we lost grid power, we're on backup and it has about 10 minutes left" | **Mount Auburn Hospital → Generator 1**; outage ≈ 13 min (baseline 27); overflow 0 → 9,600 m³ stated | > 10 s → Replay 3 (`/dev/inbound` operator) | |
 
-## 4 · Multiplayer (2:00–2:30)
+## 4 · Is it still safe? Daytona (2:00–2:35)
 | # | Who | Action | Expected | Blocker / fallback | ✓ |
 |---|---|---|---|---|---|
-| 4.1 | X | type a new iPhone's number into the join card → Join; scan the QR it shows, send the pre-filled `JOIN EMBER` | card shows "Player N: text JOIN EMBER to <line>"; roster shows Player N "waiting for text", then a status pill after the text, one replan (~0.8 s); the card says "Player N joined: you're household #… on <street>" for 5 s; the phone gets its household and instruction over iMessage | no player in 15 s → Replay 4 or skip | |
-
-## 5 · EMBER calls first (2:30–2:55)
-| # | Who | Action | Expected | Blocker / fallback | ✓ |
-|---|---|---|---|---|---|
-| 5.1 | X | `POST /calls {"handle": …}` to X's opted-in phone, on speaker | rings in < 10 s; roster shows **on call**; the first call opens "This is EMBER, an automated assistant in a live flood simulation." and asks how many people and whether anyone needs medical or mobility help | no ring → read Maria's first-contact excerpt (`docs/voice_transcripts.md`) | |
-| 5.2 | X | give the head count and care needs, then hang up | the computed instruction is spoken; a "From our call:" text follows; no YES/DONE needed | | |
-| 5.3 | X | total time | ≤ 3:00 | | |
+| 4.1 | A | Proof tab → **Large stress test** | heading names Daytona · 90 sandboxes; 10,000 worlds in ~5 s fan-out; laptop ~24 s tile; worst-20 % verdict | "this laptop" → say so; "superseded" → press again | |
+| 4.2 | X | total time | ≤ 3:00 | | |
 
 ## 6 · Reset between rehearsals
 | # | Who | Action | Expected | ✓ |
