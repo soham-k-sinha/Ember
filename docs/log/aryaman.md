@@ -424,3 +424,9 @@ Interfaces: needs question text changed in engine explain, seed state and contra
 Status: residents 359+ pass, engine 107, web build + checks, ruff clean; sim_calls re-run (docs/voice_transcripts.md).
 Next: Daytona snapshot, e2e --big, merge, live call test.
 
+
+### 2026-10-18 06:00 · Pause on arrival (D112)
+What: `aryaman/arrival-pause` (from `aryaman/call-to-join`): when the clock reaches a player's vehicle at their door, WS `arrival`, the player is called with the "outside now" step, and the clock holds there (POST /clock clamped, `held_by`; /health `hold`) until that call ends or `POST /clock {resume: true}`. `AUTO_HOLD=0` turns it off.
+Interfaces: ws-events.schema.json 0.2 adds `arrival` (+ fixture); /clock answers `held_by`, /health `auto_hold` + `hold`; bus EVENT_TYPES, Settings.auto_hold. Engine's `_ws_examples` (ember fixtures) doesn't emit `arrival` yet.
+Status: residents 366 pass (tests/test_arrival.py), engine 107, ruff clean, e2e 79/79 with the new [10].
+Next: web (D113) stops playback on `arrival` / `held_by` and shows the hold; merge.
