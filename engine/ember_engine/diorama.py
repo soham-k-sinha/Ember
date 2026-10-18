@@ -11,6 +11,10 @@ web renders (web/public/diorama/<name>.json):
   OpenStreetMap mapped trees (natural=tree; Harvard's campus trees are on private land, in no city inventory)
   + trees *placed* on lawns and parks that no inventory covers, to the density the surveyed side shows
   (source flag 3 = placed, not surveyed; the web labels them).
+- elevation: USGS 3DEP via the AWS open terrain tiles (terrarium PNG, zoom 15, ≈3.5 m), resampled to a 4 m
+  grid in stage metres, so the map can rise flood water over the real ground (visual only; the engine's closures
+  stay the scenario's flood stages).
+- signals: OpenStreetMap signalised junctions (highway=traffic_signals); the map cycles them (illustrative timing).
 - ground: Overture land use, water (the Charles) and transportation segments (roads, paths; parking aisles
   kept), plus OpenStreetMap surface car parks (amenity=parking).
 
@@ -21,6 +25,7 @@ between teammates (the web is its only consumer). Every value carries its source
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 import time
 import urllib.parse
@@ -95,6 +100,64 @@ def arcgis(url: str, bbox: tuple, fields: str, cache_dir: Path, name: str, where
         offset += 2000
 
 
+TERRAIN = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
+
+
+def elevation(bbox: tuple, cache_dir: Path, cell_m: float = 4.0, z: int = 15) -> dict:
+    """Ground height on a cell_m grid over the stage (cells in the web's stage metres: a east, b south from the
+    north-west corner), from the open terrain tiles. Returned compactly: uint16 centimetres above offset_m, base64."""
+    import base64
+    import io
+
+    import numpy as np
+    from PIL import Image
+
+    w, s, e, n = bbox
+    lon0, lat0 = (w + e) / 2, (s + n) / 2
+    kx, ky = 111_320 * math.cos(math.radians(lat0)), 110_540
+
+    def tile_xy(lon, lat):  # scalars or numpy arrays
+        lat_r = np.radians(lat)
+        x = (np.asarray(lon) + 180) / 360 * 2 ** z
+        y = (1 - np.log(np.tan(lat_r) + 1 / np.cos(lat_r)) / np.pi) / 2 * 2 ** z
+        return x, y
+
+    tx0, ty0 = (int(float(v)) for v in tile_xy(w, n))
+    tx1, ty1 = (int(float(v)) for v in tile_xy(e, s))
+    mosaic = np.zeros(((ty1 - ty0 + 1) * 256, (tx1 - tx0 + 1) * 256))
+    for ty in range(ty0, ty1 + 1):
+        for tx in range(tx0, tx1 + 1):
+            path = cache_dir / f"terrain_{z}_{tx}_{ty}.png"
+            if not path.exists():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                req = urllib.request.Request(TERRAIN.format(z=z, x=tx, y=ty), headers={"User-Agent": "ember-hackharvard-diorama/0.1"})
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    path.write_bytes(r.read())
+            px = np.asarray(Image.open(io.BytesIO(path.read_bytes())).convert("RGB")).astype(np.float64)
+            el = px[..., 0] * 256 + px[..., 1] + px[..., 2] / 256 - 32768
+            mosaic[(ty - ty0) * 256:(ty - ty0 + 1) * 256, (tx - tx0) * 256:(tx - tx0 + 1) * 256] = el
+    a0, b0 = (w - lon0) * kx, -(n - lat0) * ky
+    W = int(math.ceil((e - w) * kx / cell_m))
+    H = int(math.ceil((n - s) * ky / cell_m))
+    ii, jj = np.meshgrid(np.arange(W), np.arange(H))
+    lon = lon0 + (a0 + (ii + 0.5) * cell_m) / kx
+    lat = lat0 - (b0 + (jj + 0.5) * cell_m) / ky
+    fx, fy = tile_xy(lon, lat)
+    fx = (fx - tx0) * 256 - 0.5
+    fy = (fy - ty0) * 256 - 0.5
+    x0 = np.clip(np.floor(fx).astype(int), 0, mosaic.shape[1] - 2)
+    y0 = np.clip(np.floor(fy).astype(int), 0, mosaic.shape[0] - 2)
+    dx, dy = np.clip(fx - x0, 0, 1), np.clip(fy - y0, 0, 1)
+    grid = (mosaic[y0, x0] * (1 - dx) * (1 - dy) + mosaic[y0, x0 + 1] * dx * (1 - dy)
+            + mosaic[y0 + 1, x0] * (1 - dx) * dy + mosaic[y0 + 1, x0 + 1] * dx * dy)
+    offset = -10.0
+    cm = np.clip(np.round((grid - offset) * 100), 0, 65535).astype("<u2")
+    return {"cell_m": cell_m, "w": W, "h": H, "offset_m": offset, "scale_m": 0.01,
+            "min_m": round(float(grid.min()), 2), "max_m": round(float(grid.max()), 2),
+            "source": "USGS 3DEP via AWS Terrain Tiles (terrarium, z15)",
+            "data": base64.b64encode(cm.tobytes()).decode()}
+
+
 def overpass(query: str, cache: Path, timeout: int = 120) -> dict:
     """One Overpass API query, cached (public OSM data, © OpenStreetMap contributors, ODbL)."""
     if cache.exists():
@@ -118,22 +181,39 @@ def overpass(query: str, cache: Path, timeout: int = 120) -> dict:
     return out
 
 
-def osm_extras(bbox: tuple, cache_dir: Path) -> tuple[list[tuple[float, float]], list[list]]:
-    """OSM mapped trees (lon, lat) and surface car parks (rings) inside bbox."""
+def _oneway(props: dict) -> int:
+    """1: cars may only drive along the geometry, -1: only against it, 0: both ways (Overture access_restrictions)."""
+    for r in props.get("access_restrictions") or []:
+        when = r.get("when") or {}
+        modes = when.get("mode") or []
+        if r.get("access_type") != "denied" or r.get("between") or when.get("during") or (modes and not {"motor_vehicle", "car", "vehicle"} & set(modes)):
+            continue
+        if when.get("heading") == "backward":
+            return 1
+        if when.get("heading") == "forward":
+            return -1
+    return 0
+
+
+def osm_extras(bbox: tuple, cache_dir: Path) -> tuple[list[tuple[float, float]], list[list], list[tuple[float, float]]]:
+    """OSM mapped trees (lon, lat), surface car parks (rings) and signalised junctions (lon, lat) inside bbox."""
     w, s, e, n = bbox
     q = (f"[out:json][timeout:90];(node[natural=tree]({s},{w},{n},{e});"
+         f"node[highway=traffic_signals]({s},{w},{n},{e});"
          f"way[amenity=parking]({s},{w},{n},{e}););out geom;")
-    res = overpass(q, cache_dir / "osm_extras.json")
-    trees, parks = [], []
+    res = overpass(q, cache_dir / "osm_extras_v2.json")
+    trees, parks, signals = [], [], []
     for el in res.get("elements", []):
         tags = el.get("tags", {})
-        if el["type"] == "node":
+        if el["type"] == "node" and tags.get("highway") == "traffic_signals":
+            signals.append((el["lon"], el["lat"]))
+        elif el["type"] == "node":
             trees.append((el["lon"], el["lat"]))
         elif el["type"] == "way" and tags.get("parking", "surface") in ("surface", "lane", "street_side") and el.get("geometry"):
             ring = [[round(g["lon"], 6), round(g["lat"], 6)] for g in el["geometry"]]
             if len(ring) >= 4 and ring[0] == ring[-1]:
                 parks.append(ring[:-1])
-    return trees, parks
+    return trees, parks, signals
 
 
 def overture(kind: str, bbox: tuple, cache_dir: Path) -> list[dict]:
@@ -318,7 +398,7 @@ def build(bbox: tuple, cache_dir: Path, venue_lonlat: tuple | None = None) -> di
         trees.append([round(c.x, 6), round(c.y, 6), round(min(4 + 0.45 * dbh, 22), 1), round(min(1.5 + 0.22 * dbh, 9), 1), 1])
 
     # OpenStreetMap trees where no surveyed tree stands within 4 m (campus trees on private land)
-    osm_trees, osm_parks = osm_extras(bbox, cache_dir)
+    osm_trees, osm_parks, osm_signals = osm_extras(bbox, cache_dir)
     have = STRtree([Point(t[0], t[1]) for t in trees]) if trees else None
     near_m = 4 / my
     for lon, lat in osm_trees:
@@ -357,7 +437,10 @@ def build(bbox: tuple, cache_dir: Path, venue_lonlat: tuple | None = None) -> di
         for part in getattr(g, "geoms", [g]):
             if part.geom_type == "LineString" and part.length > 0:
                 k = "parking_aisle" if p.get("subclass") == "parking_aisle" else (p.get("class") or "unknown")
-                roads.append({"path": [[round(x, 6), round(y, 6)] for x, y in part.coords], "k": k})
+                road = {"path": [[round(x, 6), round(y, 6)] for x, y in part.coords], "k": k}
+                if ow := _oneway(p):
+                    road["ow"] = ow
+                roads.append(road)
 
     # ---------- trees placed on lawns no inventory covers (flag 3: placed, not surveyed) ----------
     trees += _plant_lawns(land, roads, buildings, trees, area)
@@ -375,6 +458,9 @@ def build(bbox: tuple, cache_dir: Path, venue_lonlat: tuple | None = None) -> di
         "land": land,
         "water": water,
         "roads": roads,
+        "elev": elevation(bbox, cache_dir),
+        # signalised junctions (OSM highway=traffic_signals); the map runs them on an illustrative cycle
+        "signals": [[round(lon, 6), round(lat, 6)] for lon, lat in osm_signals if area.contains(Point(lon, lat))],
     }
 
 

@@ -90,6 +90,13 @@ type DepthFn = (a: number, b: number, px: number, py: number, halfW: number, hei
 
 export class Crowd {
   private guests = new Map<string, Guest>();
+
+  /** People drawn this frame (for the ?perf readout). */
+  visibleCount(): number {
+    let n = 0;
+    for (const g of this.guests.values()) if (g.c.visible) n++;
+    return n;
+  }
   private free: Guest[] = [];
   private stamp = 0;
   private figureH: number;

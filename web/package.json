@@ -9,8 +9,9 @@
     "preview": "vite preview --host 0.0.0.0 --port 43123",
     "check:closures": "node --experimental-strip-types scripts/check-closures.ts",
     "check:crowd": "node --experimental-strip-types scripts/check-crowd.ts",
+    "check:traffic": "node --experimental-strip-types --no-warnings scripts/check-traffic.ts",
     "check:ws": "node --experimental-strip-types scripts/check-ws.ts",
-    "test": "npm run check:ws && npm run check:closures && npm run check:crowd"
+    "test": "npm run check:ws && npm run check:closures && npm run check:crowd && npm run check:traffic"
   },
   "dependencies": {
     "@deck.gl/core": "9.4.0",

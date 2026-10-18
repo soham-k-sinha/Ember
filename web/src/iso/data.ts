@@ -23,7 +23,12 @@ export type Diorama = {
   trees: [number, number, number, number, number][];
   land: { ring: [number, number][]; k: string; sub?: string }[];
   water: { ring: [number, number][]; holes: [number, number][][] }[];
-  roads: { path: [number, number][]; k: string }[];
+  /** ow: one-way (Overture access restrictions): 1 only along the path, -1 only against it */
+  roads: { path: [number, number][]; k: string; ow?: 1 | -1 }[];
+  /** ground height on a grid over the stage (USGS 3DEP via AWS terrain tiles): uint16 cm above offset_m, base64 */
+  /** signalised junctions (OSM highway=traffic_signals), [lon, lat] */
+  signals?: [number, number][];
+  elev?: { cell_m: number; w: number; h: number; offset_m: number; scale_m: number; min_m: number; max_m: number; source: string; data: string };
 };
 
 const pending = new Map<string, Promise<Diorama | null>>();

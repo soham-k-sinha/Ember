@@ -19,7 +19,7 @@ const SLAB_M = 4.5;
 
 export type Bounds = { x0: number; y0: number; x1: number; y1: number };
 export type BuildingRec = { b: DioBuilding; id: number; holder: Container; lite: Container; full: Container | null; bounds: Bounds; foot: Array<[number, number]>; depth: number };
-export type Cullable = { node: Container; bounds: Bounds };
+export type Cullable = { node: Container; bounds: Bounds; minScale?: number }; // minScale: hidden when zoomed out further (sub-pixel there)
 
 export type StaticScene = {
   buildings: BuildingRec[];
@@ -162,7 +162,7 @@ export function buildStatic(data: Diorama, p: Projector): StaticScene {
     }
     c.zIndex = l.a + l.b + 0.2;
     objects.addChild(c);
-    cullables.push({ node: c, bounds: { x0: x - 4, y0: y - 8, x1: x + 4, y1: y + 1 } });
+    cullables.push({ node: c, bounds: { x0: x - 4, y0: y - 8, x1: x + 4, y1: y + 1 }, minScale: 0.7 });
     lit.push(post as unknown as Container);
   }
 
@@ -311,7 +311,7 @@ export function buildStatic(data: Diorama, p: Projector): StaticScene {
   for (const prop of extra.props) {
     prop.node.zIndex = depthFor(prop.a, prop.b, prop.node.x, prop.node.y, 2.5, 3);
     objects.addChild(prop.node);
-    cullables.push({ node: prop.node, bounds: prop.bounds });
+    cullables.push({ node: prop.node, bounds: prop.bounds, minScale: prop.node.height > 20 ? 0 : 0.7 }); // cranes stay
     lit.push(prop.node);
   }
   labels.push(...extra.labels);

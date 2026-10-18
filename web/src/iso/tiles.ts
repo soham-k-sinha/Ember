@@ -32,7 +32,7 @@ export class GroundTiles {
    * Show the tiles covering the plane-space view (bake one more if needed). Returns true when the
    * sharp shadows cover the whole view (the caller then hides the coarse shadow layer).
    */
-  update(view: { x0: number; y0: number; x1: number; y1: number }, camS: number, tint: number): boolean {
+  update(view: { x0: number; y0: number; x1: number; y1: number }, camS: number, tint: number, mayBake = true): boolean {
     this.frame++;
     for (const t of this.tiles.values()) {
       t.ground.visible = false;
@@ -60,7 +60,7 @@ export class GroundTiles {
         const key = `${i},${j}`;
         let t = this.tiles.get(key);
         if (!t) {
-          if (baked) {
+          if (baked || !mayBake) {
             complete = false;
             continue;
           }

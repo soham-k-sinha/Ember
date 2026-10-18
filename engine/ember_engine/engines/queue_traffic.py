@@ -201,8 +201,12 @@ class QueueTrafficEngine:
     def done(self):
         return bool(np.all((self.state == EXITED) | (self.state == EXPOSED) | (self.state == STUCK))) and self.N > 0
 
-    def trajectories(self, world) -> list[dict]:
-        """Sampled vehicles → [{id, path:[[lon,lat],...], t:[s,...]}] for deck.gl TripsLayer."""
+    def trajectories(self, world, follow_roads: bool = False) -> list[dict]:
+        """Sampled vehicles → [{id, path:[[lon,lat],...], t:[s,...]}] for deck.gl TripsLayer.
+
+        follow_roads: also emit every road-geometry vertex and junction a car passes between two samples
+        (times by distance), so a straight line between samples never cuts a corner. Needs a snapshot every
+        tick: a car changes edge at most once per tick, so consecutive samples are on the same or adjacent edges."""
         out = []
         if not self.traj:
             return out
@@ -223,13 +227,80 @@ class QueueTrafficEngine:
             if ended.any():
                 last = int(np.argmax(ended))
                 x[last:], y[last:] = x[last], y[last]
+            if follow_roads:
+                ts_k, x, y, s = _along_roads(world, ts, e, p, s, x, y)
+            else:
+                ts_k = ts
             lon, lat = world.xy_to_lonlat(x, y)
             # keep both ends of every stationary run so TripsLayer doesn't interpolate a slow creep
             chg = (np.abs(np.diff(lon)) > 1e-7) | (np.abs(np.diff(lat)) > 1e-7) | (np.diff(s) != 0)
-            keep = np.ones(len(ts), dtype=bool)
+            keep = np.ones(len(ts_k), dtype=bool)
             keep[1:-1] = chg[:-1] | chg[1:]
+            if follow_roads:
+                keep[np.where(keep)[0]] = _simplify(ts_k[keep], x[keep], y[keep])
             out.append({"id": int(world.hh_id[self.hh[vi]]),
                         "path": [[round(float(a), 6), round(float(b), 6)] for a, b in zip(lon[keep], lat[keep])],
-                        "t": [round(float(t), 1) for t in ts[keep]],
+                        "t": [round(float(t), 1) for t in ts_k[keep]],
                         "final": int(s[-1])})
         return out
+
+
+def _along_roads(world, ts, e, p, s, x, y):
+    """Insert the geometry vertices (and the junction) between consecutive samples of one vehicle."""
+    T, X, Y, S = [ts[:1]], [x[:1]], [y[:1]], [s[:1]]
+    gc, gx, gy = world.geom_cum, world.geom_x, world.geom_y
+
+    def verts(edge, g0, g1):
+        a, c = int(world.geom_start[edge]), int(world.geom_count[edge])
+        cum = gc[a:a + c]
+        k = np.where((cum > g0 + 1e-6) & (cum < g1 - 1e-6))[0]
+        return [(float(cum[j]) - g0, float(gx[a + j]), float(gy[a + j])) for j in k]
+
+    def g(edge, pos):
+        return float(np.clip(pos / max(world.edge_len[edge], 1e-6), 0.0, 1.0) * world.geom_total[edge])
+
+    # only ticks where the car moved need work; the rest are copied through in slices
+    moved = np.where((e[1:] >= 0) & (e[:-1] >= 0) & ((e[1:] != e[:-1]) | (p[1:] > p[:-1])))[0] + 1
+    prev = 0
+    for i in moved:
+        T.append(ts[prev + 1:i]); X.append(x[prev + 1:i]); Y.append(y[prev + 1:i]); S.append(s[prev + 1:i])
+        e0, e1 = int(e[i - 1]), int(e[i])
+        mid: list = []  # (distance from the previous sample, x, y)
+        if e0 == e1:
+            mid = verts(e0, g(e0, p[i - 1]), g(e0, p[i]))
+        elif world.edge_v[e0] == world.edge_u[e1]:
+            g0 = g(e0, p[i - 1])
+            rest = float(world.geom_total[e0]) - g0
+            mid = verts(e0, g0, float(world.geom_total[e0]) + 1.0)  # up to and including the junction
+            mid += [(rest + d, vx, vy) for d, vx, vy in verts(e1, 0.0, g(e1, p[i]))]
+        if mid:
+            total = mid[-1][0] + float(np.hypot(x[i] - mid[-1][1], y[i] - mid[-1][2]))
+            T.append(np.array([ts[i - 1] + (ts[i] - ts[i - 1]) * (d / max(total, 1e-6)) for d, _, _ in mid]))
+            X.append(np.array([vx for _, vx, _ in mid])); Y.append(np.array([vy for _, _, vy in mid]))
+            S.append(np.full(len(mid), s[i]))
+        T.append(ts[i:i + 1]); X.append(x[i:i + 1]); Y.append(y[i:i + 1]); S.append(s[i:i + 1])
+        prev = i
+    T.append(ts[prev + 1:]); X.append(x[prev + 1:]); Y.append(y[prev + 1:]); S.append(s[prev + 1:])
+    return np.concatenate(T), np.concatenate(X), np.concatenate(Y), np.concatenate(S)
+
+
+def _simplify(t, x, y, tol_m: float = 1.5) -> np.ndarray:
+    """Douglas–Peucker on synchronized distance: drop a point when the car, moving linearly in time between
+    the kept neighbours, would be within tol_m of where it really was at that moment."""
+    n = len(t)
+    keep = np.zeros(n, dtype=bool)
+    keep[0] = keep[-1] = True
+    stack = [(0, n - 1)]
+    while stack:
+        a, b = stack.pop()
+        if b - a < 2:
+            continue
+        span = t[b] - t[a]
+        f = (t[a + 1:b] - t[a]) / span if span > 0 else np.zeros(b - a - 1)
+        err = np.hypot(x[a] + (x[b] - x[a]) * f - x[a + 1:b], y[a] + (y[b] - y[a]) * f - y[a + 1:b])
+        k = int(np.argmax(err))
+        if err[k] > tol_m:
+            m = a + 1 + k
+            keep[m] = True
+            stack += [(a, m), (m, b)]
+    return keep

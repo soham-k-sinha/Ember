@@ -1,6 +1,6 @@
 /** Decorative crowd only: preserve the overview, spend spare frame time on close-up density. */
-export const BASE_STROLLERS = 700;
-export const MAX_STROLLERS = 1400;
+export const BASE_STROLLERS = 1200;
+export const MAX_STROLLERS = 3200;
 const MIN_STROLLERS = 100;
 
 export type CrowdView = { x0: number; y0: number; x1: number; y1: number };
@@ -10,9 +10,10 @@ export function figureScale(figureHeight: number, cameraScale: number): number {
 }
 
 export function populationAtZoom(scale: number): number {
-  const share = Math.max(0.25, Math.min(1, (scale - 0.5) / 1.5));
+  // the whole district reads as busy from afar; close up, spend the frame budget on density
+  const share = Math.max(0.4, Math.min(1, (scale - 0.5) / 1.5));
   const extra = Math.max(0, Math.min(1, (scale - 1.2) / 0.8));
-  return Math.round(BASE_STROLLERS * (share + extra));
+  return Math.min(MAX_STROLLERS, Math.round(BASE_STROLLERS * (share + 1.7 * extra)));
 }
 
 /** Include heads and a small motion margin, including oversized figures at overview scale. */

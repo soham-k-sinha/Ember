@@ -17,7 +17,7 @@ export type Prop = { node: Graphics; a: number; b: number; bounds: { x0: number;
 const CAR_COLORS = [0xd8d8d4, 0x2b2e33, 0x8d9299, 0x6b1f22, 0x24395c, 0xe9e6dc, 0x4a4f55, 0x7c8a6a, 0xb7aa92, 0x3e5f7a, 0xa03a2a, 0x16181b];
 
 /** Oriented box at ground centre (ca, cb) facing `ang` (radians, in a/b), drawn into g around the origin (ox, oy). */
-function obox(g: Graphics, p: Projector, ox: number, oy: number, ca: number, cb: number, ang: number, L: number, W: number, z0: number, z1: number, color: number, edge = 0x101010) {
+export function obox(g: Graphics, p: Projector, ox: number, oy: number, ca: number, cb: number, ang: number, L: number, W: number, z0: number, z1: number, color: number, edge = 0x101010, top = true) {
   const fa = Math.cos(ang);
   const fb = Math.sin(ang);
   const corner = (u: number, v: number): AB => [ca + fa * u - fb * v, cb + fb * u + fa * v];
@@ -44,7 +44,7 @@ function obox(g: Graphics, p: Projector, ox: number, oy: number, ca: number, cb:
     const k = 0.62 * (na / len) ** 2 + 0.86 * (nb / len) ** 2 + 0.08;
     g.poly([...iso(a1, b1, z0), ...iso(a2, b2, z0), ...iso(a2, b2, z1), ...iso(a1, b1, z1)]).fill(shade(color, k)).stroke({ width: 0.06, color: edge, alpha: 0.5 });
   }
-  g.poly(base.flatMap(([a, b]) => iso(a, b, z1))).fill(shade(color, 1.06)).stroke({ width: 0.06, color: edge, alpha: 0.5 });
+  if (top) g.poly(base.flatMap(([a, b]) => iso(a, b, z1))).fill(shade(color, 1.06)).stroke({ width: 0.06, color: edge, alpha: 0.5 });
 }
 
 function boundsOf(g: Graphics, x: number, y: number) {

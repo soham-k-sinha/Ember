@@ -376,3 +376,22 @@ Run: cd residents && DB_PATH=<fresh> RESET_ON_START=1 PHOTON_ENABLED=0 EXTRACT_E
 Interfaces: none changed.
 Status: engine 106 + smoke + ruff, residents 301 + ruff, web build + npm test, e2e --big 83/83 with real Daytona (250 runs 1.8 s fan-out, 10,000 runs 4.9 s; pre-season 10,000 at 0:00 3.2–4.0 s, c03 15.74 vs c00 30.34, baseline 40.84). Snapshot unchanged (ember-engine-d9ea4508c1). No sandboxes left.
 Next: run-through with real phones (join, release, urgent text, one call); re-run the Chalk eval with the urgent kind; the backend's t=0 robust run lacks the c00-trip row (HANDOFF open issues).
+## 2026-10-18 06:30 · web: stage readability and a living, fast city (D96, D97) · branch aryaman/stage-polish
+What: Terrain-following flood water (USGS 3DEP 4 m grid baked in stage.json; visual only), label priorities + collision culling + projector sizes, overlay-safe camera fit with refit on resize, modelled fleet, 35 real traffic signals (OSM), passers-by 1,200 → 3,200 adaptive, district-zoom static snapshot + small-prop LOD + idle-only tile baking, `?perf` readout. Live mode verified against a keyless backend: the stage draws the backend's /playback traffic (2,893 cars), not the fixture. Folded in judge round-2 asks (safe-rect fit, 13–14 px labels, no km suffixes, Treehouse once).
+Files: engine/ember_engine/diorama.py, web/public/diorama/stage.json, web/src/iso/{water,fleet,signals,snapshot,props,scene,tiles,density,crowd,data}.ts, web/src/iso/IsoView.tsx, web/scripts/check-crowd.ts
+Run: cd web && npm run build && npm test; open /?perf (fps readout), /?live for the backend
+Interfaces: no contract change (stage.json gains elev and signals; web is its only consumer).
+Status: web tsc + build + npm test pass; engine 103; residents 290; e2e 75/75 (keyless backend). Steady state under 16.7 ms at every zoom measured at 1440×900 and 1920×1080 on an M3 Pro (hidden-pane timings are noisy; ?perf is the check on a visible screen).
+Next: verify fps with ?perf on the projector machine; vehicle sprites stop for nothing (the traffic run has no signals).
+
+## 2026-10-18 · Everyday traffic and readable traffic lights (D98)
+What: the roads were empty until the evacuation's first car (t = 2,800 s) and the signals were hidden below zoom 0.7 and tiny above it. Added `web/src/iso/ambient.ts`: illustrative everyday cars on the OSM road graph that follow each other, stop at the real signalised junctions' red and amber, turn back at the flood and thin out as the evacuation runs. Signals keep a minimum on-screen size, one per junction from afar, with a mast arm up close. Cars keep a minimum size and get brake lights and headlights. Sources panel line added; `FloodWater.wetAt`.
+Interfaces: no contract change.
+Status: web tsc + build + npm test (ws, closures, crowd, traffic) pass; `ambient.step` about 0.2 ms; checked in headless Chromium at district, mid and close zoom and late in the flood (no cars in water).
+Next: push/PR on approval.
+
+## 2026-10-18 · Cars no longer pass through each other (D99)
+What: engine trails follow road geometry (every tick + vertices + 1.5 m simplification); the evacuation cars keep to the right-hand lane with queue gaps on screen; everyday cars take turns through junctions; the stage carries one-way flags; the `ember diorama` math import is restored.
+Interfaces: playback fixture regenerated (same schema, denser traffic paths); stage.json roads gain optional `ow`.
+Status: web tsc + build + npm test pass; engine pytest 103/103. Measured overlaps between evacuation cars at t = 4,200 s: 49 → 0.
+Next: push/PR on approval. Visual polish paused at the user's request.
