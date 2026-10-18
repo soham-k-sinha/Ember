@@ -155,7 +155,6 @@ def build(center_latlon: tuple[float, float] | None = None, dist_m: int = 1200,
     print(f"[build] drive graph: {len(nodes_gdf)} nodes, {len(edges_gdf)} edges ({time.time()-t0:.1f}s)")
 
     node_ids = list(nodes_gdf.index)
-    node_pos = {nid: i for i, nid in enumerate(node_ids)}
     nodes = [{"id": int(nid), "lon": round(float(r.x), 6), "lat": round(float(r.y), 6)}
              for nid, r in nodes_gdf.iterrows()]
 
@@ -218,7 +217,7 @@ def build(center_latlon: tuple[float, float] | None = None, dist_m: int = 1200,
         try:
             Gw = _osm("walk", layer_key, ox.graph_from_point, (clat, clon), dist=dist_m, network_type="walk", simplify=True)
             wedges = ox.convert.graph_to_gdfs(Gw, nodes=False, edges=True, fill_edge_geometry=True)
-            for pid, ((u, v, key), r) in enumerate(wedges.iterrows()):
+            for pid, ((u, v, _), r) in enumerate(wedges.iterrows()):
                 if not bool(r.get("oneway")) and u > v:
                     continue  # one record per undirected footway
                 paths.append({"id": pid, "u": int(u), "v": int(v), "length_m": round(float(r["length"]), 1),

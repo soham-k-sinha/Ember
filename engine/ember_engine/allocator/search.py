@@ -21,7 +21,7 @@ from dataclasses import dataclass, replace
 
 from ..models.facilities import compatible
 from ..sim.plan_sim import cut_at, simulate
-from .context import VEHICLES, Context, Slot
+from .context import VEHICLES, Context
 
 PROTECT_TYPES = ("pumping_station", "hospital", "clinic")
 

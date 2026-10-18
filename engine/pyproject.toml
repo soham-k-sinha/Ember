@@ -33,3 +33,13 @@ packages = ["ember_engine"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 140
+
+[tool.ruff.lint]
+select = ["E9", "F", "B"]
+ignore = ["B905"]   # zip() lengths are equal by construction here
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["F811"]

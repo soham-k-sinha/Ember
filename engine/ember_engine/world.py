@@ -150,7 +150,7 @@ class World:
     def routing_table(self, closed: np.ndarray | None = None, weight: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
         """next_edge[node] toward the nearest exit avoiding closed edges (-1 if unreachable),
         plus dist_to_exit[node] in seconds. `weight` overrides free-flow edge times (e.g. congested)."""
-        N, E = self.n_nodes, self.n_edges
+        N = self.n_nodes
         w = (self.edge_tt if weight is None else np.asarray(weight, dtype=np.float64)).copy()
         if closed is not None and closed.any():
             w = np.where(closed, np.inf, w)

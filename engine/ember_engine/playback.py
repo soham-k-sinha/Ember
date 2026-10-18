@@ -21,6 +21,8 @@ import math
 
 import numpy as np
 
+from .geo import local_metres
+
 VERSION = "0.2"
 _DEG = 5                      # 5 decimals of a degree ≈ 1 m
 _MATCH = 0.35                 # rebuilt path must be within 35 % (+60 m) of the km the Mover logged that tick
@@ -40,11 +42,6 @@ def _edge_pts(w, e: int) -> np.ndarray:
     s, n = int(w.geom_start[e]), int(w.geom_count[e])
     lon, lat = w.xy_to_lonlat(w.geom_x[s:s + n], w.geom_y[s:s + n])
     return np.c_[lon, lat]
-
-
-def _metres(a, b) -> float:
-    k = math.cos(math.radians((a[1] + b[1]) / 2))
-    return math.hypot((b[0] - a[0]) * 111_320 * k, (b[1] - a[1]) * 110_540)
 
 
 def _split(pts: np.ndarray, p) -> int:
@@ -119,7 +116,7 @@ def _track(w, T: dict, rid: str, closed_t: np.ndarray) -> tuple[list, list]:
             closed = ~np.isnan(closed_t) & (closed_t <= ts[k])
             mid = _leg(w, p0, e0, n0, p1, e1, n1, closed)
             pts = [p0, *mid, p1]
-            seg = [_metres(a, b) for a, b in zip(pts, pts[1:])]
+            seg = [local_metres(a, b) for a, b in zip(pts, pts[1:])]
             total = sum(seg)
             driven = 1000.0 * (rt["km"][k] - rt["km"][k - 1])
             if mid and abs(total - driven) <= _MATCH * driven + 60.0:
