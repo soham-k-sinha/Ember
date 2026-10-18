@@ -281,7 +281,7 @@ class Voice:
                 return await self._silence(s, handle)
             if re.fullmatch(r"(?:um+|uh+|erm|er|hm+|mm+)[\W_]*", text, re.I):
                 return None  # hesitation is not a request to repeat the onboarding question
-            s.silent = 0
+            s.silent, s.closing = 0, False  # they're still talking: an earlier goodbye no longer ends the call
             if BARE_COUNT.fullmatch(text):
                 await asyncio.sleep(COUNT_SETTLE_S)
                 if s.arrived > arrived:
