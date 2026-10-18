@@ -14,6 +14,7 @@ web renders (web/public/diorama/<name>.json):
 - elevation: USGS 3DEP via the AWS open terrain tiles (terrarium PNG, zoom 15, ≈3.5 m), resampled to a 4 m
   grid in stage metres, so the map can rise flood water over the real ground (visual only; the engine's closures
   stay the scenario's flood stages).
+- signals: OpenStreetMap signalised junctions (highway=traffic_signals); the map cycles them (illustrative timing).
 - ground: Overture land use, water (the Charles) and transportation segments (roads, paths; parking aisles
   kept), plus OpenStreetMap surface car parks (amenity=parking).
 
@@ -179,22 +180,25 @@ def overpass(query: str, cache: Path, timeout: int = 120) -> dict:
     return out
 
 
-def osm_extras(bbox: tuple, cache_dir: Path) -> tuple[list[tuple[float, float]], list[list]]:
-    """OSM mapped trees (lon, lat) and surface car parks (rings) inside bbox."""
+def osm_extras(bbox: tuple, cache_dir: Path) -> tuple[list[tuple[float, float]], list[list], list[tuple[float, float]]]:
+    """OSM mapped trees (lon, lat), surface car parks (rings) and signalised junctions (lon, lat) inside bbox."""
     w, s, e, n = bbox
     q = (f"[out:json][timeout:90];(node[natural=tree]({s},{w},{n},{e});"
+         f"node[highway=traffic_signals]({s},{w},{n},{e});"
          f"way[amenity=parking]({s},{w},{n},{e}););out geom;")
-    res = overpass(q, cache_dir / "osm_extras.json")
-    trees, parks = [], []
+    res = overpass(q, cache_dir / "osm_extras_v2.json")
+    trees, parks, signals = [], [], []
     for el in res.get("elements", []):
         tags = el.get("tags", {})
-        if el["type"] == "node":
+        if el["type"] == "node" and tags.get("highway") == "traffic_signals":
+            signals.append((el["lon"], el["lat"]))
+        elif el["type"] == "node":
             trees.append((el["lon"], el["lat"]))
         elif el["type"] == "way" and tags.get("parking", "surface") in ("surface", "lane", "street_side") and el.get("geometry"):
             ring = [[round(g["lon"], 6), round(g["lat"], 6)] for g in el["geometry"]]
             if len(ring) >= 4 and ring[0] == ring[-1]:
                 parks.append(ring[:-1])
-    return trees, parks
+    return trees, parks, signals
 
 
 def overture(kind: str, bbox: tuple, cache_dir: Path) -> list[dict]:
@@ -379,7 +383,7 @@ def build(bbox: tuple, cache_dir: Path, venue_lonlat: tuple | None = None) -> di
         trees.append([round(c.x, 6), round(c.y, 6), round(min(4 + 0.45 * dbh, 22), 1), round(min(1.5 + 0.22 * dbh, 9), 1), 1])
 
     # OpenStreetMap trees where no surveyed tree stands within 4 m (campus trees on private land)
-    osm_trees, osm_parks = osm_extras(bbox, cache_dir)
+    osm_trees, osm_parks, osm_signals = osm_extras(bbox, cache_dir)
     have = STRtree([Point(t[0], t[1]) for t in trees]) if trees else None
     near_m = 4 / my
     for lon, lat in osm_trees:
@@ -437,6 +441,8 @@ def build(bbox: tuple, cache_dir: Path, venue_lonlat: tuple | None = None) -> di
         "water": water,
         "roads": roads,
         "elev": elevation(bbox, cache_dir),
+        # signalised junctions (OSM highway=traffic_signals); the map runs them on an illustrative cycle
+        "signals": [[round(lon, 6), round(lat, 6)] for lon, lat in osm_signals if area.contains(Point(lon, lat))],
     }
 
 

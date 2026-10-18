@@ -12,6 +12,8 @@ import { Crowd } from "./crowd";
 import { FloodWater } from "./water";
 import { TrafficCars } from "./traffic";
 import { Fleet } from "./fleet";
+import { TrafficSignals } from "./signals";
+import { StaticSnapshot } from "./snapshot";
 import { lightAt, tint } from "./lighting";
 import { SKY_BG } from "./palette";
 import { fixturePlaybacks, scenario, town } from "../fixtures";
@@ -66,7 +68,7 @@ const toHex = (c: [number, number, number]) => (c[0] << 16) | (c[1] << 8) | c[2]
 type Pill = { root: Container; bg: Graphics; text: Text; key: string; used: boolean; w: number; h: number };
 
 /** Label priorities: higher wins a collision; ALWAYS never yields (markers' own glyphs, the selection). */
-const PRIO = { ALWAYS: 1000, SELECTED: 900, JUDGE: 800, COUNT: 700, ALARM: 600, VENUE: 550, VEHICLE: 400, FACILITY: 300, LANDMARK: 100 } as const;
+const PRIO = { ALWAYS: 1000, SELECTED: 900, VENUE: 850, JUDGE: 800, COUNT: 700, ALARM: 600, VEHICLE: 400, FACILITY: 300, LANDMARK: 100 } as const;
 const queued: Array<{ item: Pill; x: number; y: number; prio: number }> = [];
 
 type Ctx = {
@@ -87,6 +89,13 @@ type Ctx = {
   crowdBudget: CrowdBudget;
   traffic: TrafficCars;
   fleet: Fleet;
+  signals: TrafficSignals;
+  camWas: { x: number; y: number; s: number };
+  userMoved: boolean;
+  snapshot: StaticSnapshot;
+  statics: Container[];
+  staticSet: Set<Container>;
+  camStill: number;
   aw: AgentWorld;
   awFor: Playback | null;
   lastT: number;
@@ -117,6 +126,7 @@ export function IsoView(props: IsoProps) {
     if (!el) return;
     let dead = false;
     let ready = false;
+    const cleanups: Array<() => void> = [];
     const app = new Application();
     void (async () => {
       await app.init({ resizeTo: el, antialias: true, background: SKY_BG, resolution: Math.min(2, window.devicePixelRatio || 1), autoDensity: true });
@@ -144,6 +154,10 @@ export function IsoView(props: IsoProps) {
       const crowd = new Crowd(scene.objects, marks, scene.atlas, p, scene.depthFor);
       const traffic = new TrafficCars(app.renderer, scene.objects, p, scene.depthFor);
       const fleet = new Fleet(app.renderer, scene.objects, p);
+      const signals = new TrafficSignals(data, p, scene.objects, scene.depthFor, scene.lit);
+      const snapshot = new StaticSnapshot(app.renderer);
+      const statics = [...scene.buildings.map((r) => r.holder), ...scene.cullables.map((c) => c.node)];
+      world.addChildAt(snapshot.sprite, world.getChildIndex(scene.objects));
       const aw = agentWorld(p, scene.insideBuilding, scene.onRoad, propsRef.current.playback);
       setScene(aw, data, scenario.hazard.keyframes, [town.venue.lon, town.venue.lat]);
       const overlay = new Graphics();
@@ -156,11 +170,11 @@ export function IsoView(props: IsoProps) {
       const cam = fitStage(app, scene.slab, el);
       const s = cam.s;
       const ctx: Ctx = {
-        app, data, p, scene, world, dyn, flood, floodTint: 0xffffff, closed, trails, decals, marks, top, crowd, crowdBudget: new CrowdBudget(), traffic, fleet, aw, awFor: propsRef.current.playback, lastT: propsRef.current.t, lastNow: performance.now() / 1000, vehicles: new Map(), lightKey: "", fitS: s, focusKey: 0, target: null, overlay, haze, hits, pills: new Map(), pillLayer,
+        app, data, p, scene, world, dyn, flood, floodTint: 0xffffff, closed, trails, decals, marks, top, crowd, crowdBudget: new CrowdBudget(), traffic, fleet, signals, camWas: { ...cam }, camStill: 0, userMoved: false, snapshot, statics, staticSet: new Set(statics), aw, awFor: propsRef.current.playback, lastT: propsRef.current.t, lastNow: performance.now() / 1000, vehicles: new Map(), lightKey: "", fitS: s, focusKey: 0, target: null, overlay, haze, hits, pills: new Map(), pillLayer,
         closedKey: "", cam, drag: { on: false, moved: false, x: 0, y: 0 },
       };
       ctxRef.current = ctx;
-      if (import.meta.env.DEV) (window as unknown as { __iso?: { app: Application; ctx: Ctx; frame: () => void; props: () => IsoProps } }).__iso = { app, ctx, frame: () => frame(ctx, propsRef.current), props: () => propsRef.current };
+      if (import.meta.env.DEV) (window as unknown as { __iso?: { app: Application; ctx: Ctx; frame: () => void; props: () => IsoProps; prof: () => Record<string, number> } }).__iso = { app, ctx, frame: () => frame(ctx, propsRef.current), props: () => propsRef.current, prof: readProfile };
 
       // pan / zoom
       app.stage.eventMode = "static";
@@ -175,6 +189,7 @@ export function IsoView(props: IsoProps) {
         if (Math.abs(dx) + Math.abs(dy) > 3) {
           ctx.drag.moved = true;
           ctx.target = null;
+          ctx.userMoved = true;
           if (propsRef.current.follow) propsRef.current.onFollow(null);
         }
         ctx.cam.x += dx;
@@ -198,11 +213,12 @@ export function IsoView(props: IsoProps) {
         (event) => {
           event.preventDefault();
           ctx.target = null;
+          ctx.userMoved = true;
           const rect = app.canvas.getBoundingClientRect();
           const mx = event.clientX - rect.left;
           const my = event.clientY - rect.top;
           const k = Math.exp(-event.deltaY * 0.0016);
-          const ns = Math.min(9, Math.max(0.35, ctx.cam.s * k));
+          const ns = Math.min(9, Math.max(Math.min(0.35, ctx.fitS * 0.8), ctx.cam.s * k));
           const f = ns / ctx.cam.s;
           ctx.cam.x = mx - (mx - ctx.cam.x) * f;
           ctx.cam.y = my - (my - ctx.cam.y) * f;
@@ -212,10 +228,23 @@ export function IsoView(props: IsoProps) {
       );
 
       app.ticker.add(() => frame(ctx, propsRef.current));
+      // refit when the map area changes size (window, panels), unless the user has taken the camera
+      const refit = new ResizeObserver(() => {
+        if (ctx.userMoved) return;
+        requestAnimationFrame(() => {
+          const fit = fitStage(app, scene.slab, el);
+          Object.assign(ctx.cam, fit);
+          ctx.fitS = fit.s;
+        });
+      });
+      refit.observe(el);
+      cleanups.push(() => refit.disconnect());
+      if (new URLSearchParams(location.search).has("perf")) perfHud(app, ctx, el);
     })();
     return () => {
       dead = true;
       ctxRef.current = null;
+      for (const c of cleanups) c();
       if (ready) {
         try {
           app.destroy(true, { children: true });
@@ -246,27 +275,115 @@ function hazeSprite(): Sprite {
   return sprite;
 }
 
+/** `?perf` in the URL: a small readout of real frame rate and frame times on this display (for checking 60 fps). */
+function perfHud(app: Application, ctx: Ctx, host: HTMLElement) {
+  const box = document.createElement("div");
+  box.style.cssText = "position:absolute;right:10px;top:54px;z-index:9;font:600 11px/1.4 ui-monospace,monospace;color:#e9f3ff;background:rgba(10,14,20,.78);padding:6px 9px;border-radius:8px;pointer-events:none;white-space:pre";
+  host.appendChild(box);
+  const dts: number[] = [];
+  let last = performance.now();
+  app.ticker.add(() => {
+    dts.push(app.ticker.deltaMS);
+    const now = performance.now();
+    if (now - last < 500) return;
+    last = now;
+    const sorted = [...dts].sort((a, b) => a - b);
+    const fps = (1000 * dts.length) / dts.reduce((a, b) => a + b, 0);
+    const p95 = sorted[Math.floor(sorted.length * 0.95)] ?? 0;
+    const people = ctx.crowd.visibleCount();
+    box.textContent = `${fps.toFixed(0)} fps  p95 ${p95.toFixed(1)} ms\n${app.screen.width}×${app.screen.height} @${app.renderer.resolution}x  zoom ${ctx.cam.s.toFixed(2)}\npeople ${people}  budget ${ctx.crowdBudget.limit}  snapshot ${ctx.snapshot.active ? "on" : "off"}`;
+    dts.length = 0;
+  });
+}
+
+/** Bake the snapshot in neutral light without the night glows; the live tint is applied to the image instead. */
+function snapshotBake(ctx: Ctx) {
+  const lit = ctx.scene.lit;
+  const glows = [...ctx.scene.glows, ...ctx.scene.lampGlows];
+  let tints: number[] = [];
+  let shown: boolean[] = [];
+  return {
+    tint: ctx.scene.light.tint,
+    before: () => {
+      tints = lit.map((n) => n.tint as number);
+      for (const n of lit) n.tint = 0xffffff;
+      shown = glows.map((g) => g.visible);
+      for (const g of glows) g.visible = false;
+    },
+    after: () => {
+      lit.forEach((n, i) => (n.tint = tints[i]));
+      glows.forEach((g, i) => (g.visible = shown[i]));
+    },
+  };
+}
+
 /** Camera that fits the whole stage into the part of the canvas the score card does not cover. */
 function fitStage(app: Application, slab: Graphics, host: HTMLElement | null): { s: number; x: number; y: number } {
+  // fit the whole stage inside the part of the map the overlays leave free: right of the score card, below the
+  // latest-change strip, left of the join card where it overlaps
   const b = slab.getLocalBounds();
   const W = app.screen.width;
   const H = app.screen.height;
   let left = 0;
-  const card = document.querySelector(".scorecard");
-  if (card && host) {
-    const c = card.getBoundingClientRect();
+  let right = 0;
+  let top = 0;
+  let bottom = 0;
+  if (host) {
     const h = host.getBoundingClientRect();
-    // the card floats over the top-left of the map: give the stage the width to its right
-    if (c.right > h.left && c.left < h.left + W * 0.5) left = Math.max(0, c.right - h.left + 8);
+    const rect = (sel: string) => {
+      const el = document.querySelector(sel);
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      const overlaps = r.width > 0 && r.right > h.left && r.left < h.right && r.bottom > h.top && r.top < h.bottom;
+      return overlaps ? r : null;
+    };
+    const card = rect(".scorecard");
+    if (card) left = Math.max(0, card.right - h.left + 16);
+    const join = rect(".join");
+    if (join) {
+      right = Math.max(0, h.right - join.left + 12);
+      bottom = Math.max(0, h.bottom - join.top + 12);
+    }
+    const strip = rect(".latest");
+    if (strip) top = Math.max(0, strip.bottom - h.top + 8);
   }
-  const free = W - left;
-  const s = Math.min(free / (b.width * 1.04), H / (b.height * 1.08));
-  return { s, x: left + free / 2 - (b.x + b.width / 2) * s, y: H / 2 - (b.y + b.height / 2) * s };
+  // the join card sits in a corner: lose either a column to its left or a band above it, whichever costs less
+  const fit = (x0: number, y0: number, x1: number, y1: number) => {
+    const fw = Math.max(200, x1 - x0);
+    const fh = Math.max(200, y1 - y0);
+    const sc = Math.min(fw / (b.width * 1.03), fh / (b.height * 1.06));
+    return { s: sc, x: x0 + fw / 2 - (b.x + b.width / 2) * sc, y: y0 + fh / 2 - (b.y + b.height / 2) * sc };
+  };
+  const beside = fit(left, top, W - right, H);
+  const above = fit(left, top, W, H - bottom);
+  return beside.s >= above.s ? beside : above;
+}
+
+/** Dev profiling: per-section frame cost, read with window.__iso.prof() (averages since the last read). */
+const PROF: Record<string, number> = {};
+let PROF_N = 0;
+let PROF_T = 0;
+function mark(name: string) {
+  if (!import.meta.env.DEV) return;
+  const now = performance.now();
+  PROF[name] = (PROF[name] ?? 0) + (now - PROF_T);
+  PROF_T = now;
+}
+export function readProfile(): Record<string, number> {
+  const out: Record<string, number> = { frames: PROF_N };
+  for (const [k, v] of Object.entries(PROF)) out[k] = +(v / Math.max(1, PROF_N)).toFixed(2);
+  for (const k of Object.keys(PROF)) delete PROF[k];
+  PROF_N = 0;
+  return out;
 }
 
 // ---------------------------------------------------------------------------------------------
 
 function frame(ctx: Ctx, props: IsoProps) {
+  if (import.meta.env.DEV) {
+    PROF_N++;
+    PROF_T = performance.now();
+  }
   const { p, cam } = ctx;
   const t = props.t;
   const now = performance.now() / 1000;
@@ -285,9 +402,11 @@ function frame(ctx: Ctx, props: IsoProps) {
   if (props.focus && props.focus.key !== ctx.focusKey) {
     ctx.focusKey = props.focus.key;
     if (props.focus.zoom <= 14.4) {
-      // the district preset: the whole stage, fitted beside the score card
+      // the district preset: the whole stage, fitted beside the overlays; the camera is the app's again
       ctx.target = fitStage(ctx.app, ctx.scene.slab, ctx.app.canvas.parentElement);
+      ctx.userMoved = false;
     } else {
+      ctx.userMoved = true;
       const s = Math.min(9, ctx.fitS * 2 ** (props.focus.zoom - 14.3));
       const [x, y] = p.lonlat(props.focus.lon, props.focus.lat);
       ctx.target = { s, x: ctx.app.screen.width * 0.5 - x * s, y: ctx.app.screen.height * 0.5 - y * s };
@@ -305,27 +424,49 @@ function frame(ctx: Ctx, props: IsoProps) {
   ctx.haze.width = ctx.app.screen.width * 1.25;
   ctx.haze.height = ctx.app.screen.height * 1.1;
   cull(ctx);
+  mark("cull");
   applyLight(ctx, t);
+  mark("applyLight");
+  {
+    // district zoom: the static city as one baked image, moving things live on top (D96)
+    const dynamics = ctx.scene.objects.children.filter((c) => !ctx.staticSet.has(c as Container)) as Container[];
+    ctx.snapshot.update(cam.s, performance.now() - ctx.camStill > 220, ctx.scene.objects, ctx.statics, dynamics, ctx.app.renderer.resolution, snapshotBake(ctx));
+  }
+  mark("snapshot");
   {
     const view = { x0: -cam.x / cam.s, y0: -cam.y / cam.s, x1: (ctx.app.screen.width - cam.x) / cam.s, y1: (ctx.app.screen.height - cam.y) / cam.s };
-    const sharp = ctx.scene.tiles.update(view, cam.s, ctx.scene.light.tint);
+    // sharp ground tiles bake only once the camera has settled, so panning and zooming never stall on a bake
+    const moved = Math.abs(cam.s - ctx.camWas.s) > 1e-4 || Math.abs(cam.x - ctx.camWas.x) > 0.5 || Math.abs(cam.y - ctx.camWas.y) > 0.5;
+    if (moved) ctx.camStill = performance.now();
+    ctx.camWas = { ...cam };
+    const sharp = ctx.scene.tiles.update(view, cam.s, ctx.scene.light.tint, performance.now() - ctx.camStill > 180);
+    mark("tiles");
     ctx.scene.shadow.visible = !sharp;
     ctx.scene.tiles.shadow.alpha = ctx.scene.shadow.alpha;
   }
 
   drawFlood(ctx, props, now);
+  mark("drawFlood");
   drawClosures(ctx, props);
+  mark("drawClosures");
   drawTrails(ctx, props, t);
+  mark("drawTrails");
   drawPeople(ctx, props, t, now);
+  mark("drawPeople");
   {
     const view = { x0: -cam.x / cam.s, y0: -cam.y / cam.s, x1: (ctx.app.screen.width - cam.x) / cam.s, y1: (ctx.app.screen.height - cam.y) / cam.s };
     // the background traffic is the same for every plan; the fixture ships it once, with EMBER's replay
     ctx.traffic.update(props.playback?.traffic ?? fixturePlaybacks.ember.traffic, t, view, ctx.scene.light.tint);
+    mark("traffic");
+    ctx.signals.update(now, ctx.scene.light.lights, view, cam.s);
+    mark("signals");
   }
   ctx.lastT = t;
   ctx.lastNow = now;
   drawVehicles(ctx, props, now);
+  mark("vehicles");
   drawOverlay(ctx, props, now, pulse);
+  mark("overlay");
 }
 
 const toScreen = (ctx: Ctx, x: number, y: number): [number, number] => [ctx.cam.x + x * ctx.cam.s, ctx.cam.y + y * ctx.cam.s];
@@ -431,7 +572,7 @@ function cull(ctx: Ctx) {
       if (rec.full) rec.full.visible = false;
     }
   }
-  for (const item of ctx.scene.cullables) item.node.visible = hit(item.bounds);
+  for (const item of ctx.scene.cullables) item.node.visible = cam.s >= (item.minScale ?? 0) && hit(item.bounds);
 }
 
 /** Evening light: tint the city, fade shadows, bring up windows, lamps and pools, in 48 steps over the run. */
@@ -489,7 +630,14 @@ function drawVehicles(ctx: Ctx, props: IsoProps, now: number) {
 
 // ---------- screen-space markers, labels, hit targets ----------
 
+/** Map label scale: 13 px text at 1440 wide (projector-readable), growing with the window up to 1.4×. */
+function uiScale(): number {
+  return (13 / 11) * Math.max(1, Math.min(1.4, window.innerWidth / 1440));
+}
+
 function pill(ctx: Ctx, key: string, text: string, x: number, y: number, style: { bg: number; fg?: number; size?: number; border?: number }, prio: number = PRIO.ALWAYS) {
+  const k = uiScale();
+  const size = Math.round((style.size ?? 11) * k);
   let item = ctx.pills.get(key);
   if (!item) {
     const root = new Container();
@@ -500,15 +648,16 @@ function pill(ctx: Ctx, key: string, text: string, x: number, y: number, style: 
     item = { root, bg, text: label, key: "", used: true, w: 0, h: 0 };
     ctx.pills.set(key, item);
   }
-  const sig = `${text}|${style.bg}|${style.border ?? 0}`;
+  const sig = `${text}|${style.bg}|${style.border ?? 0}|${size}`;
   if (item.key !== sig) {
     item.key = sig;
+    item.text.style.fontSize = size;
     item.text.text = text;
-    const w = item.text.width + 12;
-    const h = item.text.height + 5;
-    item.bg.clear().roundRect(-w / 2, -h, w, h, 5).fill({ color: style.bg, alpha: 0.94 });
-    if (style.border) item.bg.roundRect(-w / 2, -h, w, h, 5).stroke({ width: 1.2, color: style.border });
-    item.text.position.set(-item.text.width / 2, -h + 2.5);
+    const w = item.text.width + 12 * k;
+    const h = item.text.height + 5 * k;
+    item.bg.clear().roundRect(-w / 2, -h, w, h, 5 * k).fill({ color: style.bg, alpha: 0.94 });
+    if (style.border) item.bg.roundRect(-w / 2, -h, w, h, 5 * k).stroke({ width: 1.4, color: style.border });
+    item.text.position.set(-item.text.width / 2, -h + 2.5 * k);
     item.w = w;
     item.h = h;
   }

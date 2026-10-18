@@ -25,6 +25,8 @@ export type Diorama = {
   water: { ring: [number, number][]; holes: [number, number][][] }[];
   roads: { path: [number, number][]; k: string }[];
   /** ground height on a grid over the stage (USGS 3DEP via AWS terrain tiles): uint16 cm above offset_m, base64 */
+  /** signalised junctions (OSM highway=traffic_signals), [lon, lat] */
+  signals?: [number, number][];
   elev?: { cell_m: number; w: number; h: number; offset_m: number; scale_m: number; min_m: number; max_m: number; source: string; data: string };
 };
 
