@@ -101,9 +101,9 @@ function metresPerPixel(zoom: number): number {
   return (156_543.03 * Math.cos((42.36 * Math.PI) / 180)) / 2 ** zoom;
 }
 
-export type ViewInfo = { zoom: number; bounds: [number, number, number, number] | null; pitch: number };
+type ViewInfo = { zoom: number; bounds: [number, number, number, number] | null; pitch: number };
 
-export type LayerArgs = {
+type LayerArgs = {
   state: StateSnapshot;
   previous: StateSnapshot | null;
   t: number;

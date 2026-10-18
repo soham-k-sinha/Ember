@@ -59,7 +59,7 @@ export function assistedIds(state: StateSnapshot): Set<number> {
   return new Set(state.households.map((household) => household.household_id));
 }
 
-export function activeKeyframe(t: number): ScenarioKeyframe | null {
+function activeKeyframe(t: number): ScenarioKeyframe | null {
   let current: ScenarioKeyframe | null = null;
   for (const frame of scenario.hazard.keyframes) {
     if (frame.t_s <= t) current = frame;

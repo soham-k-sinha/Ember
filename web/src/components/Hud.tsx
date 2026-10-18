@@ -108,7 +108,7 @@ export function Latest(props: { plan?: PlanSnapshot; state: StateSnapshot }) {
   );
 }
 
-export type Toast = { id: number; text: string; tone: "plan" | "info" | "error" };
+type Toast = { id: number; text: string; tone: "plan" | "info" | "error" };
 
 let nextToast = 0;
 

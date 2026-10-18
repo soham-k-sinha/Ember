@@ -13,7 +13,7 @@ import type {
 } from "./types";
 
 /** contracts/playback.schema.json v0.1: one plan simulated over the whole horizon (D70). */
-export type Change<T> = [number, T];
+type Change<T> = [number, T];
 
 export type Track = {
   id: string;
@@ -26,7 +26,7 @@ export type Track = {
   assignment: Change<string | null>[];
 };
 
-export type PlaybackEvent = {
+type PlaybackEvent = {
   t_s: number;
   kind: string;
   assignment_id?: string;
@@ -111,7 +111,7 @@ export function asPlayback(value: unknown): Playback | null {
 }
 
 /** Last index i with xs[i] <= t (−1 if none). */
-export function floorIndex(xs: number[], t: number): number {
+function floorIndex(xs: number[], t: number): number {
   let lo = 0;
   let hi = xs.length - 1;
   if (hi < 0 || xs[0] > t) return -1;
@@ -123,7 +123,7 @@ export function floorIndex(xs: number[], t: number): number {
   return lo;
 }
 
-export function changeAt<T>(changes: Change<T>[], t: number, fallback: T): T {
+function changeAt<T>(changes: Change<T>[], t: number, fallback: T): T {
   let lo = 0;
   let hi = changes.length - 1;
   if (hi < 0 || changes[0][0] > t) return changes[0]?.[1] ?? fallback;
@@ -136,7 +136,7 @@ export function changeAt<T>(changes: Change<T>[], t: number, fallback: T): T {
 }
 
 /** Compass heading (deg, clockwise from north) from a to b; null when they coincide. */
-export function headingOf(a: LngLat, b: LngLat): number | null {
+function headingOf(a: LngLat, b: LngLat): number | null {
   const k = Math.cos((((a[1] + b[1]) / 2) * Math.PI) / 180);
   const dx = (b[0] - a[0]) * k;
   const dy = b[1] - a[1];
@@ -144,7 +144,7 @@ export function headingOf(a: LngLat, b: LngLat): number | null {
   return ((Math.atan2(dx, dy) * 180) / Math.PI + 360) % 360;
 }
 
-export type TrackPose = { position: LngLat; heading: number; moving: boolean; index: number };
+type TrackPose = { position: LngLat; heading: number; moving: boolean; index: number };
 
 /** Position along a polyline with timestamps (tracks and walkers share this). */
 export function poseAt(path: LngLat[], times: number[], t: number, lastHeading = 0): TrackPose {

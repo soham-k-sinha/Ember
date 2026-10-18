@@ -19,7 +19,7 @@ import type { FloodGeometry, LngLat, ScenarioKeyframe, TownEdge, TownNode } from
 
 export type BgHousehold = { id: number; lon: number; lat: number; node: number; size: number; vehicles?: number; flags?: Record<string, boolean> };
 
-export type Walker = {
+type Walker = {
   id: string;
   household: number;
   group: number; // index within the household group
@@ -45,7 +45,7 @@ export function hash(n: number, salt = 0): number {
 const FIRST = ["Maya", "Luis", "Grace", "Omar", "Priya", "Daniel", "Rosa", "Kwame", "Hannah", "Tomás", "Mei", "Samuel", "Aisha", "Patrick", "Lena", "Diego", "Ruth", "Arjun", "Nora", "Elijah", "Fatima", "Walter", "Sofia", "Jin", "Beatriz", "Marcus", "Ines", "Theo", "Amara", "Frank"];
 const LAST = ["Okafor", "Silva", "Nguyen", "Brennan", "Patel", "Haddad", "Kowalski", "Mendes", "Chen", "Duarte", "O'Neill", "Ramos", "Kim", "Shapiro", "Ferreira", "Mensah", "Park", "Costa", "Murphy", "Abebe"];
 
-export function surname(id: number): string {
+function surname(id: number): string {
   return LAST[Math.floor(hash(id, 11) * LAST.length)];
 }
 
@@ -53,7 +53,7 @@ export function householdName(id: number): string {
   return `The ${surname(id)} household`;
 }
 
-export type Member = { name: string; role: string; mobility: boolean };
+type Member = { name: string; role: string; mobility: boolean };
 
 /** Synthetic members for an assisted household: count and mobility from the sim's needs. */
 export function members(id: number, people: number, mobility: boolean, medical: boolean): Member[] {
@@ -347,7 +347,7 @@ export function planWalkers(args: {
   return { walkers, departed };
 }
 
-export type WalkerPose = { walker: Walker; position: LngLat; heading: number; frame: "walk1" | "walk2" | "stand" };
+type WalkerPose = { walker: Walker; position: LngLat; heading: number; frame: "walk1" | "walk2" | "stand" };
 
 export function walkersAt(plan: WalkerPlan, t: number, bounds: [number, number, number, number] | null): WalkerPose[] {
   const out: WalkerPose[] = [];
