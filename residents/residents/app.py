@@ -185,6 +185,7 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         engine_mode = bridge is not None or settings.scenario is not None
         app.state.store = open_store(settings, engine_mode)
         app.state.hub = Hub()
+        app.state.fresh_hooks = []  # after POST /dev/fresh (the drill console re-dials its callers)
         app.state.planner = None
         if engine_mode:
             b = bridge or await run_in_threadpool(EngineBridge, settings.scenario, None, 0, settings.engine_moves,
@@ -573,6 +574,21 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
                 state = await run_in_threadpool(store().snapshot)
             await app.state.hub.broadcast("state", state, state["t_s"])
             return {"ok": True, "plan_version": state["plan_version"]}
+
+        @app.post("/dev/fresh")
+        async def dev_fresh() -> dict:
+            """The next judge's run in seconds, nothing restarts: every player is forgotten (their live calls end),
+            then /dev/reset; the drill console then calls its phones again (`fresh_hooks`)."""
+            for key in store().kv_prefix("player:"):
+                handle = key.removeprefix("player:")
+                if app.state.voice is not None:
+                    app.state.voice.end(handle, reason="fresh run")
+                await run_in_threadpool(store().delete_phone, handle)
+                store().kv_delete(f"voiced:{handle}")
+            out = await dev_reset()
+            for hook in app.state.fresh_hooks:
+                await hook()
+            return out
 
         @app.post("/dev/inbound")
         async def dev_inbound(body: DevInboundIn) -> dict:

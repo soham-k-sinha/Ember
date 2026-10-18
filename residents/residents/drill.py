@@ -96,6 +96,7 @@ class Drill:
         if problems:
             raise SetupError("\n".join(problems))
         self.app = create_app(s)
+        self.app.state.fresh_hooks.append(self.fresh)
         cfg = uvicorn.Config(self.app, host="127.0.0.1", port=self.args.port, log_level="warning", lifespan="on")
         self.server = uvicorn.Server(cfg)
         self.server.install_signal_handlers = lambda: None  # Ctrl-C / `quit` are ours
@@ -187,6 +188,12 @@ class Drill:
                 await self.call(name, "first_contact")  # where they are, when the water comes, the one question
                 continue
             await self.call(name)
+
+    async def fresh(self) -> None:
+        """POST /dev/fresh: the next judge's run calls the same phones again."""
+        for handle in self.callers:
+            self.app.state.voice.end(handle, reason="fresh run")
+        await self.dial_callers()
 
     async def call(self, name: str, reason: str = "console") -> None:
         st = self.app.state

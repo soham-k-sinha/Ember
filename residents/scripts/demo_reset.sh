@@ -1,5 +1,6 @@
 #!/bin/bash
-# A fresh demo run per judge (~60 s): stop the running backend, forget every player, start again with calls on, and EMBER
+# A fresh demo run per judge: in place in a few seconds when the backend is up (POST /dev/fresh), else (~60 s) stop it,
+# forget every player, start again with calls on, and EMBER
 # calls one team phone (DEMO_PHONES in residents/.env) right away, placed on a flood-zone corner; the judge can then call
 # (346) 566-0512 to join. Then reload localhost:43123/?live.
 #   residents/scripts/demo_reset.sh                 call our phone
@@ -8,6 +9,10 @@
 # At most 3 calls at once; the rest wait for a free line. Calls ride the Photon number either way; PHOTON_ENABLED=0 (default
 # here) keeps players off Photon's 25 iMessage seats, which a wiped database can't release. Log: /tmp/ember-demo.log
 cd "$(dirname "$0")/.." || exit 1
+if [ $# -eq 0 ] && curl -sf -m 5 -X POST localhost:8000/dev/fresh > /dev/null; then  # running: reset in place, seconds
+    echo "Fresh run: no players, clock 0:00, calling our phone. Reload localhost:43123/?live."
+    exit 0
+fi
 DB=/tmp/ember-demo.db
 CORNERS=("Flagg St and Memorial Dr" "Akron St and Banks St" "Ballord Pl and Putnam Ave" "Banks St and Elmer St"
          "Putnam Ave and Western Ave")

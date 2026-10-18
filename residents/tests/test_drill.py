@@ -763,3 +763,16 @@ def test_a_player_is_called_and_an_undelivered_text_becomes_a_call(lobby):
     c.portal.call(v.hang_up, h)                                             # nobody answered
     c.post("/ask", json={"role": "resident", "household_id": hid, "question": "Are you still at home?"})
     assert len(openings()) == 2                                             # one call-back per phone per cooldown
+
+
+def test_a_fresh_run_forgets_every_player_and_calls_the_console_phones_again(lobby):
+    """POST /dev/fresh: the next judge's run without restarting (tunnel, agent and Daytona pool stay warm)."""
+    c, fp = lobby
+    register_players(c, "+16175550201", "+16175550202")
+    join(c, "+16175550201")
+    redialed = []
+    c.app.state.fresh_hooks.append(lambda: redialed.append(True) or asyncio.sleep(0))
+    assert c.post("/dev/fresh").json()["ok"]
+    assert players(c) == {} and c.get("/health").json()["players"] == 0
+    assert c.app.state.store.phone(handle="+16175550201") is None and redialed == [True]
+    assert c.get("/state").json()["t_s"] == 0.0
