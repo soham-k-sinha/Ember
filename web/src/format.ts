@@ -1,6 +1,6 @@
 import { robustOf } from "./live";
 import { targetName } from "./model";
-import type { Needs, PlanSnapshot, RobustSummary, StateSnapshot, Target } from "./types";
+import type { Assignment, Needs, PlanSnapshot, RobustSummary, StateSnapshot, Target } from "./types";
 
 export function formatSim(t: number): string {
   const s = Math.max(0, Math.round(t));
@@ -70,26 +70,25 @@ export function planTiming(plan: PlanSnapshot): string {
   return seconds == null ? "" : `replanned in ${seconds.toFixed(1)} s`;
 }
 
-/** What set a version off, in words: who texted what, else the fact reported, else the planner's trigger. */
-export function planCause(plan: PlanSnapshot, state: StateSnapshot): string {
-  const id = plan.trigger?.match(/\br-[0-9a-f]{6,}/)?.[0];
-  const report = state.reports.find((item) => item.id === id);
-  if (!report) return plan.trigger ?? "";
-  const said = state.messages.find((message) => message.report_id === id);
-  const target: Target | null = said?.thread ?? (report.household_id != null ? { household_id: report.household_id } : report.facility_id ? { facility_id: report.facility_id } : null);
-  const who = target ? targetName(state, target) : "Report";
-  return said ? `${who} texted “${said.text}”` : report.text ?? `${who}: ${formatNeeds(report.payload)}`;
-}
-
 /** A name without its spec in brackets: "Generator 1 (500 kW, camlock)" → "Generator 1". */
 export function shortName(name: string): string {
   return name.replace(/ \([^)]*\)$/, "");
 }
 
-/** One line for what a new plan version changed: "Van 2 rerouted · 3 households reassigned". */
+/** The reporter's own job in this version: the live assignment for whoever the trigger names ("Judge: …", "Mount Auburn Hospital operator: …"). */
+export function reporterJob(plan: PlanSnapshot, state: StateSnapshot): Assignment | undefined {
+  const trigger = plan.trigger ?? "";
+  return plan.assignments.find((assignment) => {
+    const name = targetName(state, assignment.target);
+    return assignment.status !== "cancelled" && assignment.status !== "rejected" && trigger.startsWith(name) && " :(".includes(trigger.charAt(name.length));
+  });
+}
+
+/** One line for what a new plan version changed, the reporter's own outcome first: "Judge → Accessible Van 3, pickup in 32 min · Van 2 rerouted · 3 households reassigned". */
 export function planDiff(plan: PlanSnapshot, state: StateSnapshot): string {
   const byId = new Map(plan.assignments.map((assignment) => [assignment.id, assignment]));
   const name = (id: string) => shortName(state.resources.find((resource) => resource.id === id)?.name ?? id);
+  const own = reporterJob(plan, state);
   const rerouted = new Set<string>();
   const sent: string[] = [];
   let reassigned = 0;
@@ -97,6 +96,7 @@ export function planDiff(plan: PlanSnapshot, state: StateSnapshot): string {
   let removed = 0;
   for (const change of plan.changes ?? []) {
     const assignment = byId.get(change.assignment_id);
+    if (change.assignment_id === own?.id) continue;
     if (change.change === "removed") removed += 1;
     else if (!assignment) continue;
     else if (change.change === "eta_changed") rerouted.add(name(assignment.resource_id));
@@ -108,6 +108,7 @@ export function planDiff(plan: PlanSnapshot, state: StateSnapshot): string {
   }
   const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   const parts = [
+    own ? `${shortName(targetName(state, own.target))} → ${name(own.resource_id)}, ${own.task === "rescue" ? "pickup" : "on site"} in ${Math.max(0, Math.round((own.eta_s - plan.created_at_t_s) / 60))} min` : "",
     ...sent,
     ...(rerouted.size > 2 ? [count(rerouted.size, "vehicle", "vehicles") + " rerouted"] : [...rerouted].map((who) => `${who} rerouted`)),
     reassigned ? `${count(reassigned, "household", "households")} reassigned` : "",

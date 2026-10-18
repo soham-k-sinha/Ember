@@ -3,11 +3,11 @@ import {
   formatNeeds,
   formatNumber,
   formatSim,
-  planCause,
   planDiff,
   planTiming,
   poolLabel,
   replanSeconds,
+  reporterJob,
   statusLabel,
   targetLabel,
 } from "../format";
@@ -147,7 +147,8 @@ function feedItems(state: StateSnapshot, plans: PlanSnapshot[], playback: Playba
       t_s: plan.created_at_t_s,
       kind: "plan",
       title: `v${plan.version} ${planTiming(plan)}`,
-      text: [planCause(plan, state), plan.version > 1 ? planDiff(plan, state) : ""].filter(Boolean).join(" → "),
+      // the reporter's own outcome leads when there is one; their fact is the row just below
+      text: [reporterJob(plan, state) ? "" : plan.trigger, plan.version > 1 ? planDiff(plan, state) : ""].filter(Boolean).join(" → "),
     });
   }
   // newest first; at the same moment, later in the story first, then later arrivals first
@@ -225,7 +226,7 @@ function PlanTab(props: { state: StateSnapshot; plans: PlanSnapshot[]; busy: str
                 <span>{formatSim(plan.created_at_t_s)}</span>
                 {seconds != null ? <span className="pill">{seconds.toFixed(2)} s</span> : null}
               </header>
-              {plan.trigger ? <p>{planCause(plan, props.state)}</p> : null}
+              {plan.trigger ? <p>{plan.trigger}</p> : null}
               {diff ? <p className="meta">{diff}</p> : null}
             </li>
           );

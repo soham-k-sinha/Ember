@@ -7,7 +7,7 @@ import { API_BASE, fixturePlaybacks, publishedComparison, publishedScatter, publ
 import { buildGraph, planWalkers, type BgHousehold } from "./people";
 import { asPlayback, stateFromPlayback, type Playback } from "./playback";
 import { loadFullTown, type FullTown } from "./townFull";
-import { formatSim, planDiff, planTiming } from "./format";
+import { formatSim } from "./format";
 import { clockLabel } from "./iso/lighting";
 import { asCalls, asComparison, asPhones, asState, getJson, openSocket, postJson, robustOf, type LiveStatus } from "./live";
 import { closedEdges } from "./model";
@@ -495,17 +495,6 @@ export function App() {
     const handle = window.setInterval(poll, 2000);
     return () => window.clearInterval(handle);
   }, [live, root]);
-
-  // a toast for every new live plan version: what changed and how long the replan took
-  const latestPlan = model.plans[model.plans.length - 1];
-  const seenPlan = useRef<{ mode: Mode; version: number } | null>(null);
-  useEffect(() => {
-    if (!latestPlan) return;
-    const seen = seenPlan.current;
-    seenPlan.current = { mode: model.mode, version: latestPlan.version };
-    if (!live || seen?.mode !== "live" || latestPlan.version <= seen.version) return;
-    toast([`v${seen.version} → v${latestPlan.version}`, planTiming(latestPlan), planDiff(latestPlan, model.snapshot) || "no assignment changed"].filter(Boolean).join(" · "), "plan");
-  }, [latestPlan?.version, model.mode]);
 
   // live: the backend's clock follows the scrubber (debounced) and the play head
   useEffect(() => {

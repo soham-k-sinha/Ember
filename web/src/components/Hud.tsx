@@ -4,7 +4,7 @@ import { useCallback, useMemo, useRef, useState, type FormEvent } from "react";
 import qrcode from "qrcode-generator";
 import { scenario } from "../fixtures";
 import { postJson } from "../live";
-import { formatNumber, maskHandle, planCause, planDiff, planTiming, shortName, statusLabel } from "../format";
+import { formatNumber, maskHandle, planDiff, planTiming, reporterJob, shortName, statusLabel } from "../format";
 import { facilityById, peopleCount, resourceById } from "../model";
 import type { Calls, Phone, PlanMetrics, PlanSnapshot, StateSnapshot } from "../types";
 
@@ -95,9 +95,13 @@ export function Latest(props: { plan?: PlanSnapshot; state: StateSnapshot }) {
   if (!plan) return null;
   return (
     <p className="latest" key={plan.version}>
-      {plan.version > 1 ? (
+      {plan.version > 1 && reporterJob(plan, state) ? (
         <>
-          <b>{planCause(plan, state)}</b> → {planDiff(plan, state) || "no assignment changed"} <span>· v{plan.version} {planTiming(plan)}</span>
+          <b>{planDiff(plan, state)}</b> <span>· {plan.trigger} · v{plan.version} {planTiming(plan)}</span>
+        </>
+      ) : plan.version > 1 ? (
+        <>
+          <b>{plan.trigger}</b> → {planDiff(plan, state) || "no assignment changed"} <span>· v{plan.version} {planTiming(plan)}</span>
         </>
       ) : (
         <>
