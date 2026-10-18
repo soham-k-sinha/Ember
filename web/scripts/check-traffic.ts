@@ -27,7 +27,7 @@ traffic.step(1 / 60, 0, 0, view);
 assert.equal(traffic.cars.length, AMBIENT_CARS, "the everyday traffic fills the stage at the start");
 const lanes = () => {
   const by = new Map<string, number[]>();
-  for (const c of traffic.cars) by.set(`${c.L}:${c.d}`, [...(by.get(`${c.L}:${c.d}`) ?? []), c.s]);
+  for (const c of traffic.cars) by.set(`${c.L}:${c.d}:${c.ln}`, [...(by.get(`${c.L}:${c.d}:${c.ln}`) ?? []), c.s]);
   return by;
 };
 for (let i = 0; i < 60 * 30; i++) traffic.step(1 / 60, i / 60, 0, view);

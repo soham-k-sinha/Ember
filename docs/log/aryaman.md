@@ -389,3 +389,9 @@ What: the roads were empty until the evacuation's first car (t = 2,800 s) and th
 Interfaces: no contract change.
 Status: web tsc + build + npm test (ws, closures, crowd, traffic) pass; `ambient.step` about 0.2 ms; checked in headless Chromium at district, mid and close zoom and late in the flood (no cars in water).
 Next: push/PR on approval.
+
+## 2026-10-18 · Cars no longer pass through each other (D99)
+What: engine trails follow road geometry (every tick + vertices + 1.5 m simplification); the evacuation cars keep to the right-hand lane with queue gaps on screen; everyday cars take turns through junctions; the stage carries one-way flags; the `ember diorama` math import is restored.
+Interfaces: playback fixture regenerated (same schema, denser traffic paths); stage.json roads gain optional `ow`.
+Status: web tsc + build + npm test pass; engine pytest 103/103. Measured overlaps between evacuation cars at t = 4,200 s: 49 → 0.
+Next: push/PR on approval. Visual polish paused at the user's request.

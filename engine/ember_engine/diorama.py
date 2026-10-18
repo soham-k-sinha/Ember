@@ -25,6 +25,7 @@ between teammates (the web is its only consumer). Every value carries its source
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 import time
 import urllib.parse
@@ -178,6 +179,20 @@ def overpass(query: str, cache: Path, timeout: int = 120) -> dict:
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps(out))
     return out
+
+
+def _oneway(props: dict) -> int:
+    """1: cars may only drive along the geometry, -1: only against it, 0: both ways (Overture access_restrictions)."""
+    for r in props.get("access_restrictions") or []:
+        when = r.get("when") or {}
+        modes = when.get("mode") or []
+        if r.get("access_type") != "denied" or r.get("between") or when.get("during") or (modes and not {"motor_vehicle", "car", "vehicle"} & set(modes)):
+            continue
+        if when.get("heading") == "backward":
+            return 1
+        if when.get("heading") == "forward":
+            return -1
+    return 0
 
 
 def osm_extras(bbox: tuple, cache_dir: Path) -> tuple[list[tuple[float, float]], list[list], list[tuple[float, float]]]:
@@ -422,7 +437,10 @@ def build(bbox: tuple, cache_dir: Path, venue_lonlat: tuple | None = None) -> di
         for part in getattr(g, "geoms", [g]):
             if part.geom_type == "LineString" and part.length > 0:
                 k = "parking_aisle" if p.get("subclass") == "parking_aisle" else (p.get("class") or "unknown")
-                roads.append({"path": [[round(x, 6), round(y, 6)] for x, y in part.coords], "k": k})
+                road = {"path": [[round(x, 6), round(y, 6)] for x, y in part.coords], "k": k}
+                if ow := _oneway(p):
+                    road["ow"] = ow
+                roads.append(road)
 
     # ---------- trees placed on lawns no inventory covers (flag 3: placed, not surveyed) ----------
     trees += _plant_lawns(land, roads, buildings, trees, area)

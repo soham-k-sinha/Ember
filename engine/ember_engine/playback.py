@@ -226,7 +226,7 @@ def _traffic(w, scn: dict) -> dict | None:
             # on the road only: from just before it first moves to where it stops for good (exit / exposure)
             i0, i1 = moves[0] - 1, moves[-1]
             cars.append({"id": str(c["id"]), "path": [[round(x, 5), round(y, 5)] for x, y in pts[i0:i1 + 1]],
-                         "t": [round(float(t)) for t in ts[i0:i1 + 1]]})
+                         "t": [round(float(t), 1) for t in ts[i0:i1 + 1]]})
         cache[key] = {"synthetic": True, "rule": cfg["rule"], "config": cfg, "bin_s": r["bin_s"],
                       "metrics": r["metrics"], "cars": cars}
     return cache[key]

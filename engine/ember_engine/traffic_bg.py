@@ -78,7 +78,7 @@ def run(world, scn: dict, n_trails: int = 0) -> dict:
     ticks = np.zeros(nb)
     cap_s = np.maximum(world.edge_cap_vph / 3600.0, 1e-6)
     tt = np.maximum(world.edge_tt, 1e-3)
-    every = max(1, int(round(20.0 / DT_S)))
+    every = 1  # every tick, so the trails can follow the road geometry exactly
     n = 0
     while sim.t < T:
         if n_trails and n % every == 0:
@@ -105,7 +105,7 @@ def run(world, scn: dict, n_trails: int = 0) -> dict:
     }
     if n_trails:
         eng.snapshot(world, sim.t)
-        out["trails"] = eng.trajectories(world)
+        out["trails"] = eng.trajectories(world, follow_roads=True)
     return out
 
 

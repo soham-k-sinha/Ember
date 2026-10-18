@@ -460,7 +460,7 @@ function frame(ctx: Ctx, props: IsoProps) {
     const view = { x0: -cam.x / cam.s, y0: -cam.y / cam.s, x1: (ctx.app.screen.width - cam.x) / cam.s, y1: (ctx.app.screen.height - cam.y) / cam.s };
     // everyday cars (illustrative, wall clock) and the evacuation traffic: the same for every plan, so the
     // fixture ships it once, with EMBER's replay
-    ctx.ambient.step(now - ctx.lastNow, now, t, view);
+    ctx.ambient.step(now - ctx.lastNow, now, t, view, ctx.traffic.shown);
     mark("ambient");
     ctx.traffic.update(props.playback?.traffic ?? fixturePlaybacks.ember.traffic, t, view, ctx.scene.light.tint, ctx.ambient.cars, { now, camS: cam.s, lights: ctx.scene.light.lights });
     mark("traffic");
