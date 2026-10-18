@@ -201,6 +201,19 @@ def test_comparison_is_valid_and_cached(ec):
     assert ec.get("/comparison?seeds=0").status_code == 422
 
 
+def test_playback_for_both_planners_is_valid_and_cached(ec):
+    ec.post("/reports", json=judge_need())
+    for which in ("ember", "baseline"):
+        r = ec.get(f"/playback?which={which}")
+        assert r.status_code == 200 and errors("playback", r.json()) == []
+        assert r.json()["planner"] == which
+    planner = ec.app.state.planner
+    cached = planner._playback["ember"][1]
+    ec.get("/playback?which=ember")
+    assert planner._playback["ember"][1] is cached                  # same plan version → cached
+    assert ec.get("/playback?which=nope").status_code == 422
+
+
 def test_plan_hooks_get_the_new_version(ec):
     seen = []
     async def hook(view, raw):

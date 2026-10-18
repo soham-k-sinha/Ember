@@ -41,6 +41,7 @@ class EngineBridge:
         self._base_households = list(self.scenario["households"])
         self._extra: list[dict] = []
         self._outcomes: tuple[tuple, dict] | None = None
+        self._flood_buildings: list[tuple[float, int, int]] | None = None
         self._lock = threading.Lock()
         self._opt_session = self._pool = None
         self._opt_lock = threading.Lock()
@@ -149,6 +150,12 @@ class EngineBridge:
             self.session.reports = self.engine_reports(reports)  # compare() reads reports only, not the plan
             return self.session.compare(seeds=seeds)
 
+    def playback(self, which: str, plan: dict, reports: list[dict]) -> dict:
+        """contracts/playback.schema.json for the current plan ("ember") or the baseline on the same reports."""
+        with self._lock:
+            self.session.resume(plan, self.engine_reports(reports))
+            return self.session.playback(which)
+
     def outcomes(self, plan: dict, reports: list[dict]) -> dict[str, dict]:
         """Per assignment, the simulated timeline of `plan`: {assignment_id: {status, arrive_t, pickup_t,
         complete_t, ...}} (plan_sim Outcome). Drives step-by-step directions. Cached for the last input."""
@@ -209,22 +216,24 @@ class EngineBridge:
     def margin_s(self) -> float:
         return float(self.scenario.get("deadline_margin_s", 900))
 
+    def flood_buildings(self) -> list[tuple[float, int, int]]:
+        """Town buildings the forecast flood reaches, earliest first: [(deadline_s, household id, node)].
+        Computed once (≤ 1 s): the forecast doesn't change."""
+        if self._flood_buildings is None:
+            from ember_engine.scenario import deadlines
+            scn = {**self.scenario, "households": [{"household_id": int(h), "needs": "unknown"} for h in self.world.hh_id]}
+            self._flood_buildings = sorted((d, hid, self.household_node(hid))
+                                           for hid, d in deadlines(scn, self.world)["households"].items() if d is not None)
+        return self._flood_buildings
+
     def flood_corners(self, k: int = 4) -> list[tuple[float, str]]:
         """Street corners the forecast flood reaches first: [(deadline_s, "Flagg Street and Memorial Drive")].
         For the drill console: places a tester can text to get an evacuation (elsewhere: shelter in place)."""
-        if getattr(self, "_corners", None) and len(self._corners) >= k:  # the flood forecast doesn't change
-            return self._corners[:k]
-        from ember_engine.scenario import deadlines
-        scn = {**self.scenario, "households": [{"household_id": int(h), "needs": "unknown"} for h in self.world.hh_id]}
-        best: dict[int, float] = {}
-        for hid, d in deadlines(scn, self.world)["households"].items():
-            if d is not None:
-                node = self.household_node(hid)
-                best[node] = min(d, best.get(node, d))
-        out = sorted((d, " and ".join(sorted(self.places.streets.get(n, set()))[:2]), n) for n, d in best.items()
-                     if len(self.places.streets.get(n, set())) >= 2)
-        self._corners = [(d, label) for d, label, _ in out[:max(k, 4)]]
-        return self._corners[:k]
+        first: dict[int, float] = {}
+        for d, _, node in self.flood_buildings():
+            first.setdefault(node, d)
+        return sorted((d, " and ".join(sorted(self.places.streets[n])[:2])) for n, d in first.items()
+                      if len(self.places.streets.get(n, set())) >= 2)[:k]
 
     def household_node(self, hid: int) -> int:
         if not hasattr(self, "_hh_rows"):

@@ -52,7 +52,7 @@ def test_close_road_and_edge_helpers(town):
     s = EngineSession(FX / "scenario.fixture.json", world=World.from_dict(town))
     s.start()
     judge = next(h for h in s.scn["households"] if h.get("judge"))["household_id"]
-    edges = s.edges_at_household(judge)
+    edges = s.edges_by_name("Riverside Place", near_household=judge, radius_m=150)
     assert edges
     out = s.close_road(edges, t_now=1800, household_id=judge)
     assert out["plan"]["version"] == 2

@@ -159,12 +159,6 @@ class EngineSession:
             return {"plan": plan, "assignment_events": assignment_events(plan), "state": self._state(t_now)}
 
     # ---------- helpers for turning words into edge ids ----------
-    def edges_at_household(self, household_id: int) -> list[int]:
-        """Edges touching the household's pickup node ('my street is blocked')."""
-        rows = {int(h): i for i, h in enumerate(self.world.hh_id)}
-        n = int(self.world.hh_node[rows[int(household_id)]])
-        return [int(self.world.edge_id[e]) for e in np.where((self.world.edge_u == n) | (self.world.edge_v == n))[0]]
-
     def edges_by_name(self, name: str, near_household: int | None = None, radius_m: float = 300.0) -> list[int]:
         """Edges whose OSM name contains `name` (case-insensitive), optionally within radius of a household."""
         w = self.world

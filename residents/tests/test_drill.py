@@ -2,6 +2,7 @@
 question, says YES, then gets one text per step (go to the corner / board / ride / checked in) and
 replies DONE; with auto_clock the sim clock jumps to the next step. Real allocator + simulator, fake LLM,
 fake geocoder, no network."""
+import asyncio
 import json
 from dataclasses import replace
 
@@ -14,6 +15,9 @@ from residents.drill import Drill, SetupError, main as drill_main
 from residents.engine_bridge import EngineBridge
 from residents.extract import to_outcome
 from residents.guide import STEP_DONE
+from residents.locate import JOIN_LEAD_S
+from residents.messaging import FULL
+from residents.photon import parse_inbound
 from residents.places import Place, parse_coords
 from tests.fake_photon import FakePhoton, received
 from tests.test_engine import SCENARIO, bridge  # noqa: F401
@@ -654,3 +658,79 @@ def test_garbled_need_plans_what_is_clear_and_asks_about_the_rest(drill):
     outs = tap.outs(R1)
     assert " will pick you up at " in outs[-2]
     assert outs[-1] == "Did you mean you need a wheelchair-accessible vehicle?"
+
+
+# ---------- multiplayer: strangers text JOIN EMBER (D78) ----------
+@pytest.fixture
+def lobby(settings, solo_bridge, monkeypatch):
+    async def no_wait(*args):
+        pass
+    monkeypatch.setattr("residents.photon._backoff", no_wait)
+    fp = FakePhoton()
+    s = replace(settings, scenario=SCENARIO, extract_enabled=True, photon_enabled=True, photon_listen=False)
+    with TestClient(create_app(s, photon_client=fp.client(), bridge=solo_bridge, llm=FakeLLM(SCRIPT))) as c:
+        yield c, fp
+
+
+def settle(c):
+    """Wait for the replan a burst of joins scheduled."""
+    if (task := c.app.state.locator.replan_task) is not None:
+        c.portal.call(lambda: task)
+
+
+def join(c, *handles):
+    """Each handle texts "Join Ember" at the same moment."""
+    async def burst():
+        await asyncio.gather(*(c.app.state.messenger.handle_inbound(parse_inbound(received(f"j-{h}", h, "Join Ember please")))
+                               for h in handles))
+    c.portal.call(burst)
+    settle(c)
+
+
+def players(c):
+    return {p["handle"]: p for p in c.get("/phones").json() if p["player"] is not None}
+
+
+def test_three_phones_join_at_once(lobby, solo_bridge):
+    c, fp = lobby
+    phones = ["+16175550201", "+16175550202", "+16175550203"]
+    join(c, *phones)
+    ps = players(c)
+    assert sorted(p["player"] for p in ps.values()) == [1, 2, 3]
+    hids = [ps[h]["household_id"] for h in phones]
+    assert None not in hids and len(set(hids)) == 3
+    assert len({solo_bridge.household_node(h) for h in hids}) == 3          # three different pickup corners
+    assert all(solo_bridge.deadline(h) > JOIN_LEAD_S for h in hids)         # in the flood, still savable
+    labels = {h["household_id"]: h["label"] for h in c.get("/state").json()["households"]}
+    assert sorted(labels[h] for h in hids) == ["Player 1", "Player 2", "Player 3"]
+    assert c.app.state.store.plan_versions() == [1, 2]                      # one replan for the burst
+    for h in phones:
+        texts = [x["content"]["text"] for x in fp.sends() if x["spaceId"] == f"pho_spc_{h[-4:]}"]
+        assert texts[0].startswith(f"[EMBER drill] Welcome to the EMBER flood drill. You're Player {ps[h]['player']}:")
+        assert "How many people are with you" in texts[-1]                  # the plan asks its own question
+
+
+def test_the_31st_player_is_told_the_drill_is_full(lobby):
+    c, fp = lobby
+    phones = [f"+161755503{i:02d}" for i in range(31)]
+    join(c, *phones[:30])
+    join(c, phones[30])
+    assert len(players(c)) == 30 and phones[30] not in {p["handle"] for p in c.get("/phones").json()}
+    last = fp.sends()[-1]
+    assert last["spaceId"] == "pho_spc_0330" and last["content"]["text"] == f"[EMBER drill] {FULL}"
+    # a stranger's text without the join phrase is still ignored
+    assert c.portal.call(c.app.state.messenger.handle_inbound, parse_inbound(received("x-1", "+16175550999", "hi"))) is None
+    assert c.app.state.store.phone(handle="+16175550999") is None
+
+
+def test_reset_places_players_again(lobby):
+    c, fp = lobby
+    join(c, "+16175550201", "+16175550202")
+    before = {h: p["household_id"] for h, p in players(c).items()}
+    c.post("/dev/reset")
+    settle(c)
+    assert {h: p["household_id"] for h, p in players(c).items()} == before  # placed again (same choice on a fresh run)
+    assert c.app.state.store.plan_versions() == [1, 2]
+    texts = [x["content"]["text"] for x in fp.sends()]
+    assert not any("Where are you right now?" in t for t in texts)          # never asked where they are
+    assert sum("You're Player 1:" in t for t in texts) == 2

@@ -190,7 +190,7 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         photon = photon_client
         if photon is None and settings.photon_enabled:
             photon = PhotonClient(settings.photon_api_key, settings.photon_project_id)
-        app.state.messenger = Messenger(app.state.store, app.state.hub, photon)
+        app.state.messenger = Messenger(app.state.store, app.state.hub, photon, settings.max_players)
         app.state.outbound = app.state.guide = app.state.locator = None
         if app.state.planner is not None:
             app.state.outbound = Outbound(app.state.store, app.state.messenger, app.state.planner.bridge)
@@ -279,7 +279,7 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         return {"ok": True, "scenario_id": meta.get("scenario_id"), "plan_version": meta.get("plan_version"),
                 "t_s": meta.get("t_s"), "mode": "engine" if app.state.planner is not None else "static",
                 "extraction": "on" if app.state.intake is not None else "off", "photon": "enabled" if messenger().photon is not None else "disabled",
-                "photon_listener": listener.status() if listener is not None else None}
+                "photon_listener": listener.status() if listener is not None else None, "join_number": settings.join_number or None}
 
     @app.get("/state")
     def get_state() -> dict:
@@ -417,6 +417,11 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         if not 1 <= seeds <= 20:
             raise HTTPException(422, "seeds must be 1..20")
         return await planner().comparison(seeds)
+
+    @app.get("/playback")
+    async def get_playback(which: Literal["ember", "baseline"] = "ember") -> dict:
+        """The map's replay of the current plan or the baseline (contracts/playback.schema.json)."""
+        return await planner().playback(which)
 
     @app.get("/phones")
     def get_phones() -> list[dict]:

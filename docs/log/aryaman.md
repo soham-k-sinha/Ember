@@ -254,6 +254,13 @@ Files: docs/DEMO.md, docs/QA.md, docs/devpost/README.md, docs/HANDOFF.md, docs/l
 Interfaces: none. Soham: please add `GET /playback?planner=ember|baseline` → `EngineSession.playback(planner)` (contracts/playback.schema.json); the website's Live mode calls it.
 Status: done.
 
+## 2026-10-17 23:30 · residents: multiplayer join by text + GET /playback (D78–D79) · branch aryaman/multiplayer
+What: Photon docs checked (read-only): a shared iMessage line only delivers assigned handles; the SMS number delivers `message.received` from any sender, so it is the join line (replies there need the line's SMS campaign). Unknown phone texts "JOIN EMBER" → Player N (cap MAX_PLAYERS=30, else "drill is full") → a free flood-zone town building chosen by us (deadline > now + 20 min, emptiest corner first, earliest flood) labelled "Player N", needs unknown; joins < 2 s apart share one replan; /dev/reset places players again. GET /phones adds `player`, `household_id`; GET /health adds `join_number`. GET /playback?which=ember|baseline, cached per plan version. Cleanups: `Messenger._route` replaces the 4× delivery chain; removed `PhotonClient.list_assignments`, `EngineSession.edges_at_household`.
+Files: residents/residents/{messaging,locate,engine_bridge,planner,app,config,photon,threads,db}.py, residents/tests/{test_drill,test_engine,test_api,conftest}.py, residents/README.md, engine/ember_engine/api.py, engine/tests/test_api.py, docs/DECISIONS.md
+Run: cd residents && uv run pytest -q; cd engine && uv run pytest -q
+Interfaces: GET /playback?which=…; GET /phones items gain `player`, `household_id`; env JOIN_NUMBER, MAX_PLAYERS. No contract change.
+Status: done, pushed, not merged.
+
 ## 2026-10-18 00:20 · Daytona Tier 2 at scale: warm pool, chunked jobs, honest startup (D82) · branch aryaman/daytona-tier2
 What: the backend keeps one DaytonaPool warm (started in the background at startup, reused by every /optimize, closed on shutdown); jobs go to sandboxes in chunks of ⌈jobs ÷ sandboxes⌉ per run_code; `search.robust.startup_s` separate from `fanout_wall_s`; orphaned ember sandboxes (idle > 3 min) deleted at start; a dead warm pool restarts; shortfalls logged. EMBER_DAYTONA_WORKERS=90 in engine/.env; seeds default 50, max 200. Snapshot rebuilt: ember-engine-c1810d2a07.
 Files: engine/ember_engine/daytona/{pool,jobs,robust}.py, engine/ember_engine/{api,cli}.py, engine/scripts/e2e.py, engine/tests/test_daytona.py, residents/residents/{engine_bridge,planner,app}.py, web/src/App.tsx, docs/{DECISIONS,HANDOFF}.md
