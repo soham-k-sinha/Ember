@@ -34,7 +34,7 @@ def test_health(client, fixture_state):
     h = client.get("/health").json()
     assert h == {"ok": True, "scenario_id": fixture_state["scenario_id"], "plan_version": fixture_state["plan_version"],
                  "t_s": fixture_state["t_s"], "mode": "static", "extraction": "off", "photon": "disabled", "photon_listener": None,
-                 "max_players": 25, "players": 0, "voice_number": None}
+                 "max_players": 25, "players": 0, "voice_number": None, "reader": "keyword parser"}
 
 
 def test_cors_allows_the_web_on_any_local_or_lan_port(client):

@@ -136,6 +136,7 @@ class Session:
     last: float = field(default_factory=time.monotonic)
     turns: int = 0
     last_said: str = ""          # what this call said last (to tell our own echo from the caller)
+    last_heard: str = ""         # what the caller said last (shown live on the roster)
     screened: int = 0            # times we said again who we are (call screening, "who is this?", "hello?")
     voicemail: bool = False      # a mailbox greeting is not an answered resident conversation
     calmed: bool = False         # said CALM
@@ -276,6 +277,8 @@ class Voice:
         s.arrived = max(s.arrived, arrived)
         async with s.lock:  # ElevenLabs may post a revised turn before we've answered the last one
             text = (text or "").strip()
+            if _words(text):
+                s.last_heard = text
             if text and not _words(text):  # "...": no answer before ElevenLabs' turn timeout
                 return await self._silence(s, handle)
             if re.fullmatch(r"(?:um+|uh+|erm|er)[\W_]*", text, re.I):
@@ -598,7 +601,8 @@ class Voice:
     def calls_view(self) -> dict:
         """GET /calls: the calls in progress, and the finished ones newest first."""
         live = [{"handle": h, "household_id": self._household_id(h), "reason": s.reason, "started_t_s": s.started_t_s,
-                 "turns": s.turns} for h, s in list(self.sessions.items()) if self.live(h) and s.dialed]
+                 "turns": s.turns, "heard": s.last_heard, "said": s.last_said}
+                for h, s in list(self.sessions.items()) if self.live(h) and s.dialed]
         return {"live": live, "recent": self.recent[::-1][:20]}
 
 

@@ -277,7 +277,7 @@ def test_first_contact_is_a_call(vd):
                                      rf"{water(c, R1)} minutes\. {re.escape(ASK_NEEDS)}", first), first
     [live] = c.get("/calls").json()["live"]
     assert live == {"handle": R1, "household_id": thread_of(c, R1)["household_id"], "reason": "first_contact",
-                    "started_t_s": 0.0, "turns": 0}
+                    "started_t_s": 0.0, "turns": 0, "heard": "", "said": first}  # the roster shows the call live
     words = spoken(say(c, "2 of us", caller=OURS, called=R1, conv="conv_9"))
     assert re.fullmatch(r"[\w ]+ picks you up (now|in about \d+ minutes)\. Pack medications, ID and your phone, then "
                         r"(walk|go out) to the pickup point[^.]+\.", words), words  # two sentences, no "can you be ready?"

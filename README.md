@@ -6,8 +6,6 @@
 text or call (Photon) → structured fact (AI) → simulator-scored replan (~0.7 s, no AI) → personal text or call
 ```
 
-_Screenshots: `docs/img/` (added after the final run-through)._
-
 Flood response is the first demonstration; adaptive coordination is the product. One engine handles two incident types: household rescue and critical-infrastructure power loss (Mount Auburn Hospital, the Cottage Farm sewage station). Forecasts are wrong by minute 10; EMBER keeps the plan right once real people start reporting.
 
 ## Architecture
@@ -39,7 +37,7 @@ For scale, the real Cottage Farm station released ≈ **80,700 m³** of untreate
 `POST /optimize` runs the top candidate plans and the baseline in 50 perturbed worlds (travel times, flood timing, backup endurance, sewage inflow, storm timing, a vehicle failing) on a warm pool of **90 sandboxes** the backend starts at boot (`engine/ember_engine/daytona/`). Code and data are baked into a snapshot; results return as `run_code` values. Measured from the backend (round 3): 250 runs in 1.8–2.1 s fan-out (4–5 s wall); 10,000 runs (`?seeds=2000`, the earlier 10,000-run configuration) in 3.2–4.9 s fan-out (5–8 s wall), where the laptop takes 24 s (D86). The forecast-best plan stays unless a more robust one leaves at least 1 fewer person unreached in the worst 20 % of worlds. The demo runs it **pre-season, at 0:00**: c03 over the forecast plan c00 (15.7 vs 30.3 people on 10,000 worlds; 14.6 vs 33.7 on 250). At 15:00 it picks c04 over c00 (18.7 vs 21.4).
 
 
-D104 fixes assignment versioning so the pre-season generator-timing comparison is also included online. The UI now offers **Large stress test** (2,000 paired worlds per plan) and reports the actual total: up to 12,000 runs with four candidates, the timing alternative and baseline. The round-3 timing numbers above are historical measurements of the smaller configuration; they are not new timings for 12,000 runs.
+The pre-season generator-timing comparison is included online. The UI now offers **Large stress test** (2,000 paired worlds per plan) and reports the actual total: up to 12,000 runs with four candidates, the timing alternative and baseline. The round-3 timing numbers above are historical measurements of the smaller configuration; they are not new timings for 12,000 runs.
 
 ## Where Photon is used
 - **iMessage** (Photon 2.0): residents and the hospital operator each have one thread; questions, offers, confirm/decline and step-by-step directions all happen there (`residents/residents/photon.py`, `messaging.py`).

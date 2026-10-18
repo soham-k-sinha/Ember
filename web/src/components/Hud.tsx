@@ -156,14 +156,14 @@ type Joined = { handle: string; player: number; assigned_number: string };
 
 /** Multiplayer: call the EMBER number and join by voice, any phone (D100); or, by iMessage (D89), enter a number here
  * first (POST /join), then text JOIN EMBER to the line it returns; that first text places them. */
-export function JoinCard(props: { apiBase: string | null; phones: Phone[]; calls: Calls; state: StateSnapshot; max: number; voiceNumber: string | null }) {
+export function JoinCard(props: { apiBase: string | null; phones: Phone[]; calls: Calls; state: StateSnapshot; max: number; voiceNumber: string | null; reader: string | null }) {
   const [open, setOpen] = useState(true);
   const [handle, setHandle] = useState("");
   const [joined, setJoined] = useState<Joined | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const players = props.phones.filter((phone) => phone.player != null).sort((a, b) => a.player! - b.player!);
-  const onCall = new Set(props.calls.live.map((call) => call.handle));
+  const onCall = new Map(props.calls.live.map((call) => [call.handle, call]));
   const reset = () => {
     setJoined(null);
     setHandle("");
@@ -233,16 +233,22 @@ export function JoinCard(props: { apiBase: string | null; phones: Phone[]; calls
             <ol className="roster">
               {players.map((phone) => {
                 const household = props.state.households.find((item) => item.household_id === phone.household_id);
+                const call = onCall.get(phone.handle);
                 return (
                   <li key={phone.handle}>
                     <b>Player {phone.player}</b>
                     <span>{maskHandle(phone.handle)}</span>
                     {household ? <span className={`pill ${household.status}`}>{statusLabel(household.status)}</span> : <span className="muted">waiting for text</span>}
-                    {onCall.has(phone.handle) ? <span className="pill call">on call</span> : null}
+                    {call ? <span className="pill call">on call</span> : null}
+                    {call?.heard ? <q className="heard">{call.heard}</q> : null}
+                    {call?.said ? <q className="said">EMBER: {call.said}</q> : null}
                   </li>
                 );
               })}
             </ol>
+          ) : null}
+          {props.reader ? (
+            <p className="powered">Calls &amp; texts: Photon · voice: ElevenLabs · words read by {props.reader} · stress test: Daytona</p>
           ) : null}
         </div>
       ) : null}

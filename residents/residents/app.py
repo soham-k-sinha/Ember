@@ -304,7 +304,9 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
                 "extraction": "on" if app.state.intake and app.state.intake.llm else "off", "photon": "enabled" if messenger().photon is not None else "disabled",
                 "photon_listener": listener.status() if listener is not None else None,
                 "max_players": settings.max_players, "players": len(store().kv_prefix("player:")),
-                "voice_number": settings.photon_voice_number if voice_open() else None}  # call it to join (D100)
+                "voice_number": settings.photon_voice_number if voice_open() else None,  # call it to join (D100)
+                "reader": ("Claude via Chalk" if settings.chalk_router_key else "Claude") if app.state.intake and app.state.intake.llm
+                else "keyword parser"}
 
     @app.get("/state")
     async def get_state() -> dict:
