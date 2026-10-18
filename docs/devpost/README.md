@@ -34,7 +34,8 @@ Tagline: *"Forecasts are wrong by minute 10; EMBER keeps the plan right once rea
 - Plan v1: Generator 1 pre-positioned at Cottage Farm → **0 m³** overflow vs **2,317 m³** for the incident-by-incident baseline.
 - After the judge's text (5 seeds, paired worlds): **88.6 vs 51.6 people reached before their deadline (+37.0)**, hospital outage **11 vs 28 min**. EMBER drives more vehicle-km; we say so.
 - Hospital report at minute 15: generator re-targeted, outage **13 min** instead of 215; the 9,600 m³ cost is stated, not hidden. People first, always.
-- Daytona, 50 worlds at minute 15: worst-20% unreached **15.7 vs 55.2** for the baseline; at minute 0 it picks a different plan than the nominal best (c03 over c00).
+- Daytona, 50 worlds at minute 15: worst-20% unreached **18.7 vs 54.8** for the baseline; it picks a different plan than the nominal best at minute 15 (c04 over c00) and at minute 0 (c03 over c00).
+- Same engine, second hazard: a synthetic chemical plume next to the venue, **50.8 vs 28.6** people reached (5 perturbed worlds).
 
 ## 5. Sustainability and climate adaptation (ASUS Save the Earth, D65)
 Untreated overflow (m³) is a term in the planner's objective and a row in every comparison, anchored to the real 2024 Cottage Farm event (≈ 80,700 m³ into the Charles). Plan v1 pre-positions the generator: 0 m³ vs 2,317 m³ for the incident-by-incident baseline. Climate Ready Boston lists Allston/Brighton among the Charles River neighbourhoods exposed to flooding; the same Daytona run at minute 0 is a pre-season question: where to stage generators so the plan holds up across 50 versions of the storm. Never at the expense of people: the objective is lexicographic, and when the hospital needs the generator the plan states the 9,600 m³ it costs.
@@ -59,7 +60,7 @@ From git history and `docs/log/<name>.md`. Each person writes their own lesson; 
   Lesson:
 
 ## 9. What's next
-- Other hazards on the same loop (each is a new hazard behind `polygon_at` / `closed_edges_at`): heat waves, wildfire, winter storms. Not built yet.
+- More hazards on the same loop (each is a new hazard behind `polygon_at` / `closed_edges_at`): a synthetic chemical plume is built (`scenarios/allston_plume_v1`); heat waves, wildfire and winter storms are not.
 - Adjacent markets: grid resilience (crew and generator dispatch), sewer overflow control for utilities, heat-wave outreach to vulnerable residents.
 - Calibrated travel and flood models from real elevation and traffic data.
 
