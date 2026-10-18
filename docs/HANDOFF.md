@@ -1,15 +1,15 @@
 # HANDOFF — read this first in a fresh session
 
-Last updated: **Sat 2026-10-17, late night** (after integrating the five build branches). Submission: **Sunday 8:00 AM** on Devpost.
-Then read: `CLAUDE.md`, `docs/DECISIONS.md` (D1–D84), all of `docs/log/*.md`, `docs/TECHNICAL.md` (the plan), `residents/README.md` (backend, API, drill, calls).
+Last updated: **Sun 2026-10-18, early morning** (integration merged to `main` at aaf3a31; docs fix round D88). Submission: **Sunday 8:00 AM** on Devpost.
+Then read: `README.md` (judge landing page), `CLAUDE.md`, `docs/DECISIONS.md`, all of `docs/log/*.md`, `docs/TECHNICAL.md` (the plan), `residents/README.md` (backend, API, drill, calls).
 
 ## The product in one breath
 **Flood response is our first demonstration. Adaptive coordination is the product** (D63). People report by text or phone call over Photon → the AI turns each message into a structured fact → a simulator-scored planner replans in ~0.7 s → everyone gets a personal instruction (worded by the AI, decided by the planner, D76), on a live map. Demonstrated on a Charles River flood around the David Rubenstein Treehouse with **two incident types on one engine** (D64): household rescue (the judge) and critical-infrastructure power loss (Mount Auburn Hospital, Cottage Farm sewage station). It beats an incident-by-incident baseline on people reached and on untreated sewage overflow (the real 2024 Cottage Farm storm released ≈80,700 m³), and stress-tests plans on Daytona.
 
 **Line against plan-once tools:** "Forecasts are wrong by minute 10; EMBER keeps the plan right once real people start texting." Closest rival: LANDFALL (`ezou1/hh26-landfall`), a Hurricane Ian replay that plans once with no people in the loop.
 
-## What's on `aryaman/integration` (merge to `main` after review)
-All five build branches, merged and checked together (D78–D84). Aryaman is sole owner (D77).
+## What's on `main`
+All five build branches, merged and checked together (D78–D84). Aryaman is sole owner (D77). CI (`.github/workflows/ci.yml`) runs the engine and residents tests and the web build on every push to `main` and every PR.
 | Part | State |
 |---|---|
 | Engine (`engine/`): town, flood, models, plan simulator, allocator + replans, baseline, compare, Daytona robustness, `EngineSession` | 102 tests. Snapshot **`ember-engine-0f3cf261d7`**. Warm 90-sandbox pool in the backend, chunked jobs, compressed batch setup retried on dropped connections (D82, D84). |
@@ -31,7 +31,7 @@ cd residents && uv run python scripts/sim_calls.py && uv run python scripts/eval
 ```
 `VOICE_MAX_CONCURRENT=0` stops EMBER from calling first. Demo beats: `docs/DEMO.md`; every step with expected values: `docs/QA.md`.
 
-## Measured (integration run, 2026-10-17 night)
+## Measured (integration run, 2026-10-17 night; re-measure after the fix round)
 - Plan v1: 78 reached before deadline, 9 not, 0 m³, 46 vehicle-km. Judge need → v2 in 0.66 s, Accessible Van 3; River St closed → Generator 1 ETA 14 → 25 min.
 - Comparison (5 seeds, after the judge beat): EMBER 88.6 vs baseline 51.6 reached (+37.0); hospital outage 11 vs 28 min.
 - Hospital at 15 min: Generator 1 → Mount Auburn, outage 13 min, overflow 0 → 9,600 m³ (stated). End of horizon: 37/40 households safe.
@@ -40,8 +40,8 @@ cd residents && uv run python scripts/sim_calls.py && uv run python scripts/eval
 - `sim_calls.py`: 7 calls (Sam twice), 5 confirmed, 2 informed; every reply < 1 s. `eval_sim.py` (keyword parser): 46/51 pass, 4 asked, 1 fail (#32 "Welch's"), 98 % safe.
 
 ## Priorities, in order
-1. Review and merge `aryaman/integration` to `main`; re-run `e2e.py` on main.
-2. **8 PM-style run-through** with `docs/QA.md` on the machine with both `.env` files: one real `JOIN EMBER` text to the SMS number and one real call.
+1. Merge the fix-round branches; re-run `e2e.py` on main and re-measure every number in `docs/DEMO.md` and `README.md`.
+2. **Run-through** with `docs/QA.md` on the machine with both `.env` files: one real `JOIN EMBER` text to the SMS number and one real call.
 3. **Devpost** (≥900 words, ≥8 screenshots; outline in `docs/devpost/README.md`) + **video < 3 min**.
 4. One paid run: `eval_sim.py --extractor llm` (the LLM column for Devpost/Chalk).
 
