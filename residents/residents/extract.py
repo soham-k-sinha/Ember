@@ -15,18 +15,15 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Literal
 
 from pydantic import BaseModel, Field
 
+from .config import Settings
+
 log = logging.getLogger("residents.extract")
 
-# Sonnet 5.5: 44/45 on samples.json at 1.4 s median (Opus 5.5 45/45 at 2.2 s is too slow for a phone call; Haiku 5.5
-# 41/45 missed "we're at the corner now" and "we're fine to walk": a misread here can decline someone's van). D76.
-MODEL = os.environ.get("EXTRACT_MODEL", "claude-sonnet-5-5")
-EFFORT = os.environ.get("EXTRACT_EFFORT", "low")
 CONFIDENCE_MIN = 0.6
 
 Kind = Literal["need", "closure_report", "facility_status", "location", "done", "confirm", "reject", "question", "other"]
@@ -95,25 +92,25 @@ LLM = Callable[[str, str], Awaitable[Extraction]]  # (system, user) → Extracti
 CHALK_ROUTER = "https://api.chalk.ai/v1/router"
 
 
-def anthropic_client(api_key: str, **kw):
+def anthropic_client(settings: Settings, **kw):
     """(client, model prefix): Anthropic directly, or Chalk's AI Router (its Anthropic Messages endpoint, D83) when
     CHALK_ROUTER_KEY and CHALK_ENV_ID are set. The calls are the same either way."""
     import anthropic
 
-    key, env = os.environ.get("CHALK_ROUTER_KEY"), os.environ.get("CHALK_ENV_ID")
-    if key and env:
-        return anthropic.AsyncAnthropic(api_key=key, base_url=CHALK_ROUTER, default_headers={"X-Chalk-Env-Id": env}, **kw), "anthropic/"
-    return anthropic.AsyncAnthropic(api_key=api_key, **kw), ""
+    if settings.chalk_router_key and settings.chalk_env_id:
+        return anthropic.AsyncAnthropic(api_key=settings.chalk_router_key, base_url=CHALK_ROUTER,
+                                        default_headers={"X-Chalk-Env-Id": settings.chalk_env_id}, **kw), "anthropic/"
+    return anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, **kw), ""
 
 
-def make_llm(api_key: str, model: str = MODEL, effort: str = EFFORT, timeout_s: float = 30.0) -> LLM:
-    client, prefix = anthropic_client(api_key, timeout=timeout_s, max_retries=2)
+def make_llm(settings: Settings, timeout_s: float = 30.0) -> LLM:
+    client, prefix = anthropic_client(settings, timeout=timeout_s, max_retries=2)
 
     async def call(system: str, user: str) -> Extraction:
         resp = await client.beta.messages.parse(
-            model=prefix + model, max_tokens=4000, system=system,
+            model=prefix + settings.extract_model, max_tokens=4000, system=system,
             messages=[{"role": "user", "content": user}],
-            output_format=Extraction, output_config={"effort": effort},
+            output_format=Extraction, output_config={"effort": settings.extract_effort},
             betas=["server-side-fallback-2026-07-01"], fallbacks="default",
         )
         if resp.stop_reason == "refusal" or resp.parsed_output is None:
@@ -198,6 +195,7 @@ def to_outcome(ex: Extraction, *, role: str, thread: dict, text: str, pending: d
                 asked.append(f"We couldn't place \"{f.road_hint}\" on our map. Which cross street is it near?")
                 continue
             out.reports.append({"source": source, "kind": "closure_report", "confidence": ex.confidence, "text": text,
+                                **({"household_id": hid} if hid is not None else {}),  # who saw it (the feed names them)
                                 "payload": {"edge_ids": edges, "road_hint": f.road_hint,
                                             **({"cross_street": f.cross_street} if f.cross_street else {})}})
         elif f.kind == "facility_status" and fid is not None:

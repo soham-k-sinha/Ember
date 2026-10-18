@@ -131,7 +131,7 @@ async def parse_fallback(s: dict) -> Extraction | None:
 def llm_reader():
     from residents.config import Settings
     from residents.extract import make_llm
-    llm = make_llm(Settings().anthropic_api_key)
+    llm = make_llm(Settings())
     records = {"resident": {"household_id": JUDGE, "label": "the judge's household", "needs": KNOWN, "status": "assigned"},
                "operator": {"id": HOSPITAL, "name": "Mount Auburn Hospital", "type": "hospital", "state": "backup"}}
 

@@ -20,7 +20,6 @@ import argparse
 import asyncio
 import json
 import logging
-import os
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -519,10 +518,6 @@ def store_key(thread: dict) -> str:
     return thread_key(thread)
 
 
-def _phones(env: str) -> list[str]:
-    return [x.strip() for x in os.environ.get(env, "").split(",") if x.strip()]
-
-
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="ember-drill", description=__doc__.split("\n\n")[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -541,8 +536,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--db", default=str(PKG_ROOT / "drill.db"), help="its own DB (default residents/drill.db)")
     args = ap.parse_args(argv)
-    args.resident = args.resident or _phones("DRILL_RESIDENTS")
-    args.operator = args.operator or _phones("DRILL_OPERATORS")
+    env = Settings()
+    args.resident = args.resident or list(env.drill_residents)
+    args.operator = args.operator or list(env.drill_operators)
     if args.dry and not args.resident and not args.operator and not args.caller:
         args.resident = ["+16175550101"]  # a pretend phone; type its texts with @r1
     setup_logging(Path(args.db).with_suffix(".log"))

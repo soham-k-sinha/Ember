@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from typing import Any, Callable
 
 from .db import Store, thread_key
@@ -33,14 +34,14 @@ SORRY = "Sorry, we couldn't read that. Could you say it another way?"
 # the LLM is unavailable and the keyword parser found nothing: ask for something it can read (never a loop of SORRY)
 HELP = ("Sorry, I didn't catch that. Short answers work best, like \"yes\", \"no\", \"done\", \"2 people, one "
         "wheelchair\", or \"what's the plan?\"")
-_outage = {"since": None, "logged": 0.0}  # one console line per minute while the LLM is down, not one per text
+_outage = {"logged": 0.0}  # one console line per minute while the LLM is down, not one per text
 PLANNER_DOWN = "Got your message. Our planner hit a problem; a coordinator is looking at it and will text you."
 ESCALATED = "Our plan doesn't cover that, so we've passed your question to a coordinator, who will reply here."
 NO_PLAN = "Got your question. We're still building the plan; we'll text you as soon as we have something for you."
 
 
 class Intake:
-    def __init__(self, store: Store, messenger: Messenger, planner: Planner, llm: LLM, outbound: Outbound | None = None,
+    def __init__(self, store: Store, messenger: Messenger, planner: Planner, llm: LLM | None, outbound: Outbound | None = None,
                  guide=None):
         self.store, self.messenger, self.planner, self.llm = store, messenger, planner, llm
         self.outbound = outbound
@@ -173,20 +174,20 @@ class Intake:
                                     **({"household_id": thread["household_id"]} if "household_id" in thread else {}),
                                     **({"facility_id": thread["facility_id"]} if "facility_id" in thread else {})}])
             return await self._handle(msg, role, thread, key, out, pending)
-        try:
-            history = [x for x in self.store.conversation(key, 9)]
-            if history and history[-1] == {"from": "them", "text": msg["text"]}:
-                history = history[:-1]  # the message itself is already stored
-            out = await extract(self.llm, msg["text"], role=role, thread=thread, record=record,
-                                last_outbound=last_out, pending=pending, resolve_road=self.planner.bridge.resolve_road,
-                                last_assignment_id=last_assignment, history=history[-8:])
-            _outage["since"] = None
-        except Exception as e:  # noqa: BLE001 - API down, usage limit, refusal, timeout: never crash or guess
-            import time
-            if time.monotonic() - _outage["logged"] > 60:
-                log.error("the LLM is unavailable (%s); reading texts with the keyword parser until it's back", str(e)[:200])
-                _outage["logged"] = time.monotonic()
-            _outage["since"] = _outage["since"] or time.monotonic()
+        out = None
+        if self.llm is not None:
+            try:
+                history = [x for x in self.store.conversation(key, 9)]
+                if history and history[-1] == {"from": "them", "text": msg["text"]}:
+                    history = history[:-1]  # the message itself is already stored
+                out = await extract(self.llm, msg["text"], role=role, thread=thread, record=record,
+                                    last_outbound=last_out, pending=pending, resolve_road=self.planner.bridge.resolve_road,
+                                    last_assignment_id=last_assignment, history=history[-8:])
+            except Exception as e:  # noqa: BLE001 - API down, usage limit, refusal, timeout: never crash or guess
+                if time.monotonic() - _outage["logged"] > 60:
+                    log.error("the LLM is unavailable (%s); reading texts with the keyword parser until it's back", str(e)[:200])
+                    _outage["logged"] = time.monotonic()
+        if out is None:  # no model configured, or it failed: the keyword parser
             ex = fallback.parse(msg["text"], role)
             if ex is None:
                 await self._help(thread, last_out)

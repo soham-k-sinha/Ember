@@ -173,7 +173,7 @@ def test_two_facts_one_replan(make_client, bridge):  # noqa: F811
         assert st["plan_version"] == 2  # one replan for both facts
         kinds = sorted(r["kind"] for r in st["reports"] if r["source"] == "resident")
         assert kinds == ["closure_report", "need"]
-        assert "needs" in st["plan"]["trigger"] and "road closed" in st["plan"]["trigger"]  # one version, both facts
+        assert st["plan"]["trigger"] == "Judge: 2 people, wheelchair; Judge (River Street): road blocked"  # one version, both facts
 
 
 def test_missing_count_asks_then_reply_completes(make_client):
@@ -234,7 +234,7 @@ def test_chatter_does_nothing(make_client):
     (False, "https://api.anthropic.com/v1/messages?beta=true", "claude-sonnet-5-5", "sk-direct"),
     (True, "https://api.chalk.ai/v1/router/v1/messages?beta=true", "anthropic/claude-sonnet-5-5", "chalk-key"),
 ])
-async def test_llm_direct_or_through_chalk(monkeypatch, chalk, url, model, key):
+async def test_llm_direct_or_through_chalk(monkeypatch, settings, chalk, url, model, key):
     sent = []
 
     def handler(req: httpx2.Request) -> httpx2.Response:
@@ -244,15 +244,12 @@ async def test_llm_direct_or_through_chalk(monkeypatch, chalk, url, model, key):
                                           "stop_reason": "end_turn", "stop_sequence": None,
                                           "usage": {"input_tokens": 1, "output_tokens": 1}})
 
-    for name, value in (("CHALK_ROUTER_KEY", "chalk-key"), ("CHALK_ENV_ID", "env-1")):
-        if chalk:
-            monkeypatch.setenv(name, value)
-        else:
-            monkeypatch.delenv(name, raising=False)
     real = anthropic.AsyncAnthropic
     monkeypatch.setattr(anthropic, "AsyncAnthropic",
                         lambda **kw: real(**kw, http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler))))
-    out = await make_llm("sk-direct", model="claude-sonnet-5-5")("system", "we are 2")
+    s = replace(settings, anthropic_api_key="sk-direct", extract_model="claude-sonnet-5-5",
+                chalk_router_key="chalk-key" if chalk else "", chalk_env_id="env-1" if chalk else "")
+    out = await make_llm(s)("system", "we are 2")
     [req] = sent
     body = json.loads(req.content)
     assert (str(req.url), body["model"], req.headers["x-api-key"]) == (url, model, key)

@@ -129,4 +129,5 @@ def test_optimize_streams_points_then_plan(oc):
     assert last["last"]["error"] is None and last["last"]["points"] == 6
     st = oc.get("/state").json()
     assert st["plan_version"] == last["last"]["plan_version"] == 2 and st["plan"]["search"]["robust"]
-    assert oc.post("/optimize?seeds=0").status_code == 422
+    assert oc.post("/optimize?seeds=0").status_code == oc.post("/optimize?seeds=1001").status_code == 422
+    assert oc.post("/optimize?seeds=2&k=9").status_code == 422
