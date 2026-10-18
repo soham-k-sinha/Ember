@@ -6,7 +6,7 @@ exactly what the thread would text, minus what only makes sense on a screen.
 - what a call has no time for (D80): examples in parentheses ("(e.g. 125 Western Ave)"), an offer's out-by time
   and the plan's reasons behind it ("It picks up 8 other households first; you share the trip with ..."), the
   "Step 1 of 4" labels and packing lists (the follow-up text has them), a pickup's destination, an ETA said twice, and
-  asides like "or tell us what changed" (a turn is said as one: "tell me if you change your mind" before a new offer);
+  asides like "or tell us what changed" or, before a new offer in the same turn, "tell me if you change your mind";
 - "Reply YES / NO / DONE" → "Say yes / no / done", "reply with / send your" → "tell me", "we'll text you" →
   "we'll let you know", "text us" → "tell us";
 - street suffixes ("Western Ave" → "Western Avenue", "N Harvard St" → "North Harvard Street");

@@ -705,6 +705,7 @@ def test_three_phones_join_at_once(lobby, solo_bridge):
     labels = {h["household_id"]: h["label"] for h in c.get("/state").json()["households"]}
     assert sorted(labels[h] for h in hids) == ["Player 1", "Player 2", "Player 3"]
     assert c.app.state.store.plan_versions() == [1, 2]                      # one replan for the burst
+    assert c.app.state.store.plan(2)["trigger"] == "Players 1, 2, 3 joined"
     for h in phones:
         texts = [x["content"]["text"] for x in fp.sends() if x["spaceId"] == f"pho_spc_{h[-4:]}"]
         assert texts[0].startswith(f"[EMBER drill] Welcome to the EMBER flood drill. You're Player {ps[h]['player']}:")
