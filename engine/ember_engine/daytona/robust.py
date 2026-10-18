@@ -2,9 +2,11 @@
 
     plan, points = robust_plan(world, scenario, reports, pool=get_pool())
 
-The allocator's top-K candidates (and the baseline, as a reference cloud for the scatter) are each run on
-the same M perturbed worlds (paired seeds) through the pool. A candidate's robust score is the mean of its
-worst 20% of runs on people unreached, then on overflow m³; the best robust candidate becomes the plan.
+The allocator's top-K different candidates (plans with the same live assignments are run once) and the
+baseline (a reference cloud for the scatter) are each run on the same M perturbed worlds (paired seeds) through
+the pool. A candidate's robust score is the mean of its worst 20% of runs on people unreached, then on overflow
+m³. The best robust candidate becomes the plan if it beats the forecast-best by at least MIN_GAIN people there;
+otherwise the forecast-best stays (a smaller edge is noise, and every change is a text to someone).
 Points stream to `on_point` as they arrive (the backend broadcasts them as WS `scatter_point` events).
 """
 
@@ -19,6 +21,7 @@ from .jobs import make_jobs
 from .pool import get_pool
 
 WORST_SHARE = 0.2
+MIN_GAIN = 1.0
 
 
 def worst_mean(values: list[float], share: float = WORST_SHARE) -> float:
@@ -43,6 +46,22 @@ def robust_rank(points: list[dict], exclude=("baseline",)) -> list[dict]:
     return rows
 
 
+def choose(ranking: list[dict], nominal: str) -> str:
+    """The most robust candidate, unless it saves fewer than MIN_GAIN people (worst 20%) over the forecast-best."""
+    worst = {r["candidate"]: r["worst20_people_unreached"] for r in ranking}
+    return ranking[0]["candidate"] if worst[nominal] - worst[ranking[0]["candidate"]] >= MIN_GAIN else nominal
+
+
+def distinct(cands, k: int) -> dict:
+    """The first k candidates with different live assignments (a generator re-targeted to where it already is
+    gives the same plan)."""
+    out = {}
+    for c in cands:
+        out.setdefault(tuple((a["resource_id"], a["task"], str(a["target"]), a["dropoff_facility_id"])
+                             for a in c.assignments if a["status"] not in ("cancelled", "rejected")), c)
+    return {c.cid: c for c in list(out.values())[:k]}
+
+
 def robust_plan(world, scn: dict, reports=(), t_now: float = 0.0, prev: dict | None = None, prev_reports=None,
                 k: int = 4, seeds: int = 50, pool=None, on_point=None, seed: int = 0, trigger: str | None = None,
                 include_baseline: bool = True, moves: int | None = None, version: int | None = None) -> tuple[dict, list]:
@@ -50,7 +69,7 @@ def robust_plan(world, scn: dict, reports=(), t_now: float = 0.0, prev: dict | N
     s = search(world, scn, reports, t_now, prev, prev_reports, seed, moves)
     if version is not None:   # a fresh plan that replaces an existing version (optimize at t=0): tag points with it
         s.version = version
-    cands = {c.cid: c for c in s.ranked[:k]}
+    cands = distinct(s.ranked, k)
     plans = {cid: {"assignments": c.assignments} for cid, c in cands.items()}
     if include_baseline:
         plans["baseline"] = baseline_plan(world, scn, s.reports)
@@ -74,11 +93,12 @@ def robust_plan(world, scn: dict, reports=(), t_now: float = 0.0, prev: dict | N
             pool.close()
     points.sort(key=lambda p: p["run_id"])
     ranking = robust_rank(points)
-    chosen = cands[ranking[0]["candidate"]]
+    chosen = cands[choose(ranking, s.ranked[0].cid)]
     plan = finalize(s, chosen, prev, trigger)
     plan["search"]["robust"] = {"batch_id": batch_id, "jobs": len(jobs), "seeds": seeds, "candidates": list(plans), "pool": "local-fallback" if getattr(pool, "fell_back", False) else pool.kind,
                                 "workers": pool.workers, "startup_s": round(pool.startup_s, 2), "fanout_wall_s": round(fan_s - pool.startup_s, 2),
-                                "rule": f"best mean of the worst {int(WORST_SHARE * 100)}% of runs: people unreached, then overflow m³",
+                                "rule": f"best mean of the worst {int(WORST_SHARE * 100)}% of runs: people unreached, then overflow m³; "
+                                        f"the forecast-best stays unless that saves ≥ {MIN_GAIN:g} person",
                                 "chosen": chosen.cid, "nominal_best": s.ranked[0].cid, "ranking": ranking}
     if getattr(pool, "fell_back", False) and getattr(pool, "log", None):   # never fall back silently
         plan["search"]["robust"]["fallback_reason"] = next((x for x in pool.log if "unavailable" in x), pool.log[-1])
