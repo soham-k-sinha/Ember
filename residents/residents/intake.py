@@ -179,7 +179,14 @@ class Intake:
                                     **({"facility_id": thread["facility_id"]} if "facility_id" in thread else {})}])
             return await self._handle(msg, role, thread, key, out, pending)
         out = None
-        if self.llm is not None:
+        short = len(msg["text"].split()) <= 12  # a long sentence is worth the model's fuller read
+        quick = fallback.parse(msg["text"], role) if short and self.messenger.on_call_thread(thread) else None
+        if quick is not None and any(f.kind not in ("question", "other") for f in quick.facts):
+            # on a call every second counts: what the keyword parser reads with certainty doesn't wait for the model
+            out = to_outcome(quick, role=role, thread=thread, text=msg["text"], pending=pending,
+                             resolve_road=self.planner.bridge.resolve_road, last_assignment_id=last_assignment,
+                             known_needs=record.get("needs"))
+        elif self.llm is not None:
             try:
                 history = [x for x in self.store.conversation(key, 9)]
                 if history and history[-1] == {"from": "them", "text": msg["text"]}:

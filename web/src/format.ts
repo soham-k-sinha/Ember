@@ -47,6 +47,12 @@ export function statusLabel(status: string): string {
 }
 
 /** A phone handle for the projector: only its last 2 digits. */
+/** "+13465660512" → "(346) 566-0512" (US numbers; anything else as given). */
+export function phoneLabel(handle: string): string {
+  const d = handle.replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
+  return d.length === 10 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}` : handle;
+}
+
 export function maskHandle(handle: string): string {
   return `••${handle.replace(/\D/g, "").slice(-2)}`;
 }

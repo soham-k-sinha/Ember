@@ -308,7 +308,7 @@ class Messenger:
         first = handle not in self.texting
         self.texting.add(handle)
         try:
-            if self.writer is None or handle in self._turns:
+            if self.writer is None or handle in self._turns or self.on_call(handle):  # a call can't wait for the writer
                 return await work
             self._turns[handle] = {"said": said, "drafts": []}
             try:
@@ -323,6 +323,13 @@ class Messenger:
         phone = phone_for_thread(self.store, thread)
         return phone is not None and phone["handle"] in self.revising
 
+    def on_call(self, handle: str | None) -> bool:
+        return handle is not None and self.voice is not None and self.voice.live(handle) is not None
+
+    def on_call_thread(self, thread: dict) -> bool:
+        phone = phone_for_thread(self.store, thread)
+        return phone is not None and self.on_call(phone["handle"])
+
     def _held(self, handle: str | None) -> dict | None:
         return self._turns.get(handle) if handle else None
 
@@ -332,7 +339,7 @@ class Messenger:
         if not drafts:
             return
         live = [d for d in drafts if d["delivery"] in ("sent", "dev")]
-        on_call = self.voice is not None and self.voice.live(handle) is not None
+        on_call = self.on_call(handle)
         reply = None
         if live:
             try:
@@ -396,7 +403,7 @@ class Messenger:
     def _route(self, phone: dict | None) -> str:
         """Where a message to this phone goes now: "voice" (its call is live, D74), "dev" (Photon off),
         "no_phone", "not_opted_in" or "photon"."""
-        if phone is not None and self.voice is not None and self.voice.live(phone["handle"]) is not None:
+        if phone is not None and self.on_call(phone["handle"]):
             return "voice"
         if self.photon is None:
             return "dev"

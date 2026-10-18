@@ -285,6 +285,11 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
     def messenger() -> Messenger:
         return app.state.messenger
 
+    def voice_open() -> bool:
+        """Anyone can call the voice number and join (D100)."""
+        v = app.state.voice
+        return bool(v is not None and v.configured() and settings.photon_voice_number and settings.voice_admit_callers)
+
     def planner() -> Planner:
         if app.state.planner is None:
             raise HTTPException(503, "static mode (SCENARIO unset): no engine")
@@ -298,7 +303,8 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
                 "t_s": meta.get("t_s"), "mode": "engine" if app.state.planner is not None else "static",
                 "extraction": "on" if app.state.intake and app.state.intake.llm else "off", "photon": "enabled" if messenger().photon is not None else "disabled",
                 "photon_listener": listener.status() if listener is not None else None,
-                "max_players": settings.max_players, "players": len(store().kv_prefix("player:"))}
+                "max_players": settings.max_players, "players": len(store().kv_prefix("player:")),
+                "voice_number": settings.photon_voice_number if voice_open() else None}  # call it to join (D100)
 
     @app.get("/state")
     async def get_state() -> dict:

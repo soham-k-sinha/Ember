@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import qrcode from "qrcode-generator";
 import { scenario } from "../fixtures";
 import { postJson } from "../live";
-import { formatNumber, keptBeforeTradeoff, maskHandle, planDiff, planTiming, reporterJob, shortName, statusLabel, tradedFacility } from "../format";
+import { formatNumber, keptBeforeTradeoff, maskHandle, phoneLabel, planDiff, planTiming, reporterJob, shortName, statusLabel, tradedFacility } from "../format";
 import { facilityById, peopleCount, resourceById, streetAt } from "../model";
 import type { Calls, Phone, PlanMetrics, PlanSnapshot, StateSnapshot } from "../types";
 
@@ -134,7 +134,7 @@ export function Toasts(props: { toasts: Toast[] }) {
   );
 }
 
-function QrCode(props: { text: string }) {
+function QrCode(props: { text: string; label: string }) {
   const { size, path } = useMemo(() => {
     const qr = qrcode(0, "M");
     qr.addData(props.text);
@@ -145,7 +145,7 @@ function QrCode(props: { text: string }) {
     return { size: n + 4, path: d };
   }, [props.text]);
   return (
-    <svg className="qr" viewBox={`0 0 ${size} ${size}`} role="img" aria-label="QR code: text JOIN EMBER to the EMBER line" shapeRendering="crispEdges">
+    <svg className="qr" viewBox={`0 0 ${size} ${size}`} role="img" aria-label={props.label} shapeRendering="crispEdges">
       <rect width={size} height={size} fill="#fff" />
       <path d={path} fill="#0b0e14" />
     </svg>
@@ -154,9 +154,9 @@ function QrCode(props: { text: string }) {
 
 type Joined = { handle: string; player: number; assigned_number: string };
 
-/** Multiplayer (D89): a shared iMessage line only hears phones registered with it, so a player enters their number
- * here first (POST /join), then texts JOIN EMBER to the line it returns; that first text places them. */
-export function JoinCard(props: { apiBase: string | null; phones: Phone[]; calls: Calls; state: StateSnapshot; max: number }) {
+/** Multiplayer: call the EMBER number and join by voice, any phone (D100); or, by iMessage (D89), enter a number here
+ * first (POST /join), then text JOIN EMBER to the line it returns; that first text places them. */
+export function JoinCard(props: { apiBase: string | null; phones: Phone[]; calls: Calls; state: StateSnapshot; max: number; voiceNumber: string | null }) {
   const [open, setOpen] = useState(true);
   const [handle, setHandle] = useState("");
   const [joined, setJoined] = useState<Joined | null>(null);
@@ -205,19 +205,27 @@ export function JoinCard(props: { apiBase: string | null; phones: Phone[]; calls
             </p>
           ) : joined ? (
             <div className="join-qr">
-              <QrCode text={`sms:${joined.assigned_number}?&body=JOIN%20EMBER`} />
+              <QrCode text={`sms:${joined.assigned_number}?&body=JOIN%20EMBER`} label="QR code: text JOIN EMBER to the EMBER line" />
               <p>
                 Player {joined.player}: from your iPhone (iMessage), text <b>JOIN EMBER</b> to {joined.assigned_number} and EMBER calls you. You get a real home in the flood zone, and the plan has to save you.
                 <button className="join-again" onClick={reset}>Another phone</button>
               </p>
             </div>
           ) : props.apiBase ? (
+            <>
+            {props.voiceNumber ? (
+              <div className="join-qr">
+                <QrCode text={`tel:${props.voiceNumber}`} label={`QR code: call ${phoneLabel(props.voiceNumber)}`} />
+                <p>Call <b>{phoneLabel(props.voiceNumber)}</b> from any phone. EMBER answers, gives you a real home in the flood zone, and the plan has to save you.</p>
+              </div>
+            ) : null}
             <form className="join-form" onSubmit={submit}>
               <input type="tel" inputMode="tel" autoComplete="tel" placeholder="Your mobile, e.g. +1 617 555 0123" value={handle} onChange={(event) => setHandle(event.target.value)} aria-label="Your mobile number" />
               <button type="submit" disabled={busy || !handle.trim()}>{busy ? "…" : "Join"}</button>
-              <p className="join-note">iPhone (iMessage) only</p>
+              <p className="join-note">{props.voiceNumber ? "Or by iMessage: your number, then text JOIN EMBER" : "iPhone (iMessage) only"}</p>
               {error ? <p className="join-error">{error}</p> : null}
             </form>
+            </>
           ) : (
             <p className="muted">Switch to Live to join from your phone.</p>
           )}

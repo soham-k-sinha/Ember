@@ -274,7 +274,7 @@ export function App() {
   const t = useClock(clock, 250);
   const [toasts, toast] = useToasts();
   const [sources, setSources] = useState(false);
-  const [health, setHealth] = useState<{ max_players?: number }>({});
+  const [health, setHealth] = useState<{ max_players?: number; voice_number?: string | null }>({});
   const settings = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
     const close = (event: PointerEvent) => {
@@ -738,7 +738,7 @@ export function App() {
             <p className="replay-chip muted">No live replay yet · vehicles step between snapshots</p>
           ) : null}
           <Toasts toasts={toasts} />
-          <JoinCard apiBase={live ? root : null} phones={phones} calls={calls} state={emberNow} max={health.max_players ?? MAX_PLAYERS} />
+          <JoinCard apiBase={live ? root : null} phones={phones} calls={calls} state={emberNow} max={health.max_players ?? MAX_PLAYERS} voiceNumber={health.voice_number ?? null} />
         </section>
         <Panels
           tab={model.tab}
