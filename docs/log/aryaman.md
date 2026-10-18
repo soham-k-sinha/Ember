@@ -253,3 +253,11 @@ What: verified the web chat's #47 independently before merging (Aryaman OK'd the
 Files: docs/DEMO.md, docs/QA.md, docs/devpost/README.md, docs/HANDOFF.md, docs/log/aryaman.md
 Interfaces: none. Soham: please add `GET /playback?planner=ember|baseline` → `EngineSession.playback(planner)` (contracts/playback.schema.json); the website's Live mode calls it.
 Status: done.
+
+## 2026-10-18 00:20 · Daytona Tier 2 at scale: warm pool, chunked jobs, honest startup (D82) · branch aryaman/daytona-tier2
+What: the backend keeps one DaytonaPool warm (started in the background at startup, reused by every /optimize, closed on shutdown); jobs go to sandboxes in chunks of ⌈jobs ÷ sandboxes⌉ per run_code; `search.robust.startup_s` separate from `fanout_wall_s`; orphaned ember sandboxes (idle > 3 min) deleted at start; a dead warm pool restarts; shortfalls logged. EMBER_DAYTONA_WORKERS=90 in engine/.env; seeds default 50, max 200. Snapshot rebuilt: ember-engine-c1810d2a07.
+Files: engine/ember_engine/daytona/{pool,jobs,robust}.py, engine/ember_engine/{api,cli}.py, engine/scripts/e2e.py, engine/tests/test_daytona.py, residents/residents/{engine_bridge,planner,app}.py, web/src/App.tsx, docs/{DECISIONS,HANDOFF}.md
+Run: cd engine && uv run ember robust --scenario ../scenarios/allston_flood_v1/scenario.json --seeds 200
+Interfaces: plan.search.robust gains `startup_s`; POST /optimize seeds 1..200 (default 50).
+Status: done. Engine 101 passed, residents 259 passed. Live: warm 1,000 runs in 0.9 s (local 3.6 s); backend /optimize 1.6–2.7 s; web scatter shows 1,000 points. No sandboxes left running.
+Next: rebuild the snapshot after merging any change to a sandbox-imported module; the web could show `startup_s` next to the fan-out time.

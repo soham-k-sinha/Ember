@@ -604,7 +604,7 @@ export function App() {
     const root = model.apiBase.replace(/\/$/, "");
     try {
       try {
-        await postJson(`${root}/optimize?seeds=20&k=4`, {}, 15000);
+        await postJson(`${root}/optimize`, {}, 15000);
       } catch (error) {
         // 409 = one is already running: watch that one instead of failing
         if (!(error instanceof Error && error.message.startsWith("409"))) throw error;

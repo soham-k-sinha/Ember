@@ -140,9 +140,10 @@ class EngineSession:
         with self.lock:
             return compare(self.world, self.scn, seeds=seeds, reports=list(self.reports), seed=self.seed)
 
-    def optimize(self, on_point=None, t_now: float = 0.0, seeds: int = 20, k: int = 4, pool=None) -> dict:
+    def optimize(self, on_point=None, t_now: float = 0.0, seeds: int = 50, k: int = 4, pool=None) -> dict:
         """POST /optimize: robust replan — top candidates × perturbed worlds on Daytona (local fallback).
-        Streams every run to on_point (broadcast as WS scatter_point). Tier 1: ~100 runs ≈ 1–2 min."""
+        Streams every run to on_point (broadcast as WS scatter_point). Pass a started pool to reuse it: on
+        Tier 2 (90 sandboxes) 250 runs take ≈2 s warm; a pool made here pays ≈7 s of sandbox startup."""
         from .daytona.robust import robust_plan
         with self.lock:
             known = [r for r in self.reports if float(r["observed_at_t_s"]) <= t_now]

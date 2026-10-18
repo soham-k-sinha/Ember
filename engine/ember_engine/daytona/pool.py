@@ -6,10 +6,12 @@
 
 DaytonaPool (plan doc §6.5): N long-lived sandboxes from a snapshot that bakes in the engine package
 and the shared town (named by a content hash, built once with `ember daytona-snapshot`); each loads
-the town once in the stateful code_interpreter, then pulls jobs from a queue; results come back as
-the run_code return value (Tier 1/2 sandboxes have no outbound network). Every call passes timeout=.
-A job that fails twice is computed locally so a batch always completes. EMBER_LOCAL_POOL=1 forces
-the local pool.
+the town once in the stateful code_interpreter, then pulls chunks of about jobs ÷ N jobs from a queue
+(one round trip per chunk, not per job); results come back as the run_code return value (Tier 1/2
+sandboxes have no outbound network). Every call passes timeout=. A chunk that fails twice is computed
+locally so a batch always completes. The backend keeps one pool warm across batches; a start first
+deletes this app's sandboxes idle for ORPHAN_IDLE_MIN (left by a crash, they would hold the vCPU
+quota for their TTL). EMBER_LOCAL_POOL=1 forces the local pool.
 """
 
 from __future__ import annotations
@@ -19,18 +21,24 @@ import contextlib
 import gzip
 import hashlib
 import json
+import logging
+import math
 import os
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from .jobs import batch_setup, job_code, parse_last_json, run_job, worker_prelude
+from .jobs import batch_setup, job_code, parse_points, run_job, worker_prelude
 
 ENGINE_DIR = Path(__file__).resolve().parents[2]          # engine/
 PKG_DIR = ENGINE_DIR / "ember_engine"
 CANONICAL_TOWN = ENGINE_DIR / "data" / "town.json.gz"
 SNAPSHOT_PREFIX = "ember-engine"
 PREP_TIMEOUT_S, BATCH_TIMEOUT_S, JOB_TIMEOUT_S = 180, 60, 60
+LABELS = {"app": "ember", "role": "robustness"}
+ORPHAN_IDLE_MIN = 3
+log = logging.getLogger(__name__)
 
 
 def load_env(path: Path = ENGINE_DIR / ".env") -> None:
@@ -64,6 +72,7 @@ def _local_job(job):
 
 class LocalPool:
     kind = "local"
+    startup_s = 0.0
 
     def __init__(self, workers: int | None = None, town_path: str | None = None, world=None):
         self.workers = max(1, workers if workers is not None else min(8, (os.cpu_count() or 2) - 1))
@@ -86,6 +95,9 @@ class LocalPool:
                 if on_point:
                     on_point(p)
         return out
+
+    def start(self):
+        pass
 
     def close(self):
         pass
@@ -163,6 +175,11 @@ class DaytonaPool:
         self._loop = None
         self.log = []
         self.fell_back = False
+        self.startup_s = 0.0
+
+    @property
+    def workers(self) -> int:
+        return len(self.sandboxes)
 
     # -- lifecycle --
     async def _open_client(self):
@@ -177,11 +194,12 @@ class DaytonaPool:
         for attempt in range(5):
             try:
                 sb = await self.client.create(CreateSandboxFromSnapshotParams(snapshot=self.snapshot, auto_stop_interval=0, ttl_minutes=self.ttl,
-                                                                              labels={"app": "ember", "role": "robustness"}), timeout=120)
+                                                                              labels=LABELS), timeout=120)
                 break
             except DaytonaRateLimitError:
                 await asyncio.sleep(2 ** attempt)
         else:
+            self.log.append(f"sandbox {i} not created: rate-limited 5 times")
             return None
         r = await sb.code_interpreter.run_code(worker_prelude(), timeout=PREP_TIMEOUT_S)
         if r.error:
@@ -190,16 +208,38 @@ class DaytonaPool:
             return None
         return sb
 
+    async def _delete_orphans(self):
+        from daytona import ListSandboxesQuery
+        idle = datetime.now(UTC) - timedelta(minutes=ORPHAN_IDLE_MIN)
+        old = [s async for s in self.client.list(ListSandboxesQuery(labels=LABELS, last_activity_before=idle))]
+        if old:
+            await asyncio.gather(*(self.client.delete(s, timeout=60) for s in old), return_exceptions=True)
+            self.log.append(f"deleted {len(old)} orphaned sandboxes")
+
     async def astart(self):
         if self.sandboxes:
             return
+        t0 = time.time()
         if self.client is None:
             await self._open_client()
+        await self._delete_orphans()
         made = await asyncio.gather(*(self._create_one(i) for i in range(self.n)), return_exceptions=True)
         self.sandboxes = [s for s in made if s is not None and not isinstance(s, BaseException)]
         self.log += [f"sandbox create failed: {s!r}" for s in made if isinstance(s, BaseException)]
+        self.startup_s += time.time() - t0
+        if len(self.sandboxes) < self.n:
+            log.warning("Daytona: %d of %d sandboxes came up: %s", len(self.sandboxes), self.n, "; ".join(self.log[-3:]))
         if not self.sandboxes:
             raise RuntimeError("no Daytona sandbox came up: " + "; ".join(self.log[-3:]))
+
+    async def _setup(self, code: str) -> None:
+        """Register the batch on every sandbox; dead ones (past their TTL, deleted elsewhere) are deleted and dropped."""
+        ok = await asyncio.gather(*(s.code_interpreter.run_code(code, timeout=BATCH_TIMEOUT_S) for s in self.sandboxes), return_exceptions=True)
+        up = [not isinstance(r, BaseException) and not r.error for r in ok]
+        if not all(up):
+            self.log.append(f"dropped {up.count(False)} of {len(up)} sandboxes that failed the batch setup")
+            await asyncio.gather(*(self.client.delete(s, timeout=60) for s, u in zip(self.sandboxes, up) if not u), return_exceptions=True)
+            self.sandboxes = [s for s, u in zip(self.sandboxes, up) if u]
 
     async def aclose(self):
         if self.client is not None:
@@ -210,8 +250,14 @@ class DaytonaPool:
 
     # -- batches --
     async def arun(self, batch_id: str, scn: dict, plans: dict, reports: list, jobs: list, on_point=None) -> list[dict]:
+        self.log, self.fell_back, self.startup_s = [], False, 0.0
+        setup = batch_setup(batch_id, scn, plans, reports)
         try:
             await self.astart()
+            await self._setup(setup)
+            if not self.sandboxes:   # the warm pool is gone (TTL, or deleted as orphans by another process): start afresh
+                await self.astart()
+                await self._setup(setup)
         except Exception as ex:   # noqa: BLE001 — no snapshot / no sandbox: the batch still completes locally
             self.log.append(f"Daytona unavailable, running locally: {ex}"[:400])
             self.fell_back = True
@@ -223,31 +269,30 @@ class DaytonaPool:
                 if on_point:
                     on_point(p)
             return out
-        setup = batch_setup(batch_id, scn, plans, reports)
-        ok = await asyncio.gather(*(s.code_interpreter.run_code(setup, timeout=BATCH_TIMEOUT_S) for s in self.sandboxes), return_exceptions=True)
-        live = [s for s, r in zip(self.sandboxes, ok) if not isinstance(r, BaseException) and not r.error]
+        live = self.sandboxes
+        size = math.ceil(len(jobs) / max(1, len(live)))
         q: asyncio.Queue = asyncio.Queue()
-        for j in jobs:
-            q.put_nowait((j, 0))
+        for i in range(0, len(jobs), size):
+            q.put_nowait((jobs[i:i + size], 0))
         out, failed = [], []
 
         async def worker(sb, wid: str):
             while True:
                 try:
-                    job, tries = q.get_nowait()
+                    chunk, tries = q.get_nowait()
                 except asyncio.QueueEmpty:
                     return
                 try:
-                    r = await sb.code_interpreter.run_code(job_code(job, wid), timeout=self.job_timeout)
+                    r = await sb.code_interpreter.run_code(job_code(chunk, wid), timeout=self.job_timeout * len(chunk))
                     if r.error:
                         raise RuntimeError(f"{r.error.name}: {r.error.value}")
-                    p = parse_last_json(r.stdout)
-                    out.append(p)
-                    if on_point:
-                        on_point(p)
+                    for p in parse_points(r.stdout, len(chunk)):
+                        out.append(p)
+                        if on_point:
+                            on_point(p)
                 except Exception as ex:   # noqa: BLE001 — retry once elsewhere, then compute locally
-                    self.log.append(f"{job['run_id']} on {wid}: {ex!r}"[:300])
-                    (q.put_nowait((job, tries + 1)) if tries == 0 else failed.append(job))
+                    self.log.append(f"{chunk[0]['run_id']} (+{len(chunk) - 1}) on {wid}: {ex!r}"[:300])
+                    (q.put_nowait((chunk, tries + 1)) if tries == 0 else failed.extend(chunk))
 
         await asyncio.gather(*(worker(s, getattr(s, "id", f"sb{i}")) for i, s in enumerate(live)))
         if failed or not live:   # guarantee completeness
@@ -264,6 +309,9 @@ class DaytonaPool:
         if self._loop is None:
             self._loop = asyncio.new_event_loop()
         return self._loop.run_until_complete(coro)
+
+    def start(self):
+        self._sync(self.astart())
 
     def run(self, *a, **k):
         return self._sync(self.arun(*a, **k))
