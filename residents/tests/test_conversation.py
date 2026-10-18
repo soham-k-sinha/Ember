@@ -1,7 +1,8 @@
 """Regression: the first real-phone run-through (2026-10-17), replayed with the model's actual outputs.
 
 Live, the judge said "2 of us, my mom uses a wheelchair", then later "Yes, 2 people"; the second need
-replaced the first, the wheelchair was dropped, and the non-accessible Generator truck was assigned.
+replaced the first, the wheelchair was dropped, and the non-accessible passenger truck
+was assigned (then "Generator truck", now "Utility truck").
 Also: no reply after the first fact (the plan couldn't serve them yet), and chatter got generic prompts."""
 from dataclasses import replace
 

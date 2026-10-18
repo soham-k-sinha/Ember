@@ -11,7 +11,7 @@ Before: plan v9: needs people=1, mobility=True, accessible_vehicle=True, out by 
 
 - `  0.0s` **EMBER** (12.0 s): Hi, it's EMBER from the flood drill, calling about your wheelchair-accessible pickup. Accessible Van 3 is assigned to pick you up, arriving in about 9 minutes. Say yes to confirm.
 - ` 16.0s` *Margaret*: Hello?
-- ` 16.4s` **EMBER** (15 ms, 10.0 s): Hi, it's EMBER from the flood drill. Accessible Van 3 is assigned to pick you up, arriving in about 9 minutes. Say yes to confirm.
+- ` 16.4s` **EMBER** (16 ms, 10.0 s): Hi, it's EMBER from the flood drill. Accessible Van 3 is assigned to pick you up, arriving in about 9 minutes. Say yes to confirm.
 - ` 29.4s` *Margaret*: Who is this?
 - ` 30.6s` **EMBER** (14 ms, 12.8 s): It's EMBER, the HackHarvard flood drill; this is a drill, not a real emergency. Accessible Van 3 is assigned to pick you up, arriving in about 9 minutes. Say yes to confirm.
 - ` 48.4s` *Margaret*: Oh. Yes, yes please.
@@ -43,15 +43,15 @@ Before: not placed yet
 - `  5.4s` *Jordan*: I got a flood alert. What's going on?
 - `  8.6s` **EMBER** (7 ms, 5.6 s): Where are you right now? Tell me your street address or the nearest intersection.
 - ` 15.2s` *Jordan*: Memorial Drive and River Street.
-- ` 17.9s` **EMBER** (725 ms, 14.0 s): Got it: we have you at Memorial Drive and River Street. Water is forecast to reach your street in about 120 minutes. How many people are with you, and does anyone need a wheelchair-accessible vehicle?
-- ` 32.9s` *Jordan*: Where would you take us?
-- ` 34.9s` **EMBER** (15 ms, 9.6 s): Everyone we pick up goes to David Rubenstein Treehouse (drill shelter). How many people are with you, and does anyone need a wheelchair-accessible vehicle?
-- ` 45.5s` *Jordan*: Just me and my cat.
-- ` 48.3s` **EMBER** (737 ms, 9.2 s): Van 2 will pick you up at the corner of Memorial Drive and River Street in about 16 minutes. Say yes to confirm.
+- ` 18.0s` **EMBER** (744 ms, 14.0 s): Got it: we have you at Memorial Drive and River Street. Water is forecast to reach your street in about 120 minutes. How many people are with you, and does anyone need a wheelchair-accessible vehicle?
+- ` 33.0s` *Jordan*: Where would you take us?
+- ` 35.0s` **EMBER** (15 ms, 9.6 s): Everyone we pick up goes to David Rubenstein Treehouse (drill shelter). How many people are with you, and does anyone need a wheelchair-accessible vehicle?
+- ` 45.6s` *Jordan*: Just me and my cat.
+- ` 48.3s` **EMBER** (752 ms, 9.2 s): Van 2 will pick you up at the corner of Memorial Drive and River Street in about 16 minutes. Say yes to confirm.
 - ` 58.5s` *Jordan*: Can I bring my cat?
-- ` 60.5s` **EMBER** (13 ms, 9.2 s): Bring medications, ID and your phone. Bring pets too, in a carrier or on a leash. One small bag each; leave everything else.
+- ` 60.5s` **EMBER** (12 ms, 9.2 s): Bring medications, ID and your phone. Bring pets too, in a carrier or on a leash. One small bag each; leave everything else.
 - ` 70.7s` *Jordan*: Yes.
-- ` 71.2s` **EMBER** (79 ms, 14.0 s): Confirmed. Go out to the pickup point right outside: the corner of Memorial Drive and River Street. Van 2 gets there in about 16 minutes. Say done when you're there. I'll text you this too.
+- ` 71.2s` **EMBER** (78 ms, 14.0 s): Confirmed. Go out to the pickup point right outside: the corner of Memorial Drive and River Street. Van 2 gets there in about 16 minutes. Say done when you're there. I'll text you this too.
 - ` 86.2s` *Jordan*: Thanks, bye.
 - ` 87.0s` **EMBER** (1 ms, 4.4 s): You're welcome. I'm texting you all of this now. Take care.
 - after the call, by text: [EMBER drill] As promised, here's your plan in writing. Your pickup is confirmed: Van 2 is arriving in about 16 min. Right now: Step 1 of 4: Pack medications, ID, your phone and charger, then go out to the pickup point right outside: the corner of Memorial Drive and River Street. Van 2 gets there in about 16 min. Reply DONE when you're there. (plan v12)
@@ -59,15 +59,15 @@ Before: not placed yet
 Outcome: **confirmed**, 7 turns in 91 s. After: plan v12: needs people=1, out by 2:45; Van 2 confirmed, pickup at 1:16
 
 ### Rosa (says she's fine, but the water reaches her street): EMBER calls, pickup changed, sim 1:00
-Before: plan v12: needs people=2, out by 2:15; Generator truck offered, pickup at 1:11
+Before: plan v12: needs people=2, out by 2:15; Utility truck offered, pickup at 1:11
 
-- `  0.0s` **EMBER** (14.4 s): Hi, it's EMBER from the flood drill, calling because your pickup has changed. Generator truck will pick you up at the corner of Putnam Avenue and Western Avenue in about 11 minutes. Say yes to confirm.
+- `  0.0s` **EMBER** (14.4 s): Hi, it's EMBER from the flood drill, calling because your pickup has changed. Utility truck will pick you up at the corner of Putnam Avenue and Western Avenue in about 11 minutes. Say yes to confirm.
 - ` 15.9s` *Rosa*: No, I'm fine, we're staying put.
-- ` 19.1s` **EMBER** (788 ms, 20.8 s): Understood, we won't send Generator truck. The water reaches your street in about 90 minutes; if you stay, go to the highest floor and keep your phone with you. Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 56 minutes. Say yes to confirm.
+- ` 19.1s` **EMBER** (796 ms, 20.8 s): Understood, we won't send Utility truck. The water reaches your street in about 90 minutes; if you stay, go to the highest floor and keep your phone with you. Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 56 minutes. Say yes to confirm.
 - ` 41.9s` *Rosa*: We're on the second floor, we'll be okay.
 - ` 45.1s` **EMBER** (16 ms, 13.6 s): In a real emergency, call 9 1 1. Don't walk or drive through floodwater. If water comes inside, go to a higher floor (not a closed attic), and stay away from downed power lines.
 - ` 60.7s` *Rosa*: Okay. Yes, send it.
-- ` 62.4s` **EMBER** (129 ms, 14.0 s): Confirmed. Go out to the pickup point right outside: the corner of Putnam Avenue and Western Avenue. Van 2 gets there in about 56 minutes. Say done when you're there. I'll text you this too.
+- ` 62.5s` **EMBER** (145 ms, 14.0 s): Confirmed. Go out to the pickup point right outside: the corner of Putnam Avenue and Western Avenue. Van 2 gets there in about 56 minutes. Say done when you're there. I'll text you this too.
 - after the call, by text: [EMBER drill] As promised, here's your plan in writing. Your pickup is confirmed: Van 2 is arriving in about 56 min. Right now: Step 1 of 4: Pack medications, ID, your phone and charger, then go out to the pickup point right outside: the corner of Putnam Avenue and Western Avenue. Van 2 gets there in about 56 min. Reply DONE when you're there. (plan v13)
 
 Outcome: **confirmed**, 3 turns in 76 s. After: plan v13: needs people=2, out by 2:15; Van 2 confirmed, pickup at 1:56
@@ -77,7 +77,7 @@ Before: plan v13: needs people=1, out by 2:15; Van 2 confirmed, pickup at 1:39
 
 - `  0.0s` **EMBER** (9.2 s): Hi, it's EMBER from the flood drill, calling because your pickup has changed. Update: Van 2 is now arriving in about 39 minutes.
 - ` 10.2s` *Sam*: Oh, okay. What changed?
-- ` 11.8s` **EMBER** (22 ms, 16.0 s): Your pickup is confirmed: Van 2 is arriving in about 39 minutes. Right now: Go out to the pickup point right outside: the corner of Callender Street and Putnam Avenue. Say done when you're there. I'll text you this too.
+- ` 11.8s` **EMBER** (23 ms, 16.0 s): Your pickup is confirmed: Van 2 is arriving in about 39 minutes. Right now: Go out to the pickup point right outside: the corner of Callender Street and Putnam Avenue. Say done when you're there. I'll text you this too.
 - ` 28.8s` *Sam*: Okay, got it.
 - ` 30.0s` **EMBER** (1 ms, 4.0 s): Great. I'm texting you all of this now. Take care.
 - after the call, by text: [EMBER drill] As promised, here's your plan in writing. Your pickup is confirmed: Van 2 is arriving in about 39 min. Right now: Step 1 of 4: Pack medications, ID, your phone and charger, then go out to the pickup point right outside: the corner of Callender Street and Putnam Avenue. Van 2 gets there in about 39 min. Reply DONE when you're there. (plan v13)
@@ -89,13 +89,13 @@ Before: plan v13: needs unknown, out by 2:15; no vehicle
 
 - `  0.0s` **EMBER** (14.4 s): Hi, it's EMBER from the flood drill, calling because the water reaches your street in about 60 minutes and we haven't heard back. How many people are with you, and does anyone need a wheelchair-accessible vehicle?
 - ` 14.9s` *Dev*: Oh my god, is the water coming? What do I do?
-- ` 19.3s` **EMBER** (17 ms, 17.6 s): I'm here with you; we'll go one step at a time. In this drill's flood forecast, water reaches your street in about 60 minutes, so we're planning to pick you up. How many people are with you, and does anyone need a wheelchair-accessible vehicle?
+- ` 19.3s` **EMBER** (18 ms, 17.6 s): I'm here with you; we'll go one step at a time. In this drill's flood forecast, water reaches your street in about 60 minutes, so we're planning to pick you up. How many people are with you, and does anyone need a wheelchair-accessible vehicle?
 - ` 37.9s` *Dev*: Okay. Okay. It's me and my two kids, three of us.
-- ` 43.1s` **EMBER** (773 ms, 9.2 s): Van 1 will pick you up at the corner of Banks Street and Flagg Street in about 17 minutes. Say yes to confirm.
+- ` 43.1s` **EMBER** (790 ms, 9.2 s): Van 1 will pick you up at the corner of Banks Street and Flagg Street in about 17 minutes. Say yes to confirm.
 - ` 53.1s` *Dev*: Yes. Yes, please hurry.
-- ` 54.8s` **EMBER** (103 ms, 18.4 s): I'm here with you; we'll go one step at a time. Confirmed. Go out to the pickup point right outside: the corner of Banks Street and Flagg Street. Van 1 gets there in about 17 minutes. Say done when you're there. I'll text you this too.
+- ` 54.8s` **EMBER** (128 ms, 18.4 s): I'm here with you; we'll go one step at a time. Confirmed. Go out to the pickup point right outside: the corner of Banks Street and Flagg Street. Van 1 gets there in about 17 minutes. Say done when you're there. I'll text you this too.
 - ` 74.7s` *Dev*: Okay, we're ready.
-- ` 76.0s` **EMBER** (89 ms, 4.8 s): Thanks. We'll let you know the next step in about 17 minutes.
+- ` 76.0s` **EMBER** (65 ms, 4.8 s): Thanks. We'll let you know the next step in about 17 minutes.
 - after the call, by text: [EMBER drill] As promised, here's your plan in writing. Your pickup is confirmed: Van 1 is arriving in about 17 min. Right now: You've done step 1 of 4; we'll text you the next step in about 17 min. (plan v14)
 
 Outcome: **confirmed**, 4 turns in 81 s. After: plan v14: needs people=3, out by 2:15; Van 1 confirmed, pickup at 1:47
@@ -107,11 +107,11 @@ Before: plan v14: needs unknown, out by 2:15; no vehicle
 - ` 16.4s` *Lee*: Sorry, what? The dog is going crazy here.
 - ` 19.6s` **EMBER** (15 ms, 8.0 s): Hi, it's EMBER from the flood drill. How many people are with you, and does anyone need a wheelchair-accessible vehicle?
 - ` 29.6s` *Lee*: Uh, the purple one, by the window.
-- ` 32.4s` **EMBER** (10 ms, 7.2 s): Sorry, I didn't catch that. How many people are with you, and does anyone need a wheelchair-accessible vehicle?
+- ` 32.4s` **EMBER** (11 ms, 7.2 s): Sorry, I didn't catch that. How many people are with you, and does anyone need a wheelchair-accessible vehicle?
 - ` 41.1s` *Lee*: Two of us.
-- ` 43.1s` **EMBER** (766 ms, 9.2 s): Van 1 will pick you up at the corner of Hingham Street and Putnam Avenue in about 34 minutes. Say yes to confirm.
+- ` 43.1s` **EMBER** (772 ms, 9.2 s): Van 1 will pick you up at the corner of Hingham Street and Putnam Avenue in about 34 minutes. Say yes to confirm.
 - ` 53.3s` *Lee*: Yes.
-- ` 53.8s` **EMBER** (145 ms, 14.0 s): Confirmed. Go out to the pickup point right outside: the corner of Hingham Street and Putnam Avenue. Van 1 gets there in about 34 minutes. Say done when you're there. I'll text you this too.
+- ` 53.8s` **EMBER** (151 ms, 14.0 s): Confirmed. Go out to the pickup point right outside: the corner of Hingham Street and Putnam Avenue. Van 1 gets there in about 34 minutes. Say done when you're there. I'll text you this too.
 - after the call, by text: [EMBER drill] As promised, here's your plan in writing. Your pickup is confirmed: Van 1 is arriving in about 34 min. Right now: Step 1 of 4: Pack medications, ID, your phone and charger, then go out to the pickup point right outside: the corner of Hingham Street and Putnam Avenue. Van 1 gets there in about 34 min. Reply DONE when you're there. (plan v15)
 
 Outcome: **confirmed**, 4 turns in 68 s. After: plan v15: needs people=2, out by 2:15; Van 1 confirmed, pickup at 2:04
