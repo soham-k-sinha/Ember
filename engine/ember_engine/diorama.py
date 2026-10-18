@@ -21,15 +21,16 @@ between teammates (the web is its only consumer). Every value carries its source
 from __future__ import annotations
 
 import json
-import math
 import subprocess
 import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from shapely.geometry import Point, box, mapping, shape
+from shapely.geometry import Point, box, shape
 from shapely.strtree import STRtree
+
+from .geo import metres_per_deg
 
 FT = 0.3048
 BOSTON_BLDG = "https://gis.bostonplans.org/hosting/rest/services/Boston_Buildings/FeatureServer/9/query"
@@ -176,6 +177,7 @@ def build(bbox: tuple, cache_dir: Path, venue_lonlat: tuple | None = None) -> di
     area = box(*bbox)
     venue = Point(*venue_lonlat) if venue_lonlat else None
     lon0, lat0 = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+    mx, my = metres_per_deg(lat0)
 
     # ---------- buildings ----------
     bos = arcgis(BOSTON_BLDG, bbox, "BLDG_HGT_2010,PART_USE,BRA_Land_Use,IEL_TYPE", cache_dir, "boston_bldg")
@@ -261,7 +263,7 @@ def build(bbox: tuple, cache_dir: Path, venue_lonlat: tuple | None = None) -> di
             h, src = est, "estimate"
         elif not h and r["floors"]:
             h, src = r["floors"] * 3.4, "overture-floors"
-        elif not h and venue is not None and g.distance(venue) * 82_000 < ERC_RADIUS_M and g.area * 82_000 * 111_000 > 600:
+        elif not h and venue is not None and g.distance(venue) * mx < ERC_RADIUS_M and g.area * mx * my > 600:
             h, src = ERC_UNKNOWN_H, "estimate"
         roof = {"gabled": "pitched", "hipped": "pitched", "saltbox": "pitched", "mansard": "pitched"}.get(r["roof"] or "", "flat")
         buildings.append({"ring": ring, "h": round(h, 1) if h else None, "eave": None, "roof": roof,
@@ -271,8 +273,8 @@ def build(bbox: tuple, cache_dir: Path, venue_lonlat: tuple | None = None) -> di
         cands = []
         for b in buildings:
             g = shape({"type": "Polygon", "coordinates": [b["ring"] + [b["ring"][0]]]})
-            m2 = g.area * 82_000 * 111_000
-            if m2 >= min_m2 and g.distance(here) * 90_000 < 160 and not b.get("name"):
+            m2 = g.area * mx * my
+            if m2 >= min_m2 and g.distance(here) * mx < 160 and not b.get("name"):
                 cands.append((m2, id(b), b))
         if cands:
             max(cands)[2]["name"] = name
@@ -318,7 +320,7 @@ def build(bbox: tuple, cache_dir: Path, venue_lonlat: tuple | None = None) -> di
     # OpenStreetMap trees where no surveyed tree stands within 4 m (campus trees on private land)
     osm_trees, osm_parks = osm_extras(bbox, cache_dir)
     have = STRtree([Point(t[0], t[1]) for t in trees]) if trees else None
-    near_m = 4 / 111_000
+    near_m = 4 / my
     for lon, lat in osm_trees:
         pt = Point(lon, lat)
         if not area.contains(pt) or (have is not None and len(have.query(pt.buffer(near_m))) > 0):
@@ -380,10 +382,11 @@ def _plant_lawns(land: list, roads: list, buildings: list, trees: list, area) ->
     """Deterministic plantings on lawns/parks whose surveyed tree density is far below the surveyed side's."""
     from shapely.geometry import LineString
     from shapely.ops import unary_union
-    k = 82_000 * 111_000  # deg² → m² (approx. at this latitude)
-    blocked = unary_union([shape({"type": "Polygon", "coordinates": [b["ring"] + [b["ring"][0]]]}).buffer(2.5 / 111_000) for b in buildings])
+    mx, my = metres_per_deg(area.centroid.y)
+    k = mx * my  # deg² → m²
+    blocked = unary_union([shape({"type": "Polygon", "coordinates": [b["ring"] + [b["ring"][0]]]}).buffer(2.5 / my) for b in buildings])
     lines = [LineString(r["path"]) for r in roads if len(r["path"]) >= 2 and r["k"] not in ("footway", "path", "cycleway", "steps", "pedestrian")]
-    roads_buf = unary_union([ln.buffer(6 / 111_000) for ln in lines]) if lines else None
+    roads_buf = unary_union([ln.buffer(6 / my) for ln in lines]) if lines else None
     tree_pts = STRtree([Point(t[0], t[1]) for t in trees]) if trees else None
     # never on a construction site or a car park, even where a lawn polygon overlaps them
     hard = [shape({"type": "Polygon", "coordinates": [it["ring"] + [it["ring"][0]]]}).buffer(0) for it in land if it["k"] in ("construction", "parking")]
@@ -419,9 +422,9 @@ def _plant_lawns(land: list, roads: list, buildings: list, trees: list, area) ->
             if not poly.contains(pt) or not area.contains(pt) or blocked.contains(pt) or (roads_buf is not None and roads_buf.contains(pt)) \
                     or (hard_u is not None and hard_u.contains(pt)):
                 continue
-            if any(pt.distance(q) < 6.5 / 111_000 for q in placed):
+            if any(pt.distance(q) < 6.5 / my for q in placed):
                 continue
-            if a_m2 > 2500 and poly.exterior.distance(pt) > EDGE_M / 111_000:
+            if a_m2 > 2500 and poly.exterior.distance(pt) > EDGE_M / my:
                 continue
             placed.append(pt)
             h = 8 + 7 * _halton(i + 7, 5)
@@ -439,11 +442,6 @@ def _halton(i: int, b: int) -> float:
 
 
 def rect_around(lon: float, lat: float, half_w_m: float, half_h_m: float, dx_m: float = 0.0, dy_m: float = 0.0) -> tuple:
-    k = math.cos(math.radians(lat))
-    cx, cy = lon + dx_m / (111_320 * k), lat + dy_m / 110_540
-    return (round(cx - half_w_m / (111_320 * k), 6), round(cy - half_h_m / 110_540, 6),
-            round(cx + half_w_m / (111_320 * k), 6), round(cy + half_h_m / 110_540, 6))
-
-
-def bbox_mapping(bbox: tuple) -> dict:
-    return mapping(box(*bbox))
+    mx, my = metres_per_deg(lat)
+    cx, cy = lon + dx_m / mx, lat + dy_m / my
+    return round(cx - half_w_m / mx, 6), round(cy - half_h_m / my, 6), round(cx + half_w_m / mx, 6), round(cy + half_h_m / my, 6)

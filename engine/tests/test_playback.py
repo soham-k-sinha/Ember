@@ -10,7 +10,8 @@ from pathlib import Path
 import pytest
 
 from ember_engine.allocator.rolling import run_ember
-from ember_engine.playback import _metres, playback
+from ember_engine.geo import local_metres
+from ember_engine.playback import playback
 from ember_engine.scenario import load_scenario
 from ember_engine.sim import simulate
 from ember_engine.world import World
@@ -46,7 +47,7 @@ def test_tracks_hit_every_simulator_sample(run):
         assert all(b >= a for a, b in zip(tr["t"], tr["t"][1:])), tr["id"]
         rt = res.timeline["res"][tr["id"]]
         for k, t in enumerate(res.timeline["t_s"]):
-            assert _metres(_at(tr, t), (rt["lon"][k], rt["lat"][k])) < 3.0, (tr["id"], t)
+            assert local_metres(_at(tr, t), (rt["lon"][k], rt["lat"][k])) < 3.0, (tr["id"], t)
 
 
 def test_tracks_follow_roads_at_the_distance_driven(run):
@@ -55,7 +56,7 @@ def test_tracks_follow_roads_at_the_distance_driven(run):
     for tr in pb["tracks"]:
         rt = res.timeline["res"][tr["id"]]
         for k in range(1, len(ts)):
-            drawn = sum(_metres(a, b) for a, b, t in zip(tr["path"], tr["path"][1:], tr["t"][1:]) if ts[k - 1] < t <= ts[k])
+            drawn = sum(local_metres(a, b) for a, b, t in zip(tr["path"], tr["path"][1:], tr["t"][1:]) if ts[k - 1] < t <= ts[k])
             driven = 1000 * (rt["km"][k] - rt["km"][k - 1])
             assert drawn <= 1.4 * driven + 80, (tr["id"], ts[k], drawn, driven)
     assert sum(len(tr["path"]) for tr in pb["tracks"]) > 3 * len(ts), "between-sample road geometry is missing"

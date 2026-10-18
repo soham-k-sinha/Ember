@@ -152,7 +152,7 @@ def validate(scn: dict, town: dict) -> Report:
     if ts and max(ts) > scn["t_end_s"]:
         W(f"hazard: keyframe at t={max(ts):.0f}s is after t_end_s={scn['t_end_s']:.0f}s")
     frames = flood_keyframes(scn, world)
-    for (t, g), k in zip(frames, sorted(kfs, key=lambda k: k["t_s"])):
+    for t, g in frames:
         if g.is_empty:
             W(f"hazard: keyframe t={t:.0f}s is empty")
         elif not inside_box(g):

@@ -326,7 +326,7 @@ def cmd_simulate(a):
     import collections
 
     from .scenario import load_scenario
-    from .sim import example_plan, simulate
+    from .sim import simulate
     w = _load_world()
     scn = load_scenario(a.scenario)
     reports = _read_reports(a.report)

@@ -6,6 +6,8 @@ on disk stays [lon, lat]; the engine works in local meters.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 EARTH_R = 6371008.8
@@ -25,6 +27,17 @@ def local_projector(lon0: float, lat0: float):
         return lon0 + np.degrees(x / (EARTH_R * k)), lat0 + np.degrees(y / EARTH_R)
 
     return to_xy, to_lonlat
+
+
+def metres_per_deg(lat: float) -> tuple[float, float]:
+    """Metres per degree of longitude and of latitude at `lat` (WGS84)."""
+    return 111_320 * math.cos(math.radians(lat)), 110_540
+
+
+def local_metres(a, b) -> float:
+    """Metres between two [lon, lat] points a few km apart."""
+    mx, my = metres_per_deg((a[1] + b[1]) / 2)
+    return math.hypot((b[0] - a[0]) * mx, (b[1] - a[1]) * my)
 
 
 def heading_to_unit(heading_deg: float) -> tuple[float, float]:

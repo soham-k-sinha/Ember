@@ -6,7 +6,6 @@ import copy
 import json
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from ember_engine.hazards import hazard_from_scenario
