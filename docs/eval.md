@@ -18,6 +18,13 @@ cd residents && uv run python scripts/eval_sim.py                  # --extractor
 cd residents && uv run python scripts/eval_sim.py --extractor llm  # the real model (paid API)
 ```
 
+## Claude Sonnet 5.5 through Chalk's Model Gateway (what runs on stage)
+
+**50/51 pass (98 %), 1 asked instead of guessing, 0 fail, so 100 % are safe.** Measured 2026-10-18 with
+`--extractor llm`, every call routed through Chalk's Model Gateway (`anthropic/claude-sonnet-5-5`, structured
+output, about 2.5 s per text). The one ASK is #32 "we need a Welch's": the model asks what was meant instead of
+guessing, as D76 tells it to.
+
 ## D75 keyword parser (what runs when the model is down)
 
 **46/51 pass (90 %), 4 asked instead of guessing, 1 fail, so 98 % are safe.** The run is deterministic: two runs
@@ -35,7 +42,7 @@ gave identical tables. It takes about 18 s with the engine's default search budg
 - The ASK rows lose nothing. They are a closure the parser can't place, "thanks", and two locations (the drill
   reads locations in a separate step).
 
-The LLM extractor (`--extractor llm`) has not been run here, because it calls the paid API. Households, needs,
+Households, needs,
 deadlines and scenario timing are synthetic drill data (`scenarios/allston_flood_v1`).
 
 ```

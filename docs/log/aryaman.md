@@ -339,3 +339,8 @@ Run: cd residents && uv run pytest -q; backend on :8020 (e2e.py docstring env, M
 Interfaces: new POST /join {handle} → {handle, player, assigned_number, dev, household_id, texted}; /health drops join_number, adds players; MAX_PLAYERS default 25; POST /optimize seeds 1..2000; env JOIN_NUMBER and VITE_JOIN_NUMBER removed. No contract change.
 Status: engine 103 + smoke, residents 290, web tsc + build + npm test, e2e 79/79 with real Daytona (250 runs 3.15 s fan-out; 10,000 runs 4.1 s fan-out). Measured: v1 78 vs 58 reached, 0 vs 2,317 m³; judge v2 0.61 s; River St 0.79 s; hospital 0.81 s, outage 13 vs 27 min; 5-world comparison 88.6 vs 51.6, outage 11 vs 28 min; worst-20 % 15.7 vs 55.2 (250 worlds), 18.0 vs 54.0 (10,000). 0 Daytona sandboxes left.
 Next: run-through with real phones (join card → iMessage, one call); screenshots; Devpost lessons.
+
+## 2026-10-18 00:25 · Chalk for real + pitch sheet · branch aryaman/chalk-eval · commit (this PR)
+What: Chalk Model Gateway set up (connection `ember`, prefix anthropic/, env mbrx0d03eb41, router key in residents/.env only). One real extraction call through Chalk: correct structured reading in 2.5 s. Simulator-graded eval with the real model through Chalk: 50/51 pass, 1 ask (#32 "Welch's" → asks), 0 fail, 100 % safe (D91). docs/eval.md, README updated; docs/PITCH.md (3-minute pitch + judge Q&A) added.
+Files: docs/eval.md, README.md, docs/PITCH.md, docs/DECISIONS.md, docs/log/aryaman.md
+Status: done.
