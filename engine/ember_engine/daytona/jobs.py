@@ -17,13 +17,15 @@ import time
 import zlib
 
 # perturbation factors (TECHNICAL.md §3.7; synthetic stress ranges, labeled)
-RANGES = {"travel_time_mult": (0.8, 1.6), "endurance_scale": (0.7, 1.3), "storage_scale": (0.7, 1.3), "inflow_scale": (0.85, 1.15)}
+RANGES = {"travel_time_mult": (0.8, 1.6), "endurance_scale": (0.7, 1.3), "storage_scale": (0.7, 1.3), "inflow_scale": (0.8, 1.3),
+          "storm_lead_s": (0.0, 1800.0)}
 P_FAILURE, P_CLOSURE, P_DELAY = 0.4, 0.3, 0.4
 
 
 def sample_perturbation(seed: int, scn: dict, n_edges: int) -> dict:
-    """Seed 0 = nominal. Otherwise: the four factors, plus sometimes one resource failure, one extra road
-    closure, and delayed reports. Deterministic per (seed, scenario, town)."""
+    """Seed 0 = nominal. Otherwise: the five factors (sewage inflow and a storm up to 30 min ahead of its forecast
+    included, D94), plus sometimes one resource failure, one extra road closure, and delayed reports.
+    Deterministic per (seed, scenario, town)."""
     if seed == 0:
         return {}
     rng = random.Random(f"{scn.get('scenario_id')}:{seed}")
