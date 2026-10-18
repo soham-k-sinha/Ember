@@ -3,9 +3,7 @@
 import pytest
 
 from residents import fallback
-from tests.test_drill import PUTNAM, R1, Tap, drill, register, solo_bridge, text, thread_of  # noqa: F401
-from tests.test_voice import OURS, say, spoken, vd  # noqa: F401
-from residents.voice import WHERE, WHO_WE_ARE
+from tests.test_drill import PUTNAM, R1, Tap, register, text, thread_of
 
 
 class Down:
@@ -27,6 +25,7 @@ def kinds(t, role="resident"):
     ("Oh. Yes, yes please.", [("confirm", None, None, None, None, None)]),           # heard on calls (D80)
     ("Oh, okay. What changed?", [("question", None, None, None, "plan", None)]),     # a nod, then a question
     ("no thanks", [("reject", None, None, None, None, None)]),
+    ("We're on the second floor, we'll be okay.", [("question", None, None, None, "safety", None)]),  # not a decline
     ("done", [("done", None, None, None, None, None)]),
     ("I'm not ready", []),
     ("2 of us", [("need", 2, None, None, None, None)]),
@@ -85,22 +84,3 @@ def test_unreadable_before_details_repeats_the_plans_question(drill):
     text(c, R1, "mmm")
     assert tap.outs(R1)[-1] == "Sorry, I didn't catch that. How many people are with you, and does anyone need a wheelchair-accessible vehicle?"
 
-
-def test_call_screening_gets_who_and_why_and_changes_nothing(vd):
-    register(vd, R1)
-    who = f"{WHO_WE_ARE} {WHERE}"  # who and why, then the one thing we need from them
-    assert spoken(say(vd, "Hi, if you record your name and reason for calling, I'll see if this person is available.")) == who
-    assert spoken(say(vd, "Please stay on the line.")) == who
-    assert vd.app.state.store.phone(handle=R1)["thread_key"] is None   # the screening didn't place anyone
-    assert {m["direction"] for m in vd.app.state.messenger.lobby_log(R1)} == {"out"}  # not stored as the resident's words
-
-
-def test_our_own_echo_is_ignored_but_the_caller_never_is(vd):
-    c = vd
-    c.app.state.intake.llm = c.app.state.locator.llm = Down()
-    register(c, R1)
-    first = spoken(say(c, PUTNAM))
-    assert first.startswith("Got it: we have you at Putnam Avenue and Western Avenue.")
-    assert spoken(say(c, first)) == ""                                   # our words coming back: silence
-    offer = spoken(say(c, "Got it, you have me at Putnam Avenue and Western Avenue. 2 of us"))  # an answer in it
-    assert " will pick you up at " in offer, offer

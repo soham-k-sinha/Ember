@@ -9,8 +9,7 @@ import pytest
 from residents.briefing import BRING, SAFETY, TOPICS
 from residents.drill import Drill
 from residents.intake import ESCALATED
-from tests.test_drill import (GREEN, PUTNAM, R1, R2, Tap, clock, drill, place, register,  # noqa: F401
-                              solo_bridge, text, thread_of)
+from tests.test_drill import GREEN, PUTNAM, R1, R2, Tap, clock, place, register, text, thread_of
 from tests.test_extract import ex, fact, outcome
 
 BARE = "We've passed your question to the coordinators."

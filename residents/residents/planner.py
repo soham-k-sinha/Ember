@@ -176,9 +176,26 @@ class Planner:
             raise ReportError("closure_report needs payload.edge_ids (resolve road_hint to edges first)")
 
     def _trigger(self, r: dict) -> str:
-        who = f"household #{r['household_id']}" if "household_id" in r else r.get("facility_id", r["source"])
-        what = {"need": "needs", "closure_report": "road closed", "facility_status": "status"}[r["kind"]]
-        return f"report {r['id']} ({r['source']}): {who} {what}"
+        """The feed's line for a fact: who reported what, in plain words and without ids ("Judge (River Street):
+        road blocked", "Mount Auburn Hospital operator: on backup, 10 min left"). A facility's news is its operator's,
+        whoever typed it (the judge's map too)."""
+        p = r.get("payload") or {}
+        site = next((f["name"] for f in self.store.facilities() if f["id"] == r.get("facility_id")), None)
+        h = next((x for x in self.store.households() if x["household_id"] == r.get("household_id")), {})
+        who = f"{site} operator" if site else "Judge" if h.get("judge") or (not h and r["source"] == "judge") \
+            else h.get("label") or r["source"].capitalize()
+        if r["kind"] == "closure_report":
+            return f"{who} ({', '.join(sorted({self.bridge.edge_name(e) for e in p['edge_ids']}))}): road blocked"
+        if r["kind"] == "reject":
+            return f"{who}: declined the pickup"
+        if r["kind"] == "facility_status":
+            s = p["set"]
+            what = [{"backup": "on backup", "down": "no power", "ok": "power back"}.get(s.get("state")),
+                    "backup_endurance_s" in s and f"{round(s['backup_endurance_s'] / 60)} min left"]
+        else:
+            what = [p.get("people") and f"{p['people']} {'person' if p['people'] == 1 else 'people'}",
+                    (p.get("mobility") or p.get("accessible_vehicle")) and "wheelchair", p.get("medical") and "medical"]
+        return f"{who}: {', '.join(w for w in what if w) or 'update'}"
 
     def _known(self) -> tuple[float, dict | None, list[dict], list[dict]]:
         """(clock, current raw plan, reports known by the clock, the ones the current plan already saw)."""
@@ -266,7 +283,7 @@ class Planner:
         if on_applied is not None:
             await on_applied(a)
         if decision == "reject":
-            await self.replan(trigger=f"{assignment_id} rejected")
+            await self.replan(trigger=self._trigger({"kind": "reject", "source": "resident", **a["target"]}))
         return {"applied": True, "stale": False, "reason": None, "assignment": a}
 
     # ---------- robust optimization (Daytona / local pool) ----------

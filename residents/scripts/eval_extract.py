@@ -15,6 +15,7 @@ import json
 import statistics
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,7 +23,7 @@ sys.path.insert(0, str(ROOT))
 
 from residents.config import Settings  # noqa: E402
 from residents.engine_bridge import normalize_street  # noqa: E402
-from residents.extract import EFFORT, MODEL, SYSTEM, build_prompt, make_llm  # noqa: E402
+from residents.extract import SYSTEM, build_prompt, make_llm  # noqa: E402
 
 RECORDS = {"resident": {"household_id": 10296, "label": "the judge's household", "needs": "unknown", "status": "unknown"},
            "operator": {"id": "mt-auburn", "name": "Mount Auburn Hospital", "type": "hospital", "state": "backup"}}
@@ -51,15 +52,15 @@ def check(sample: dict, ex) -> list[str]:
 
 
 async def main() -> int:
+    env = Settings()
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default=MODEL)
-    ap.add_argument("--effort", default=EFFORT)
+    ap.add_argument("--model", default=env.extract_model)
+    ap.add_argument("--effort", default=env.extract_effort)
     a = ap.parse_args()
-    key = Settings().anthropic_api_key
-    if not key:
+    if not env.anthropic_api_key:
         print("ANTHROPIC_API_KEY is not set (residents/.env)")
         return 2
-    llm = make_llm(key, model=a.model, effort=a.effort)
+    llm = make_llm(replace(env, extract_model=a.model, extract_effort=a.effort))
     samples = json.loads((ROOT / "tests" / "samples.json").read_text())["samples"]
     passed, lat = 0, []
     for i, s in enumerate(samples, 1):

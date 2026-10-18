@@ -4,7 +4,7 @@ drill actually needs, so a text or a call keeps working instead of answering "co
 It returns the same `Extraction` the model would, so everything after it is unchanged (`to_outcome`: a need
 without a head count still asks "how many", a YES only counts if something was offered, ...). It only reads
 what is unmistakable: "yes" / "no" / "done", "2 of us" / "just me" / "me and my mom", "wheelchair", a question's
-topic by its key words, "<street> is flooded". Anything else → None (the caller asks a specific question, never
+topic by its key words, "<street> is flooded", "we'll be okay here" (the safety advice for staying). Anything else → None (the caller asks a specific question, never
 a guess). Confidence is fixed at 0.8 (above the ask threshold, below a clear model read).
 """
 
@@ -20,6 +20,7 @@ YES = re.compile(r"^((oh|um+|uh+|well) )*(yes|yeah|yep|yup|sure|ok|okay|confirm(
                  r"that works)\b(?!.*\bnot?\b)")  # "oh, yes, yes please" (heard on calls)
 ACK = re.compile(r"^((oh|um+|uh+|well) )*(ok|okay)\b")  # "okay, what changed?": a nod, then the question
 NO = re.compile(r"^(no|nope|nah|cancel|decline|don'?t|do not)\b")
+STAY = re.compile(r"\b(stay(ing)? (put|here|home)|(we|i)'?re staying|(we|i)'?ll be (ok|okay|fine|alright))\b")
 DONE = re.compile(r"\b(done|ready|we'?re here|i'?m here|we are here|i am here|at the corner|on the (van|truck|bus)|"
                   r"aboard|on board|arrived|checked in|it'?s connected|connected)\b")
 COUNT = re.compile(r"\b" + _N + r"\s+(of us|people|persons|adults|in total|total)\b")
@@ -104,6 +105,8 @@ def parse(text: str, role: str = "resident") -> Extraction | None:
             facts.append(_fact("confirm"))
         elif DONE.search(t) and not re.search(r"\b(not|n't|isn't|aren't|haven't)\b|n't\b", t):
             facts.append(_fact("done"))
+        elif STAY.search(t):  # "we're upstairs, we'll be okay" (no pickup cancelled on it): what to do if they stay
+            facts.append(_fact("question", question_topic="safety"))
     if not facts and GREETING.search(t) and len(t.split()) <= 4:
         return Extraction(facts=[_fact("other")], confidence=0.8, clarifying_question=None)  # → their status / the plan's question
     if QUESTION.search(t) and not any(f.kind in ("confirm", "reject") for f in facts):

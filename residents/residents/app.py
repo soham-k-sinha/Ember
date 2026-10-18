@@ -201,13 +201,13 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
             app.state.planner.clock_hooks.append(app.state.guide.tick)
             app.state.outbound.guide = app.state.guide  # "what do I do?" includes the step they're on
         app.state.intake = None
-        model = None
-        if app.state.planner is not None and settings.extract_enabled and (llm is not None or settings.anthropic_api_key):
-            model = llm or make_llm(settings.anthropic_api_key)
+        if app.state.planner is not None:  # no model (no key, or EXTRACT_ENABLED=0): texts go to the keyword parser
+            model = None
+            if settings.extract_enabled and (llm is not None or settings.anthropic_api_key):
+                model = llm or make_llm(settings)
             app.state.intake = Intake(app.state.store, app.state.messenger, app.state.planner, model,
                                       app.state.outbound, app.state.guide)
             app.state.messenger.inbound_hooks.append(app.state.intake.on_inbound)
-        if app.state.planner is not None:
             from .places import nominatim
             app.state.locator = Locator(app.state.store, app.state.messenger, app.state.planner, model,
                                         nominatim if settings.geocode_enabled else None, drill_tips=settings.auto_clock)
@@ -221,7 +221,7 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         if app.state.planner is not None and settings.reply_enabled and (writer is not None or (
                 settings.anthropic_api_key and settings.extract_enabled)):
             from .reply import make_writer
-            app.state.messenger.writer = turn_writer(app, writer or make_writer(settings.anthropic_api_key))
+            app.state.messenger.writer = turn_writer(app, writer or make_writer(settings))
         if app.state.planner is not None:  # after messenger + hooks exist: a fresh plan v1 texts its open questions
             await start_engine(settings, app.state.store, app.state.planner)
         app.state.listener = None
@@ -261,7 +261,7 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
             app.state.store.close()
 
     app = FastAPI(title="Ember backend", version="0.1.0", lifespan=lifespan)
-    app.add_middleware(CORSMiddleware, allow_origins=list(settings.cors_origins),
+    app.add_middleware(CORSMiddleware, allow_origin_regex=settings.cors_origin_regex,
                        allow_methods=["*"], allow_headers=["*"])
 
     def store() -> Store:
@@ -281,7 +281,7 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         listener = app.state.listener
         return {"ok": True, "scenario_id": meta.get("scenario_id"), "plan_version": meta.get("plan_version"),
                 "t_s": meta.get("t_s"), "mode": "engine" if app.state.planner is not None else "static",
-                "extraction": "on" if app.state.intake is not None else "off", "photon": "enabled" if messenger().photon is not None else "disabled",
+                "extraction": "on" if app.state.intake and app.state.intake.llm else "off", "photon": "enabled" if messenger().photon is not None else "disabled",
                 "photon_listener": listener.status() if listener is not None else None, "join_number": settings.join_number or None,
                 "max_players": settings.max_players}
 
@@ -386,8 +386,8 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         """Start the robust fan-out in the background; watch WS `scatter_point` events, then `plan`.
         GET /optimize for the outcome. 409 while one is running."""
         p = planner()
-        if not (1 <= seeds <= 200 and 1 <= k <= 8):
-            raise HTTPException(422, "seeds must be 1..200 and k 1..8")
+        if not (1 <= seeds <= 1000 and 1 <= k <= 8):
+            raise HTTPException(422, "seeds must be 1..1000 and k 1..8")
         if p.optimizing:
             raise HTTPException(409, "an optimization is already running")
 

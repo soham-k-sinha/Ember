@@ -140,10 +140,21 @@ def test_close_road_closes_both_directions_and_replans(ec, bridge):
 def test_disruption_facility_and_bad_bodies(ec):
     r = ec.post("/disruption", json={"facility_id": "mt-auburn", "set": {"backup_endurance_s": 600}, "note": "fuel leak"})
     assert r.status_code == 200 and r.json()["report"]["kind"] == "facility_status" and r.json()["plan_version"] == 2
+    assert ec.get("/plan/current").json()["trigger"] == "Mount Auburn Hospital operator: 10 min left"  # the site's news
     assert ec.post("/disruption", json={}).status_code == 422
     assert ec.post("/disruption", json={"close_edges": [1], "facility_id": "mt-auburn", "set": {"a": 1}}).status_code == 422
     assert ec.post("/disruption", json={"facility_id": "mt-auburn", "set": {}}).status_code == 422
     assert ec.post("/disruption", json={"close_edges": [10**6]}).status_code == 422
+
+
+def test_a_text_without_a_model_still_replans(ec):
+    """No key / EXTRACT_ENABLED=0: the keyword parser reads the text; the planner acts on it all the same."""
+    r = ec.post("/dev/inbound", json={"role": "resident", "text": "2 of us, one in a wheelchair, River St is blocked"})
+    assert r.status_code == 200 and ec.get("/health").json()["extraction"] == "off"
+    plan = ec.get("/state").json()["plan"]
+    assert plan["version"] == 2 and plan["trigger"] == "Judge: 2 people, wheelchair; Judge (River Street): road blocked"
+    [a] = [a for a in plan["assignments"] if a["target"] == {"household_id": JUDGE} and a["status"] not in ("cancelled", "rejected")]
+    assert a["resource_id"] == "van-3"  # the accessible van
 
 
 def test_clock_moves_the_flood(ec, bridge):

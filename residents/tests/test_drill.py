@@ -12,7 +12,6 @@ from fastapi.testclient import TestClient
 from ember_engine.state import validate_state
 from residents.app import create_app
 from residents.drill import Drill, SetupError, main as drill_main
-from residents.engine_bridge import EngineBridge
 from residents.extract import to_outcome
 from residents.guide import STEP_DONE
 from residents.locate import JOIN_LEAD_S
@@ -49,21 +48,9 @@ SCRIPT = {
 }
 
 
-@pytest.fixture(scope="session")
-def solo_bridge():
-    """Only the drill's people need rescue (no synthetic households): offers come fast and are predictable."""
-    return EngineBridge(SCENARIO, moves=10, solo=True)
-
-
 def make(settings, b, auto=True, **kw):
     s = replace(settings, scenario=SCENARIO, extract_enabled=True, auto_clock=auto, **kw)
     return TestClient(create_app(s, bridge=b, llm=FakeLLM(SCRIPT)))
-
-
-@pytest.fixture
-def drill(settings, solo_bridge):
-    with make(settings, solo_bridge) as c:
-        yield c
 
 
 class Tap:
@@ -370,6 +357,20 @@ def test_operator_gets_generator_steps(drill):
     drill.app.state.intake.llm.script["thanks"] = ex(fact("other"))
     text(drill, OP, "thanks", role="operator")
     assert tap.outs(OP)[-1].startswith("Mount Auburn Hospital is on Generator")
+
+
+def test_a_moved_pickup_says_why(drill):
+    tap = Tap(drill)
+    register(drill)
+    thread = place(drill, tap, R1, CALLENDER)
+    text(drill, R1, "just me")
+    text(drill, R1, "yes")
+    p = drill.app.state.planner
+    _, plan = drill.portal.call(p.close_road, p.bridge.resolve_road("Callender St", None, thread["household_id"]), "resident")
+    assert plan["trigger"] == "Resident (Callender Street): road blocked"
+    a = next(x for x in drill.app.state.store.current_plan()["assignments"] if x["target"] == thread and x["status"] == "confirmed")
+    update = drill.app.state.outbound.compose(a, thread, p.now(), plan["version"])
+    assert update.startswith("Update: Callender Street was reported blocked, so Van "), update
 
 
 # ---------- runs: reset and restart ----------
@@ -704,6 +705,7 @@ def test_three_phones_join_at_once(lobby, solo_bridge):
     labels = {h["household_id"]: h["label"] for h in c.get("/state").json()["households"]}
     assert sorted(labels[h] for h in hids) == ["Player 1", "Player 2", "Player 3"]
     assert c.app.state.store.plan_versions() == [1, 2]                      # one replan for the burst
+    assert c.app.state.store.plan(2)["trigger"] == "Players 1, 2, 3 joined"
     for h in phones:
         texts = [x["content"]["text"] for x in fp.sends() if x["spaceId"] == f"pho_spc_{h[-4:]}"]
         assert texts[0].startswith(f"[EMBER drill] Welcome to the EMBER flood drill. You're Player {ps[h]['player']}:")
