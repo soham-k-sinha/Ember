@@ -3,13 +3,14 @@ import {
   formatNeeds,
   formatNumber,
   formatSim,
-  planCause,
+  keptBeforeTradeoff,
   planDiff,
   planTiming,
-  poolLabel,
   replanSeconds,
+  reporterJob,
   statusLabel,
   targetLabel,
+  tradedFacility,
 } from "../format";
 import {
   assignmentById,
@@ -24,6 +25,7 @@ import {
   targetName,
 } from "../model";
 import { town } from "../fixtures";
+import { robustOf } from "../live";
 import { householdName, members, type WalkerPlan } from "../people";
 import { householdTimeline, resourceTimeline, type Playback, type TimelineItem } from "../playback";
 import type {
@@ -67,7 +69,7 @@ export function Panels(props: {
   onUndoClosure: (edgeId: number) => void;
   onReplan: () => void;
   onCompare: () => void;
-  onOptimize: () => void;
+  onOptimize: (seeds?: number) => void;
   playback: Playback | null;
   walkers: WalkerPlan | null;
   follow: Selection | null;
@@ -147,7 +149,8 @@ function feedItems(state: StateSnapshot, plans: PlanSnapshot[], playback: Playba
       t_s: plan.created_at_t_s,
       kind: "plan",
       title: `v${plan.version} ${planTiming(plan)}`,
-      text: [planCause(plan, state), plan.version > 1 ? planDiff(plan, state) : ""].filter(Boolean).join(" → "),
+      // the reporter's own outcome leads when there is one; their fact is the row just below
+      text: [reporterJob(plan, state) ? "" : plan.trigger, plan.version > 1 ? planDiff(plan, state) : ""].filter(Boolean).join(" → "),
     });
   }
   // newest first; at the same moment, later in the story first, then later arrivals first
@@ -225,7 +228,7 @@ function PlanTab(props: { state: StateSnapshot; plans: PlanSnapshot[]; busy: str
                 <span>{formatSim(plan.created_at_t_s)}</span>
                 {seconds != null ? <span className="pill">{seconds.toFixed(2)} s</span> : null}
               </header>
-              {plan.trigger ? <p>{planCause(plan, props.state)}</p> : null}
+              {plan.trigger ? <p>{plan.trigger}</p> : null}
               {diff ? <p className="meta">{diff}</p> : null}
             </li>
           );
@@ -670,6 +673,8 @@ const PROOF_METRICS: Array<{ metric: "people_reached_before_deadline" | "people_
 ];
 
 function Proof(props: {
+  t: number;
+  plans: PlanSnapshot[];
   robust: RobustSummary | null;
   comparison: Comparison | null;
   nominal: { ember?: PlanMetrics; baseline?: PlanMetrics };
@@ -677,7 +682,7 @@ function Proof(props: {
   scatterTotal: number | null;
   busy: string | null;
   onCompare: () => void;
-  onOptimize: () => void;
+  onOptimize: (seeds?: number) => void;
 }) {
   const comparison = props.comparison;
   const rows = PROOF_METRICS.map(({ metric, label, unit }) => {
@@ -687,9 +692,13 @@ function Proof(props: {
       ? { metric, label, unit, baseline: row.baseline_mean * scale, ember: row.ember_mean * scale, spread: `EMBER − baseline: ${formatNumber(row.diff_min * scale)} to ${formatNumber(row.diff_max * scale)}` }
       : { metric, label, unit, baseline: (props.nominal.baseline?.[metric] ?? 0) * scale, ember: (props.nominal.ember?.[metric] ?? 0) * scale, spread: "" };
   });
+  const plan = props.plans[props.plans.length - 1];
+  const kept = tradedFacility(plan) ? keptBeforeTradeoff(plan) : undefined;
   const points = props.scatter;
   const robust = props.robust;
   const result = robust && (points.length === 0 || robust.batch_id === points[0].batchId) ? robust : null;
+  // at t = 0 nothing has happened yet: the stress test picks the plan to stage before the season
+  const optimizeLabel = props.t === 0 ? "Pre-season stress test" : "Optimize";
   return (
     <div className="stack">
       <section>
@@ -713,6 +722,7 @@ function Proof(props: {
                 <td>
                   {row.label}
                   {row.spread ? <span>{row.spread}</span> : null}
+                  {row.metric === "overflow_m3" && kept != null ? <span>{formatNumber(kept)} m³ kept out before the hospital call</span> : null}
                 </td>
                 <td>{formatNumber(row.baseline, 0)} {row.unit}</td>
                 <td><strong>{formatNumber(row.ember, 0)}</strong> {row.unit}</td>
@@ -728,39 +738,58 @@ function Proof(props: {
       </section>
       <section>
         <header className="section-head">
-          <h3>Stress test on Daytona</h3>
-          <button className="primary" disabled={props.busy != null} onClick={props.onOptimize}>
-            {props.busy === "optimize" ? "Running…" : "Optimize"}
-          </button>
+          <h3>Stress test{result ? ` · ${result.pool === "daytona" ? `Daytona · ${result.workers ?? "?"} sandboxes` : "this laptop"}` : ""}</h3>
         </header>
-        <p className="throughput">
-          {props.busy === "optimize"
-            ? `${points.length}${props.scatterTotal ? ` / ${props.scatterTotal}` : ""} worlds back`
-            : result
-              ? throughput(result)
-              : "Press Optimize to stress-test this plan on 250 worlds: the top candidate plans and the baseline, with travel times, flood timing, backup endurance and a vehicle failing perturbed."}
-        </p>
+        <div className="actions">
+          <button className="primary" disabled={props.busy != null} onClick={() => props.onOptimize()}>
+            {props.busy === "optimize" ? "Running…" : optimizeLabel}
+          </button>
+          <button className="ghost" disabled={props.busy != null} onClick={() => props.onOptimize(2000)}>
+            {props.busy === "stress" ? "Running…" : "Stress test 10,000 worlds"}
+          </button>
+        </div>
+        {props.busy === "optimize" || props.busy === "stress" ? (
+          <p className="throughput">{formatNumber(points.length)}{props.scatterTotal ? ` / ${formatNumber(props.scatterTotal)}` : ""} worlds back</p>
+        ) : result ? (
+          <Throughput robust={result} />
+        ) : (
+          <p className="throughput">
+            Press {optimizeLabel} to stress-test this plan on 250 worlds (5 plans × 50), or on 10,000: the top candidate plans and the baseline, with travel times, flood timing, backup endurance and a vehicle failing perturbed.
+          </p>
+        )}
         {points.length > 0 ? <ScatterChart points={points} chosen={result?.chosen ?? null} /> : null}
-        {result?.ranking ? <Verdict robust={result} /> : null}
+        {result?.ranking ? <Verdict robust={result} preSeason={(props.plans.find((item) => robustOf(item)?.batch_id === result.batch_id)?.created_at_t_s ?? props.t) === 0} /> : null}
       </section>
     </div>
   );
 }
 
-function throughput(robust: RobustSummary): string {
-  const where = poolLabel(robust);
-  const time = robust.fanout_wall_s != null ? ` · ${robust.fanout_wall_s.toFixed(1)} s` : "";
-  const startup = robust.startup_s ? ` (+${robust.startup_s.toFixed(1)} s startup)` : "";
-  return `${where} · ${robust.jobs} worlds${time}${startup}`;
+/** Fan-out wall time of the same worlds on 8 local processes, measured once (D86); shown next to a Daytona run. */
+const LAPTOP_S: Record<number, number> = { 250: 2.3, 1000: 4.5, 5000: 13.7, 10000: 24.3 };
+
+function Throughput(props: { robust: RobustSummary }) {
+  const r = props.robust;
+  const laptop = r.laptop_s ?? LAPTOP_S[r.jobs];
+  return (
+    <p className="throughput tile">
+      <strong>{formatNumber(r.jobs)} worlds</strong>
+      <span>
+        {r.pool === "daytona" ? `Daytona ${r.workers ?? "?"} sandboxes` : `this laptop, ${r.workers ?? "?"} workers`} <b>{formatNumber(r.fanout_wall_s, 1)} s</b>
+        {r.startup_s ? ` (+${formatNumber(r.startup_s, 1)} s startup)` : ""}
+      </span>
+      {r.pool === "daytona" && laptop != null ? <span>laptop <b>~{formatNumber(laptop)} s</b> measured</span> : null}
+    </p>
+  );
 }
 
-function Verdict(props: { robust: RobustSummary }) {
+function Verdict(props: { robust: RobustSummary; preSeason: boolean }) {
   const r = props.robust;
   const worst = (candidate: string) => r.ranking?.find((row) => row.candidate === candidate)?.worst20_people_unreached;
   const top = r.ranking?.find((row) => row.candidate !== "baseline")?.candidate;
+  const pre = props.preSeason && r.nominal_best !== r.chosen;
   const rows: Array<{ label: string; value?: number; tone: string }> = [
-    { label: `Chosen · ${r.chosen}`, value: worst(r.chosen), tone: "chosen" },
-    ...(r.nominal_best !== r.chosen ? [{ label: `Best on the forecast · ${r.nominal_best}`, value: worst(r.nominal_best), tone: "candidate" }] : []),
+    { label: `${pre ? "Robust pick" : "Chosen"} · ${r.chosen}`, value: worst(r.chosen), tone: "chosen" },
+    ...(r.nominal_best !== r.chosen ? [{ label: `${pre ? "Forecast plan" : "Best on the forecast"} · ${r.nominal_best}`, value: worst(r.nominal_best), tone: "candidate" }] : []),
     // D86: the most robust candidate may win by less than 1 person; then the forecast plan is kept and both are shown
     ...(top && top !== r.chosen && top !== r.nominal_best ? [{ label: `Most robust · ${top}`, value: worst(top), tone: "candidate" }] : []),
     { label: "Baseline", value: worst("baseline"), tone: "baseline" },
@@ -775,14 +804,15 @@ function Verdict(props: { robust: RobustSummary }) {
           </li>
         ))}
       </ul>
-      <p className="meta">People not reached in the worst 20% of {r.seeds} worlds. {r.nominal_best !== r.chosen ? "EMBER keeps the plan that holds up when things go wrong, not the one that looks best on the forecast." : "Kept the forecast plan: no candidate beats it by ≥ 1 person in the worst 20%."}</p>
+      <p className="meta">People not reached in the worst 20% of {r.seeds} worlds. {pre ? `Pre-season, before any report: staging the robust pick leaves ${formatNumber((worst(r.nominal_best) ?? 0) - (worst(r.chosen) ?? 0), 1)} fewer people unreached in the worst 20% than the forecast plan.` : r.nominal_best !== r.chosen ? "EMBER keeps the plan that holds up when things go wrong, not the one that looks best on the forecast." : "Kept the forecast plan: no candidate beats it by ≥ 1 person in the worst 20%."}</p>
     </>
   );
 }
 
 const CLASSES = ["candidate", "baseline", "chosen"] as const;
 
-/** One path per class, not one element per run, so 1,000 runs stay cheap to redraw as they stream in. */
+/** One path per class, not one element per run, and one dot per pixel: 10,000 runs land on a few hundred pixels, so
+ * they stay cheap to redraw as they stream in while the caption counts every run. */
 function ScatterChart(props: { points: ScatterPoint[]; chosen: string | null }) {
   const width = 320;
   const height = 190;
@@ -796,11 +826,15 @@ function ScatterChart(props: { points: ScatterPoint[]; chosen: string | null }) 
     maxY = Math.max(maxY, point.overflowM3);
   }
   const paths: Record<(typeof CLASSES)[number], string> = { candidate: "", baseline: "", chosen: "" };
+  const drawn = new Set<string>();
   for (const point of props.points) {
     const kind = point.candidate === "baseline" ? "baseline" : point.candidate === props.chosen || point.candidate === "ember" ? "chosen" : "candidate";
     const r = kind === "chosen" ? 3.5 : 2.8;
-    const cx = left + (point.peopleUnreached / maxX) * (width - left - pad);
-    const cy = height - bottom - (point.overflowM3 / maxY) * (height - bottom - pad);
+    const cx = Math.round(left + (point.peopleUnreached / maxX) * (width - left - pad));
+    const cy = Math.round(height - bottom - (point.overflowM3 / maxY) * (height - bottom - pad));
+    const key = `${kind} ${cx} ${cy}`;
+    if (drawn.has(key)) continue;
+    drawn.add(key);
     paths[kind] += `M${(cx - r).toFixed(1)} ${cy.toFixed(1)}a${r} ${r} 0 1 0 ${2 * r} 0a${r} ${r} 0 1 0 ${-2 * r} 0`;
   }
   return (
@@ -810,7 +844,7 @@ function ScatterChart(props: { points: ScatterPoint[]; chosen: string | null }) 
         <line className="axis" x1={left} y1={pad} x2={left} y2={height - bottom} />
         <text className="tick" x={left} y={height - bottom + 12}>0</text>
         <text className="tick end" x={width - pad} y={height - bottom + 12}>{Math.round(maxX)}</text>
-        <text className="tick end" x={left - 4} y={pad + 4}>{Math.round(maxY).toLocaleString("en-US")}</text>
+        <text className="tick end" x={left - 4} y={pad + 4}>{maxY.toLocaleString("en-US", { notation: "compact", maximumFractionDigits: 1 })}</text>
         <text className="label" x={(left + width) / 2} y={height - 4}>people not reached →</text>
         <text className="label" transform={`translate(10 ${(height - bottom) / 2}) rotate(-90)`}>overflow m³ →</text>
         {CLASSES.map((kind) => (
@@ -821,7 +855,7 @@ function ScatterChart(props: { points: ScatterPoint[]; chosen: string | null }) 
         <span className="key"><i className="dot chosen" /> {props.chosen ? `chosen (${props.chosen})` : "chosen"}</span>
         <span className="key"><i className="dot candidate" /> other candidates</span>
         <span className="key"><i className="dot baseline" /> baseline</span>
-        <span>{props.points.length} worlds</span>
+        <span>{formatNumber(props.points.length)} worlds</span>
       </figcaption>
     </figure>
   );

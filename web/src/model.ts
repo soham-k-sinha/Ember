@@ -55,11 +55,16 @@ export function edgeRecord(id: number): TownEdge | undefined {
   return edgeById.get(id);
 }
 
+/** A named street at this road node ("Soldiers Field Road"), if one meets it. */
+export function streetAt(node: number): string | undefined {
+  return town.edges.find((edge) => (edge.u === node || edge.v === node) && edge.name)?.name ?? undefined;
+}
+
 export function assistedIds(state: StateSnapshot): Set<number> {
   return new Set(state.households.map((household) => household.household_id));
 }
 
-export function activeKeyframe(t: number): ScenarioKeyframe | null {
+function activeKeyframe(t: number): ScenarioKeyframe | null {
   let current: ScenarioKeyframe | null = null;
   for (const frame of scenario.hazard.keyframes) {
     if (frame.t_s <= t) current = frame;

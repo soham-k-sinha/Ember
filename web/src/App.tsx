@@ -7,7 +7,7 @@ import { API_BASE, fixturePlaybacks, publishedComparison, publishedScatter, publ
 import { buildGraph, planWalkers, type BgHousehold } from "./people";
 import { asPlayback, stateFromPlayback, type Playback } from "./playback";
 import { loadFullTown, type FullTown } from "./townFull";
-import { formatSim, planDiff, planTiming } from "./format";
+import { formatSim } from "./format";
 import { clockLabel } from "./iso/lighting";
 import { asCalls, asComparison, asPhones, asState, getJson, openSocket, postJson, robustOf, type LiveStatus } from "./live";
 import { closedEdges } from "./model";
@@ -47,7 +47,7 @@ type Model = {
   scatter: ScatterPoint[];
   scatterBatch: string | null;
   scatterTotal: number | null;
-  /** the last robust optimisation (GET /optimize), kept after later replans drop it from the plan */
+  /** the last robust optimisation (from the plan that carries it, or GET /optimize), kept after later replans drop it from the plan */
   robust: RobustSummary | null;
   plans: PlanSnapshot[];
   judge: JudgeClosure[];
@@ -144,11 +144,13 @@ function reducer(state: Model, action: Action): Model {
         snapshot: action.state,
         previous: action.state.t_s === state.snapshot.t_s ? state.previous : state.snapshot,
         plans: withPlan(state.plans, action.state.plan),
+        robust: robustOf(action.state.plan) ?? state.robust,
       };
     case "plan":
       return {
         ...state,
         plans: withPlan(state.plans, action.plan),
+        robust: robustOf(action.plan) ?? state.robust,
         snapshot: state.snapshot.plan_version === action.plan.version || state.snapshot.plan == null
           ? { ...state.snapshot, plan: action.plan, plan_version: action.plan.version }
           : state.snapshot,
@@ -496,17 +498,6 @@ export function App() {
     return () => window.clearInterval(handle);
   }, [live, root]);
 
-  // a toast for every new live plan version: what changed and how long the replan took
-  const latestPlan = model.plans[model.plans.length - 1];
-  const seenPlan = useRef<{ mode: Mode; version: number } | null>(null);
-  useEffect(() => {
-    if (!latestPlan) return;
-    const seen = seenPlan.current;
-    seenPlan.current = { mode: model.mode, version: latestPlan.version };
-    if (!live || seen?.mode !== "live" || latestPlan.version <= seen.version) return;
-    toast([`v${seen.version} → v${latestPlan.version}`, planTiming(latestPlan), planDiff(latestPlan, model.snapshot) || "no assignment changed"].filter(Boolean).join(" · "), "plan");
-  }, [latestPlan?.version, model.mode]);
-
   // live: the backend's clock follows the scrubber (debounced) and the play head
   useEffect(() => {
     if (!live) return;
@@ -569,16 +560,17 @@ export function App() {
     }
   }
 
-  async function optimize() {
+  /** 50 seeds × 5 plans = 250 worlds by default; the stress test sends 2000 seeds = 10,000 worlds. */
+  async function optimize(seeds?: number) {
     dispatch({ type: "tab", tab: "proof" });
     if (!live) {
       toast("Optimize runs on the backend (Daytona, or the local pool): switch to Live in settings.");
       return;
     }
-    dispatch({ type: "busy", busy: "optimize" });
+    dispatch({ type: "busy", busy: seeds ? "stress" : "optimize" });
     try {
       try {
-        await postJson(`${root}/optimize`, {}, 15000);
+        await postJson(`${root}/optimize${seeds ? `?seeds=${seeds}` : ""}`, {}, 15000);
       } catch (error) {
         // 409 = one is already running: watch that one instead of failing
         if (!(error instanceof Error && error.message.startsWith("409"))) throw error;
@@ -753,7 +745,7 @@ export function App() {
           nominal={nominal}
           scatter={model.scatter}
           scatterTotal={model.scatterTotal}
-          robust={robustOf(model.snapshot.plan) ?? model.robust}
+          robust={model.robust}
           plans={plans}
           judge={model.judge}
           busy={model.busy}
@@ -761,7 +753,7 @@ export function App() {
           onUndoClosure={(edgeId) => dispatch({ type: "undo", edgeId })}
           onReplan={() => void replan()}
           onCompare={() => void compare()}
-          onOptimize={() => void optimize()}
+          onOptimize={(seeds) => void optimize(seeds)}
         />
       </main>
       {sources ? <Sources synthetic={model.snapshot.synthetic ?? scenario.synthetic ?? []} onClose={() => setSources(false)} /> : null}

@@ -1,15 +1,14 @@
 /** What floats over the stage: the score card, the latest change, toasts, the join card, and the sources drawer. */
 
-import { useCallback, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import qrcode from "qrcode-generator";
 import { scenario } from "../fixtures";
 import { postJson } from "../live";
-import { formatNumber, maskHandle, planCause, planDiff, planTiming, shortName, statusLabel } from "../format";
-import { facilityById, peopleCount, resourceById } from "../model";
+import { formatNumber, keptBeforeTradeoff, maskHandle, planDiff, planTiming, reporterJob, shortName, statusLabel, tradedFacility } from "../format";
+import { facilityById, peopleCount, resourceById, streetAt } from "../model";
 import type { Calls, Phone, PlanMetrics, PlanSnapshot, StateSnapshot } from "../types";
 
 const WAITING = new Set(["needs", "unknown", "assigned", "confirmed"]);
-const FACTS = new Set(["need", "closure_report", "facility_status"]);
 
 /** People still waiting for help at this moment. */
 function waitingPeople(state: StateSnapshot): number {
@@ -47,13 +46,10 @@ export function ScoreCard(props: {
   const { plan, projected, baseline, state } = props;
   const minutes = (s?: number) => (s == null ? undefined : Math.round(s / 60));
   // the plan ranks people, then the hospital, then sewage: once it trades the overflow away it says so in
-  // `unresolved`, and the tile keeps what EMBER kept out of the river before that call (read only while every
-  // fact is planned for, so a baseline that already saw the next report is never compared with the old plan)
-  const cost = plan?.unresolved.find((item) => "facility_id" in item.target);
-  const settled = !cost && !state.reports.some((report) => FACTS.has(report.kind) && !report.resolved);
-  const kept = useRef<number>();
-  if (settled && projected?.overflow_m3 != null && baseline?.overflow_m3 != null) kept.current = baseline.overflow_m3 - projected.overflow_m3;
-  const moved = cost ? plan?.assignments.find((item) => item.task === "protect" && item.status !== "cancelled") : undefined;
+  // `unresolved`, and the tile shows what EMBER kept out of the river before that call
+  const traded = tradedFacility(plan);
+  const kept = keptBeforeTradeoff(plan);
+  const moved = traded ? plan?.assignments.find((item) => item.task === "protect" && item.status !== "cancelled") : undefined;
   const tradeOff = moved && "facility_id" in moved.target
     ? `${shortName(resourceById(state, moved.resource_id)?.name ?? moved.resource_id)} moved to ${shortName(facilityById(state, moved.target.facility_id)?.name ?? moved.target.facility_id)}: people first; ${formatNumber(projected?.overflow_m3)} m³ accepted, stated`
     : undefined;
@@ -72,13 +68,13 @@ export function ScoreCard(props: {
       />
       <Score label="People still at home now" value={waitingPeople(state)} better="lower" />
       <Score label="Hospital outage" value={minutes(projected?.hospital_outage_s)} baseline={minutes(baseline?.hospital_outage_s)} unit="min" better="lower" />
-      {kept.current != null ? (
+      {kept != null ? (
         <Score
           label="Kept out of the Charles"
-          value={kept.current}
+          value={kept}
           unit="m³"
           better="higher"
-          sub={tradeOff ?? `sewage overflow ${formatNumber(projected?.overflow_m3)} m³ · baseline ${formatNumber(baseline?.overflow_m3)} m³`}
+          sub={traded ? ["before the hospital call", tradeOff].filter(Boolean).join(" · ") : `sewage overflow ${formatNumber(projected?.overflow_m3)} m³ · baseline ${formatNumber(baseline?.overflow_m3)} m³`}
         />
       ) : (
         <Score label="Sewage overflow" value={projected?.overflow_m3} baseline={baseline?.overflow_m3} unit="m³" better="lower" sub={tradeOff} />
@@ -95,9 +91,13 @@ export function Latest(props: { plan?: PlanSnapshot; state: StateSnapshot }) {
   if (!plan) return null;
   return (
     <p className="latest" key={plan.version}>
-      {plan.version > 1 ? (
+      {plan.version > 1 && reporterJob(plan, state) ? (
         <>
-          <b>{planCause(plan, state)}</b> → {planDiff(plan, state) || "no assignment changed"} <span>· v{plan.version} {planTiming(plan)}</span>
+          <b>{planDiff(plan, state)}</b> <span>· {plan.trigger} · v{plan.version} {planTiming(plan)}</span>
+        </>
+      ) : plan.version > 1 ? (
+        <>
+          <b>{plan.trigger}</b> → {planDiff(plan, state) || "no assignment changed"} <span>· v{plan.version} {planTiming(plan)}</span>
         </>
       ) : (
         <>
@@ -108,7 +108,7 @@ export function Latest(props: { plan?: PlanSnapshot; state: StateSnapshot }) {
   );
 }
 
-export type Toast = { id: number; text: string; tone: "plan" | "info" | "error" };
+type Toast = { id: number; text: string; tone: "plan" | "info" | "error" };
 
 let nextToast = 0;
 
@@ -152,7 +152,7 @@ function QrCode(props: { text: string }) {
   );
 }
 
-type Joined = { player: number; assigned_number: string };
+type Joined = { handle: string; player: number; assigned_number: string };
 
 /** Multiplayer (D89): a shared iMessage line only hears phones registered with it, so a player enters their number
  * here first (POST /join), then texts JOIN EMBER to the line it returns; that first text places them. */
@@ -164,6 +164,19 @@ export function JoinCard(props: { apiBase: string | null; phones: Phone[]; calls
   const [busy, setBusy] = useState(false);
   const players = props.phones.filter((phone) => phone.player != null).sort((a, b) => a.player! - b.player!);
   const onCall = new Set(props.calls.live.map((call) => call.handle));
+  const reset = () => {
+    setJoined(null);
+    setHandle("");
+  };
+  // their first text placed them: say where they live for 5 s, then the card is ready for the next phone
+  const placed = joined ? props.phones.find((phone) => phone.handle === joined.handle)?.household_id ?? null : null;
+  const home = props.state.households.find((item) => item.household_id === placed);
+  const street = home ? streetAt(home.node) : undefined;
+  useEffect(() => {
+    if (placed == null) return;
+    const timer = window.setTimeout(reset, 5000);
+    return () => window.clearTimeout(timer);
+  }, [placed]);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!props.apiBase || !handle.trim()) return;
@@ -186,18 +199,23 @@ export function JoinCard(props: { apiBase: string | null; phones: Phone[]; calls
       </button>
       {open ? (
         <div className="join-body">
-          {joined ? (
+          {joined && placed != null ? (
+            <p className="join-done">
+              Player {joined.player} joined: you're household #{placed}{street ? ` on ${street}` : ""}.
+            </p>
+          ) : joined ? (
             <div className="join-qr">
               <QrCode text={`sms:${joined.assigned_number}?&body=JOIN%20EMBER`} />
               <p>
-                Player {joined.player}: text <b>JOIN EMBER</b> to {joined.assigned_number}. You get a real home in the flood zone, and the plan has to save you.
-                <button className="join-again" onClick={() => { setJoined(null); setHandle(""); }}>Another phone</button>
+                Player {joined.player}: from your iPhone (iMessage), text <b>JOIN EMBER</b> to {joined.assigned_number}. You get a real home in the flood zone, and the plan has to save you.
+                <button className="join-again" onClick={reset}>Another phone</button>
               </p>
             </div>
           ) : props.apiBase ? (
             <form className="join-form" onSubmit={submit}>
               <input type="tel" inputMode="tel" autoComplete="tel" placeholder="Your mobile, e.g. +1 617 555 0123" value={handle} onChange={(event) => setHandle(event.target.value)} aria-label="Your mobile number" />
               <button type="submit" disabled={busy || !handle.trim()}>{busy ? "…" : "Join"}</button>
+              <p className="join-note">iPhone (iMessage) only</p>
               {error ? <p className="join-error">{error}</p> : null}
             </form>
           ) : (

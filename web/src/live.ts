@@ -14,7 +14,7 @@ import type {
 
 export type LiveStatus = "idle" | "connecting" | "live" | "error";
 
-export type LiveEvent =
+type LiveEvent =
   | { type: "state"; state: StateSnapshot }
   | { type: "plan"; plan: PlanSnapshot }
   | { type: "assignment"; event: AssignmentEvent }
@@ -131,7 +131,7 @@ function eventFrom(type: string, data: unknown): LiveEvent | null {
 }
 
 /** Envelope from contracts/ws-events.schema.json. Not residents/ws-events.schema.json. */
-export type Envelope =
+type Envelope =
   | { kind: "invalid" }
   | { kind: "envelope"; seq: number; t_s: number; event: LiveEvent | null };
 

@@ -4,7 +4,7 @@
  * IconLayer can rotate them by heading). Drawn once at 2× for crisp edges.
  */
 
-export type IconSpec = { x: number; y: number; width: number; height: number; anchorX?: number; anchorY?: number; mask?: boolean };
+type IconSpec = { x: number; y: number; width: number; height: number; anchorX?: number; anchorY?: number; mask?: boolean };
 
 export type Atlas = { url: string; mapping: Record<string, IconSpec> };
 
