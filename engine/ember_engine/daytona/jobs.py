@@ -3,8 +3,8 @@
 The same code runs in a Daytona sandbox, a local process pool, or in-process:
   WORKER_PRELUDE  once per worker: load the baked town into memory
   batch_setup()   once per worker per batch: register the scenario, reports and candidate plans
-  job_code()      once per job: run it, print one JSON line (results come back as the run_code return
-                  value, because Tier 1/2 sandboxes cannot call out)
+  job_code()      once per chunk of jobs: run them, print one JSON line each (results come back as the
+                  run_code return value, because Tier 1/2 sandboxes cannot call out)
 Pure: no I/O beyond reading the town, no network, deterministic per (plan, seed).
 """
 
@@ -76,14 +76,15 @@ def batch_setup(batch_id: str, scn: dict, plans: dict, reports: list) -> str:
     return f"_EMBER_B[{batch_id!r}] = json.loads({payload!r})\nprint(json.dumps({{'ok': True, 'batch': {batch_id!r}}}))\n"
 
 
-def job_code(job: dict, worker: str) -> str:
-    j = json.dumps(job, separators=(",", ":"))
-    return (f"_j = json.loads({j!r}); _b = _EMBER_B[_j['batch_id']]\n"
-            f"print(json.dumps(_ember_run_job(_EMBER_W, _b['scenario'], _b['plans'], _b['reports'], _j, {worker!r})))\n")
+def job_code(jobs: list[dict], worker: str) -> str:
+    j = json.dumps(jobs, separators=(",", ":"))
+    return (f"for _j in json.loads({j!r}):\n"
+            f"    _b = _EMBER_B[_j['batch_id']]\n"
+            f"    print(json.dumps(_ember_run_job(_EMBER_W, _b['scenario'], _b['plans'], _b['reports'], _j, {worker!r})))\n")
 
 
-def parse_last_json(stdout: str) -> dict:
+def parse_points(stdout: str, n: int) -> list[dict]:
     lines = [ln for ln in (stdout or "").strip().splitlines() if ln.strip().startswith("{")]
-    if not lines:
-        raise ValueError(f"no JSON in worker output: {stdout[-300:]!r}")
-    return json.loads(lines[-1])
+    if len(lines) != n:
+        raise ValueError(f"{len(lines)} of {n} results in worker output: {(stdout or '')[-300:]!r}")
+    return [json.loads(ln) for ln in lines]

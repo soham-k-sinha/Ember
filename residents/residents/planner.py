@@ -272,7 +272,7 @@ class Planner:
     def optimizing(self) -> bool:
         return self._optimizing
 
-    async def optimize(self, seeds: int = 20, k: int = 4) -> dict:
+    async def optimize(self, seeds: int = 50, k: int = 4) -> dict:
         """Top-k candidate plans × `seeds` perturbed worlds (+ the baseline), on Daytona when engine has a
         key, else a local process pool. Every run is broadcast as a `scatter_point` as it lands; the
         plan with the best worst-20% outcome becomes the next version."""
@@ -290,7 +290,7 @@ class Planner:
             def on_point(p: dict) -> None:  # called on the engine's worker thread
                 sent.append(asyncio.run_coroutine_threadsafe(self.hub.broadcast("scatter_point", p, t_now), loop))
 
-            # the fan-out (seconds locally, 30 s+ on Daytona) runs WITHOUT the planner lock, so the web's
+            # the fan-out (a few seconds, locally or on Daytona) runs WITHOUT the planner lock, so the web's
             # clock ticks, texts and replans keep flowing meanwhile
             plan = await run_in_threadpool(self.bridge.optimize, known, t_now, prev, on_point, seeds, k)
             await asyncio.gather(*(asyncio.wrap_future(f) for f in sent))  # every point before the plan

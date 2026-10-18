@@ -206,7 +206,7 @@ async def main(base: str, skip_optimize: bool) -> int:
         n = len(ev.items)
         v_before = (await get("/state"))["plan_version"]
         t0 = time.time()
-        await post("/optimize", params={"seeds": 20, "k": 4})
+        await post("/optimize", params={"k": 4})
         last = None
         while time.time() - t0 < 300:
             o = await get("/optimize")
@@ -217,7 +217,7 @@ async def main(base: str, skip_optimize: bool) -> int:
         check(last is not None and not last.get("error"), "optimize finishes without error",
               f"{last and last.get('error')} in {time.time() - t0:.1f}s")
         rob = (last or {}).get("robust") or {}
-        print(f"      pool={rob.get('pool')} workers={rob.get('workers')} fan-out={rob.get('fanout_wall_s')}s "
+        print(f"      pool={rob.get('pool')} workers={rob.get('workers')} startup={rob.get('startup_s')}s fan-out={rob.get('fanout_wall_s')}s "
               f"chosen={rob.get('chosen')} nominal={rob.get('nominal_best')}")
         await asyncio.sleep(0.5)
         pts = ev.since(n, "scatter_point")

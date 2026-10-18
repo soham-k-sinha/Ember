@@ -44,7 +44,7 @@ def robust_rank(points: list[dict], exclude=("baseline",)) -> list[dict]:
 
 
 def robust_plan(world, scn: dict, reports=(), t_now: float = 0.0, prev: dict | None = None, prev_reports=None,
-                k: int = 4, seeds: int = 20, pool=None, on_point=None, seed: int = 0, trigger: str | None = None,
+                k: int = 4, seeds: int = 50, pool=None, on_point=None, seed: int = 0, trigger: str | None = None,
                 include_baseline: bool = True, moves: int | None = None, version: int | None = None) -> tuple[dict, list]:
     t0 = time.time()
     s = search(world, scn, reports, t_now, prev, prev_reports, seed, moves)
@@ -77,7 +77,7 @@ def robust_plan(world, scn: dict, reports=(), t_now: float = 0.0, prev: dict | N
     chosen = cands[ranking[0]["candidate"]]
     plan = finalize(s, chosen, prev, trigger)
     plan["search"]["robust"] = {"batch_id": batch_id, "jobs": len(jobs), "seeds": seeds, "candidates": list(plans), "pool": "local-fallback" if getattr(pool, "fell_back", False) else pool.kind,
-                                "workers": getattr(pool, "n", None) or getattr(pool, "workers", None), "fanout_wall_s": round(fan_s, 2),
+                                "workers": pool.workers, "startup_s": round(pool.startup_s, 2), "fanout_wall_s": round(fan_s - pool.startup_s, 2),
                                 "rule": f"best mean of the worst {int(WORST_SHARE * 100)}% of runs: people unreached, then overflow m³",
                                 "chosen": chosen.cid, "nominal_best": s.ranked[0].cid, "ranking": ranking}
     if getattr(pool, "fell_back", False) and getattr(pool, "log", None):   # never fall back silently

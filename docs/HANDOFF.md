@@ -11,7 +11,7 @@ Then read: `CLAUDE.md`, `docs/DECISIONS.md` (D1–D73), all of `docs/log/*.md`, 
 ## What's on `main` (integrated and tested end to end)
 | Part | Owner | State |
 |---|---|---|
-| Engine (`engine/`): town, flood, facility/wastewater/vehicle models, plan simulator (shared trips, D59), allocator + replans (declines are constraints, confirmed jobs keep queue order, nearest drop-off, generator re-targeting with stated trade-offs; D58), baseline, compare, Daytona robustness, `EngineSession` | Aryaman | 95 tests. Daytona snapshot `ember-engine-1b76fade79`. |
+| Engine (`engine/`): town, flood, facility/wastewater/vehicle models, plan simulator (shared trips, D59), allocator + replans (declines are constraints, confirmed jobs keep queue order, nearest drop-off, generator re-targeting with stated trade-offs; D58), baseline, compare, Daytona robustness, `EngineSession` | Aryaman | 95 tests. Daytona snapshot `ember-engine-c1810d2a07`. |
 | Contracts (`contracts/`): town, scenario, state v0.2, assignment, report, comparison, ws-events + fixtures | Aryaman | Every fixture validates in pytest. |
 | Scenario (`scenarios/allston_flood_v1/`) | Aryaman (D49) | Tuned for the demo beats. |
 | Backend (`residents/`): SQLite state, HTTP + WS, Photon threads, LLM extraction, outbound texts, confirm/reject, `/optimize` on Daytona, `/simulate`, `/ask`, questions queue (D60), text-driven drill (D56) | Soham | 198 tests. |
@@ -37,11 +37,12 @@ Demo beats by hand: `docs/DEMO.md` § Replay. Every step with expected values: `
 - Comparison after the judge beat (5 seeds): EMBER 89 vs baseline 51.6 reached (+37.4), overflow 0 vs 5,244 m³, EMBER +33 vehicle-km.
 - Hospital at 15 min ("on backup, 10 min left"): Generator 1 → Mount Auburn, outage 13 min, overflow 0 → 9,600 m³ (stated with simulated numbers).
 - `/optimize` from the backend after the hospital beat: Daytona, 8 sandboxes, ~11 s; chooses c02 over c00 (worst-20% unreached 13.5 vs 14.5; baseline 53.5). At 5:00 it keeps c00.
+- Daytona Tier 2 (D82): the backend warms 90 sandboxes at startup and reuses them; `/optimize` (50 seeds, 250 runs) 1.6–2.7 s wall, 200 seeds (1,000 runs) 1.9 s; local 8 processes take 2.1 s / 3.6 s of fan-out. A cold CLI run adds ≈6.5 s of startup (`search.robust.startup_s`).
 
 ## Priorities, in order (D63–D69)
 1. **8 PM run-through** with `docs/QA.md` (on the machine with both `engine/.env` and `residents/.env`; `engine/scripts/e2e.py` first).
 2. **Devpost** (≥900 words, ≥8 screenshots, the new framing; outline in `docs/devpost/README.md`) + **video < 3 min**.
-3. **Daytona Tier 2** → `EMBER_DAYTONA_WORKERS≈90`.
+3. ~~**Daytona Tier 2**~~ done (D82): `EMBER_DAYTONA_WORKERS=90`, warm pool, chunked jobs.
 4. **Multiplayer** (stretch, Soham + Aryaman, ~4–6 h, D66), only if Photon allows it. Dropped before anything above.
 5. **Chalk** (stretch, Soham, D67): gateway + an eval graded by the simulator.
 6. **Sim realism** (only after the Devpost and video, D69), cheapest first; nothing new in the planner's inner loop; time a replan after each change (> 1 s → move it to precompute).
@@ -63,7 +64,7 @@ Skipped: **SpaceXAI** (D68): needs Grok Voice/Imagine and "built with Cursor", w
 - zsh mangles `$B:path`; use `${B}:path` or quote the ref in `git show`.
 - Tests that hit `/optimize` must set `EMBER_LOCAL_POOL=1`.
 - `uv sync` drops the `dev` extra (pytest), and `uv run pytest` then silently uses a global pytest that can't import `ember_engine` ("10 errors during collection"). Use `uv sync --extra dev` in engine/.
-- Snapshot now `ember-engine-1b76fade79` (after #47).
+- Snapshot now `ember-engine-c1810d2a07` (D82). Don't run `ember robust` while a demo backend is up: its start deletes the backend's warm pool (idle > 3 min), which then pays ≈7 s to restart.
 
 ## Opening prompt for a new session
 ```

@@ -237,6 +237,13 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
                     except Exception:  # noqa: BLE001 - keep retrying
                         log.exception("retry loop")
             retry_task = asyncio.create_task(retry_loop())
+        if app.state.planner is not None:
+            async def warm_pool() -> None:  # sandboxes up before the first /optimize (D82)
+                try:
+                    await run_in_threadpool(app.state.planner.bridge.warm_pool)
+                except Exception:  # noqa: BLE001 - /optimize starts them again, or runs locally
+                    log.exception("warming the robustness pool failed")
+            app.state.warm_task = asyncio.create_task(warm_pool())
         try:
             yield
         finally:
@@ -246,6 +253,8 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
                 await app.state.listener.stop()
             if photon is not None:
                 await photon.aclose()
+            if app.state.planner is not None:
+                await run_in_threadpool(app.state.planner.bridge.close_pool)
             app.state.store.close()
 
     app = FastAPI(title="Ember backend", version="0.1.0", lifespan=lifespan)
@@ -369,12 +378,12 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
                 **messenger().delivery_details(thread, delivery)}
 
     @app.post("/optimize", status_code=202)
-    async def post_optimize(seeds: int = 20, k: int = 4) -> dict:
+    async def post_optimize(seeds: int = 50, k: int = 4) -> dict:
         """Start the robust fan-out in the background; watch WS `scatter_point` events, then `plan`.
         GET /optimize for the outcome. 409 while one is running."""
         p = planner()
-        if not (1 <= seeds <= 50 and 1 <= k <= 8):
-            raise HTTPException(422, "seeds must be 1..50 and k 1..8")
+        if not (1 <= seeds <= 200 and 1 <= k <= 8):
+            raise HTTPException(422, "seeds must be 1..200 and k 1..8")
         if p.optimizing:
             raise HTTPException(409, "an optimization is already running")
 
