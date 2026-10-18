@@ -435,3 +435,9 @@ What: `aryaman/arrival-pause` (from `aryaman/call-to-join`): when the clock reac
 Interfaces: ws-events.schema.json 0.2 adds `arrival` (+ fixture); /clock answers `held_by`, /health `auto_hold` + `hold`; bus EVENT_TYPES, Settings.auto_hold. Engine's `_ws_examples` (ember fixtures) doesn't emit `arrival` yet.
 Status: residents 366 pass (tests/test_arrival.py), engine 107, ruff clean, e2e 79/79 with the new [10].
 Next: web (D113) stops playback on `arrival` / `held_by` and shows the hold; merge.
+### 2026-10-18 06:40 · Calls that stay in the flood and answer anything (D111) · branch aryaman/smart-calls
+What: after the one opening line, nothing on a call or text says simulation, demo, "I can't", 911 or (on a call) coordinator, except "If this is a real emergency, please hang up and call 911." when someone says it is real. A hurt caller hears who is coming to the door and one thing to do (deterministic, fast path); any other question goes to residents/residents/talk.py: the reply model (Haiku via Chalk, 3.5 s) answers from a sheet of what EMBER knows, guarded (D76 + no coordinator/dead end/unplanned help, ≤ 2 sentences), else an in-world template. Short call questions skip the reading model. Ambulance kind counts as a vehicle (wording: paramedics).
+Files: residents/residents/{talk,voice,intake,fallback,speech,reply,briefing,messaging,guide,app,db}.py, residents/tests/{test_voice,test_fallback,test_questions,test_drill}.py, residents/scripts/sim_calls.py, docs/voice_transcripts.md (Ana: police + hurt leg).
+Run: residents full suite, ruff; sim_calls re-run; 27 real model calls to tune the prompt (0.7–1.6 s, median 1.0 s).
+Interfaces: none (no contract change). New create_app(talker=) for tests.
+Next: live call check of the police / hurt-leg / dog questions; merge with the D112 (arrival pause) and D113 (web) branches.

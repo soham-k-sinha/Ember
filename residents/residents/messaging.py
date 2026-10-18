@@ -2,7 +2,7 @@
 
 Rules enforced here, not left to callers:
 - every outbound text carries the plan_version it was generated from, and the first text a phone gets in a run
-  starts with the one-line notice that this is a simulation (D100: real phones, strangers included, must never
+  starts with the one-line notice (D100, D111: real phones, strangers included, must never
   mistake it for an official alert; everything after it is in-world);
 - a shared iMessage line may only reply to a tester who texted it first (opt-in): until then the
   message is stored and shown on the dashboard with delivery "not_opted_in", never sent;
@@ -29,9 +29,9 @@ from .threads import ROLES, normalize_handle, player, resolve_thread, phone_thre
 
 log = logging.getLogger("residents.messaging")
 
-DISCLOSURE = "EMBER flood simulation, live demo, not a real emergency."  # the first text only (D100)
+DISCLOSURE = "EMBER flood response, live demo."  # the first text only (D100, D111)
 RUN_STARTED_KEY = "run_started_at"  # wall-clock UTC ISO of the last bootstrap (startup reseed / reset)
-FULL = "Thanks for joining! The EMBER flood simulation is full right now; watch it on the big screen."
+FULL = "Thanks for joining! The EMBER live demo is full right now; watch it on the big screen."
 # POST /join with Photon off (dev, tests): the line a registered player would text. Fictional (555-01xx).
 DEV_LINE = "+16175550100"
 IPHONE_ONLY = "iPhone (iMessage) only: an Android phone texts by SMS, which never reaches this line."
@@ -412,7 +412,7 @@ class Messenger:
         return "photon" if self.opted_in(phone) else "not_opted_in"
 
     def _disclose(self, handle: str | None, text: str, route: str) -> str:
-        """The first text a phone gets in a run starts with the simulation notice (D100); a call says its own."""
+        """The first text a phone gets in a run starts with the notice (D100); a call says its own."""
         text = text.strip()
         if handle is None or route not in ("photon", "dev") or self.store.kv_get(f"disclosed:{handle}"):
             return text

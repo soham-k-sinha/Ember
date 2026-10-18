@@ -165,7 +165,7 @@ def test_safety_and_bring_are_the_fixed_wording(qd):
     register(c)
     place(c, tap, R1, PUTNAM)
     assert ask(c, tap, "is it safe to drive?") == [SAFETY]
-    assert SAFETY.startswith("In a real emergency, call 911.")
+    assert SAFETY.startswith("Don't walk or drive through floodwater") and "911" not in SAFETY  # in the flood (D111)
     assert ask(c, tap, "what should we bring?") == [BRING]
 
 

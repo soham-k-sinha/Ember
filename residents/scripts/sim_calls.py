@@ -10,7 +10,8 @@ on 2026-10-18). Prints each call as a timed transcript (EMBER's speech at 150 wo
 time; the caller's pauses are scripted) and each phone's text thread.
 
 Who: three players join at once (Maria: wheelchair and oxygen; Dev: the live call's re-sent turns; Sam: busy, never says
-yes or done), Lee joins while every line is busy and never picks up, Jordan calls the number and joins by voice.
+yes or done), Lee joins while every line is busy and never picks up, Jordan calls the number and joins by voice, Ana
+calls in, asks where the police are and then says she hurt her leg (D111: answered in the flood, never "I can't").
 """
 
 from __future__ import annotations
@@ -71,7 +72,11 @@ LEE = Person("Lee", "joins while every line is busy, never picks up", "+16175550
 JORDAN = Person("Jordan", "calls the number, joins by voice", "+16175550115", {
     "inbound": [(1.0, "Hi, I saw the flood sign. Can I join?"), (1.5, "Just me."), (1.0, "Thanks, bye.")],
     "soon": [(1.0, "Okay, bye.")]})
-PEOPLE = [MARIA, DEV, SAM, LEE, JORDAN]
+ANA = Person("Ana", "calls in, asks for the police, then hurts her leg", "+16175550116", {
+    "inbound": [(1.0, "Hi, can I join?"), (1.5, "It's just me."), (1.5, "Help me, where is the police?"),
+                (2.0, "I hurt my leg and I can't move."), (1.5, "Okay, thank you.")],
+    "soon": [(1.0, "Okay, thank you.")]})
+PEOPLE = [MARIA, DEV, SAM, LEE, JORDAN, ANA]
 HEADER = """# EMBER on the phone: calls first (simulated)
 
 Written by `residents/scripts/sim_calls.py` (D100): the real planner on the Allston flood (40 scenario households plus
@@ -79,7 +84,8 @@ the players), the clock moved a minute at a time. A player who joins is called r
 pickup that changed and "2 minutes away"; everything else goes out as one short text after the call, on the plan's
 clock, with no YES or DONE needed. At most 3 calls at once, earliest flood deadline first; a missed call is tried once
 more 2 sim-min later, then texted. **Synthetic:** the people, their words, the flood timing, the fleet. No model: the
-keyword parser reads every reply. Speech at 150 words a minute; "ms" is EMBER's reply time (a replan when needs change).
+keyword parser reads every reply and a question gets talk.py's in-world answer without the reply model (D111). Speech at
+150 words a minute; "ms" is EMBER's reply time (a replan when needs change).
 """
 
 
@@ -271,6 +277,10 @@ class Sim:
                 self.status["in_1"] = "in-progress"
                 await self.converse(JORDAN, "in_1", INBOUND, "inbound")
                 await self.calls_due()
+            if minute == 6:
+                self.status["in_2"] = "in-progress"
+                await self.converse(ANA, "in_2", INBOUND, "inbound")
+                await self.calls_due()
             if all((g := st.guide.state(f"household:{st.voice._household_id(p.handle)}")) and g["finished"] for p in PEOPLE):
                 self.print(f"\n_sim {clock(self.now())}: everyone is checked in at the shelter._")
                 break
@@ -280,14 +290,14 @@ class Sim:
                 self.print(line, f"texts:{p.name}")
 
     def doc(self) -> str:
-        """The short version for docs/voice_transcripts.md: three calls and one text thread."""
-        keep = ["Maria:first_contact", "Dev:first_contact", "Jordan:inbound", "texts:Lee"]
+        """The short version for docs/voice_transcripts.md: four calls and one text thread."""
+        keep = ["Maria:first_contact", "Dev:first_contact", "Jordan:inbound", "Ana:inbound", "texts:Lee"]
         return HEADER + "\n".join(line for k in keep for line in self.sections.get(k, [])) + "\n"
 
 
 async def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", type=Path, help="also write three calls and one text thread here (Markdown)")
+    ap.add_argument("--out", type=Path, help="also write four calls and one text thread here (Markdown)")
     args = ap.parse_args()
     bridge = EngineBridge(Settings().scenario)
     with tempfile.TemporaryDirectory() as tmp:

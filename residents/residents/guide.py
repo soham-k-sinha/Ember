@@ -151,7 +151,8 @@ class Guide:
         aid = ["the wheelchair"] if needs.get("accessible_vehicle") else ["any walker or cane"] if door else []
         items = ["medications", *(["prescriptions", "any oxygen"] if needs.get("medical") else []), "ID", "your phone", *aid]
         bring = ", ".join(items[:-1]) + " and " + items[-1]
-        medical = "; the crew knows someone needs medical care" if needs.get("medical") else ""
+        crew = "paramedics know" if res.get(a["resource_id"], {}).get("kind") == "ambulance" else "crew knows"
+        medical = f"; the {crew} someone needs medical care" if needs.get("medical") else ""
         if door:
             first = f"{who} is coming to your door {_mins(arrive - now)}. Be ready at the door with {bring}{medical}."
             soon = f"{who} is 2 minutes away. Come to the door now with your medications{' and ' + aid[0] if aid else ''}."

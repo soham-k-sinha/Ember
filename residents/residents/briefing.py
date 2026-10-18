@@ -35,9 +35,8 @@ BRING = ("Bring medications (and prescriptions), ID, your phone and charger, gla
          "needs, like a walker or oxygen. Bring pets too, in a carrier or on a leash. One small bag each; leave "
          "everything else.")
 # Fixed, vetted wording (Ready.gov flood guidance), never generated: the one answer that must be right every time.
-SAFETY = ("In a real emergency, call 911. Don't walk or drive through floodwater: 6 inches of moving water can knock "
-          "you down and 1 foot can sweep a car away. If water comes inside, go to a higher floor (not a closed attic), "
-          "and stay away from downed power lines.")
+SAFETY = ("Don't walk or drive through floodwater: 6 inches of moving water can knock you down and 1 foot can sweep a car "
+          "away. If water comes inside, go to a higher floor (not a closed attic), and stay away from downed power lines.")
 
 
 # the one question first contact asks (D100): the planner asks a household for its needs; this is how we word it

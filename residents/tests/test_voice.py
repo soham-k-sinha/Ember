@@ -16,8 +16,10 @@ from residents.drill import Drill
 from residents.messaging import DISCLOSURE as TEXT_NOTICE
 from residents.messaging import plain
 from residents.outbound import ASK_NEEDS
+from residents.reply import FORBIDDEN
 from residents.speech import render, render_all
-from residents.voice import (BYE, CALM, CLOSED, DISCLOSURE, FULL_CALL, HI, INBOUND, MISSED, SYSTEM_PROMPT, WHERE, WHO_WE_ARE,
+from residents.talk import REAL_911
+from residents.voice import (BYE, CALM, CLOSED, DISCLOSURE, FULL_CALL, HI, INBOUND, MISSED, SYSTEM_PROMPT, WHERE,
                              configure_agent, create_voice_app, wait_for_voice)
 from tests.helpers import CALLENDER, GREEN, PUTNAM, R1, R2, Tap, ex, fact, make, register, text, thread_of
 
@@ -68,8 +70,20 @@ def spoken(r) -> str:
     if r.headers["content-type"].startswith("text/event-stream"):
         parts = [json.loads(line[6:]) for line in r.text.split("\n\n") if line.startswith("data: {")]
         assert r.text.rstrip().endswith("data: [DONE]")
-        return "".join(p["choices"][0]["delta"].get("content", "") for p in parts)
-    return r.json()["choices"][0]["message"]["content"]
+        words = "".join(p["choices"][0]["delta"].get("content", "") for p in parts)
+    else:
+        words = r.json()["choices"][0]["message"]["content"]
+    return in_world(words)
+
+
+def in_world(words: str) -> str:
+    """D111, checked on every reply in this suite: after the opening line, nothing a call says steps outside the flood
+    (simulation, demo, "I can't", 911, a coordinator); the one exception is the real-emergency line, said alone."""
+    rest = words
+    for line in (DISCLOSURE, CLOSED, FULL_CALL, render(REAL_911)):
+        rest = rest.replace(line, "")
+    assert not FORBIDDEN.search(rest.replace("’", "'")) and "coordinator" not in rest.lower(), words
+    return words
 
 
 # ---------- speech ----------
@@ -175,7 +189,7 @@ def test_streams_sse_with_a_filler_when_slow(vd, monkeypatch):
 def test_wrong_token_and_unknown_call(vd):
     assert say(vd, "hi", token="nope").status_code == 404
     r = say(vd, "hi", caller="{{system__caller_id}}", called="{{system__called_number}}")
-    assert spoken(r).startswith("Sorry, I can't tell which phone this is.")
+    assert spoken(r).startswith("Sorry, this line couldn't tell which phone is calling.")
 
 
 async def test_voice_health_is_protected_and_checks_backend_readiness():
@@ -400,7 +414,7 @@ def test_call_words_that_are_not_for_the_thread(vd):
     assert hello == f"{HI} {ASK_NEEDS}"                                 # a short hello, never the whole notice again
     assert turn("Sorry, what?") == hello
     who = turn("Who is this?")
-    assert who.startswith(WHO_WE_ARE) and who.endswith(ASK_NEEDS)
+    assert who.startswith(DISCLOSURE) and who.endswith(ASK_NEEDS)
     assert turn("Thank you, dear.") == "You're welcome. I'll text you all of this now. Take care."
     assert not [m for m in c.app.state.store.thread_messages(key)[before:] if m["direction"] == "in"]
 
@@ -473,7 +487,7 @@ def test_drill_calls_only_callers_in_the_flood(vd, capsys):
 
 def test_call_screening_gets_who_and_why_and_changes_nothing(vd):
     register(vd, R1)
-    who = f"{WHO_WE_ARE} {WHERE}"  # who and why, then the one thing we need from them
+    who = f"{DISCLOSURE} {WHERE}"  # who and why, then the one thing we need from them
     assert spoken(say(vd, "Hi, if you record your name and reason for calling, I'll see if this person is available.")) == who
     assert spoken(say(vd, "Please stay on the line.")) == who
     assert vd.app.state.store.phone(handle=R1)["thread_key"] is None   # the screening didn't place anyone
@@ -782,12 +796,15 @@ def test_a_voice_only_caller_is_told_how_to_enable_the_written_follow_up(vd, ass
 
 def test_tonights_live_calls(vd):
     """Turns from the real calls of 2026-10-18 03:26–03:45: needs in one breath, an off-topic question, a request for
-    the police (a simulation can't send anyone: say so, then 911), and an "okay" that closes the call."""
+    the police (in the flood: what is coming for them, D111), and an "okay" that closes the call."""
     join(vd, R1)
     assert "Accessible Van" in spoken(say(vd, "We are four, and we need one w- wheelchair.", conv="conv_9"))
-    assert spoken(say(vd, "Um, do you know about Arnoux?", conv="conv_9")).startswith("I can only help with your evacuation. ")
+    assert re.fullmatch(r"We've got you: Accessible Van 3 gets to you in about \d+ minutes\. Stay inside with your "
+                        r"medications and phone, ready at the door when it pulls up\.",
+                        spoken(say(vd, "Um, do you know about Arnoux?", conv="conv_9")))
     police = spoken(say(vd, "Um, for some reason, I'm unable to. Can you send the police to me?", conv="conv_9"))
-    assert police.startswith("This is a simulation, so I can't send anyone. If anyone is in real danger, hang up and call 9 1 1.")
+    assert police.startswith("Responders are working the flood zone; for you the fastest help is Accessible Van 3, which "
+                             "gets to you in about "), police
     assert spoken(say(vd, "Sounds good.", conv="conv_9")).endswith(BYE)
 
 
@@ -812,3 +829,132 @@ def test_a_stutter_does_not_flip_a_no(vd):
     hid = vd.app.state.voice._household_id(R1)
     needs = next(h["needs"] for h in vd.app.state.store.households() if h["household_id"] == hid)
     assert needs.get("people") == 1 and not needs.get("medical")
+
+
+# ---------- in the flood: any question, worry or injury gets a real answer (D111) ----------
+class Talker:
+    """The reply model on a call (fake): `answer(said, request)` is what it says; every request is kept."""
+
+    def __init__(self, answer):
+        self.answer, self.requests = answer, []
+
+    async def __call__(self, system, user):
+        req = json.loads(user)
+        self.requests.append(req)
+        return self.answer(req["they_said"], req)
+
+
+def coming(req) -> tuple[str, str]:
+    """(vehicle, when) as the sheet the model gets says it."""
+    m = next(m for x in req["SITUATION"] if (m := re.match(r"(.+?) \(.+\) is assigned to them and reaches them (.+)\.$", x)))
+    return m[1], m[2]
+
+
+@pytest.fixture
+def two(vd):
+    """R1 on its first-contact call: 2 of them, a van coming to their corner."""
+    join(vd, R1)
+    spoken(say(vd, "2 of us", conv="conv_9"))
+    return vd
+
+
+def turn(c, words):
+    return spoken(say(c, words, conv="conv_9"))
+
+
+def needs_of(c, handle=R1):
+    hid = thread_of(c, handle)["household_id"]
+    return next(h["needs"] for h in c.app.state.store.households() if h["household_id"] == hid)
+
+
+def test_a_hurt_caller_hears_who_comes_to_the_door_and_what_to_do(two):
+    words = turn(two, "I hurt my leg and I can't move.")
+    assert re.fullmatch(r"We've got you: [\w ]+'s crew knows someone is hurt and comes to your door (now|in about \d+ "
+                        r"minutes)\. Keep the injured leg still\.", words), words
+    assert len(words.split()) <= 25                                           # about 8 s spoken
+    assert needs_of(two) == {"people": 2, "mobility": True, "medical": True}  # replanned on it
+
+
+def test_a_hurt_caller_we_know_nothing_about_yet(vd):
+    join(vd, R1)
+    assert turn(vd, "I fell and I'm bleeding.") == "We've got you. How many people need to be picked up, including you?"
+
+
+def test_an_ambulance_in_the_plan_is_named_with_its_paramedics(two, monkeypatch):
+    b = two.app.state.outbound.briefing
+    fleet = b._resources
+    monkeypatch.setattr(b, "_resources", lambda: {k: {**v, "name": "Ambulance 1", "kind": "ambulance"}
+                                                   for k, v in fleet().items()})
+    words = turn(two, "My husband fell, he's bleeding and can't walk.")
+    assert re.fullmatch(r"We've got you: Ambulance 1's paramedics know someone is hurt and come to your door (now|in "
+                        r"about \d+ minutes)\. Press a clean cloth firmly on the bleeding\.", words), words
+
+
+def test_where_are_the_police_gets_what_is_coming_for_them(two):
+    talk = two.app.state.intake.talk
+    talk.writer = Talker(lambda said, req: "Responders are working the flood zone; for you the fastest help is {}, {}. "
+                                           "Be at your pickup corner before it gets there.".format(*coming(req)))
+    words = turn(two, "Help me, where is the police?")
+    assert re.fullmatch(rf"{CALM} Responders are working the flood zone; for you the fastest help is [\w ]+, in about "
+                        r"\d+ minutes\. Be at your pickup corner before it gets there\.", words), words
+    [req] = talk.writer.requests
+    assert req["they_said"] == "Help me, where is the police?" and not any("coordinator" in x for x in req["COMPUTED"])
+    assert any(x.startswith("Everyone we pick up goes to the shelter at David Rubenstein Treehouse") for x in req["SITUATION"])
+
+
+@pytest.mark.parametrize("invented", [
+    "An ambulance and two police officers are 3 minutes away.",          # help nobody planned, a number nobody computed
+    "This is a simulation, so I can't send the police.",                 # outside the flood
+    "A coordinator has your question. Stay calm. Stay inside.",          # a coordinator, three sentences
+])
+def test_a_model_answer_that_invents_or_steps_outside_is_never_said(two, invented):
+    two.app.state.intake.talk.writer = Talker(lambda said, req: invented)
+    words = turn(two, "Help me, where is the police?")
+    assert words.startswith(f"{CALM} Responders are working the flood zone; for you the fastest help is "), words
+
+
+def test_a_slow_model_falls_back_in_the_flood(two, monkeypatch):
+    from residents import talk as talk_mod
+    monkeypatch.setattr(talk_mod, "TIMEOUT_S", 0.05)
+
+    async def slow(system, user):
+        await asyncio.sleep(1)
+        return "Yes."
+    two.app.state.intake.talk.writer = slow
+    words = turn(two, "Can I bring my dog?")
+    assert re.fullmatch(r"Yes, bring your pet in a carrier or on a leash; [\w ]+ gets to you in about \d+ minutes\. Be at "
+                        r"the corner of [A-Za-z ]+ with your medications and phone before it gets there\.", words), words
+
+
+def test_is_the_hospital_open(two):
+    words = turn(two, "Is the hospital open?")
+    assert re.fullmatch(r"Mount Auburn Hospital is (operating on grid power|operating on backup power|without power), and "
+                        r"[\w ]+ gets to you in about \d+ minutes\. Be at the corner of [A-Za-z ]+ with your medications "
+                        r"and phone before it gets there\.", words), words
+
+
+def test_how_long_until_the_water_gets_here(two):
+    assert turn(two, "How long until the water gets here?").startswith(
+        f"The river reaches your street in about {water(two, R1)} minutes.")
+
+
+def test_a_real_emergency_gets_only_the_911_line(two):
+    c = two
+    before = len(c.app.state.store.reports())
+    assert turn(c, "This is a real emergency, I'm actually hurt.") == "If this is a real emergency, please hang up and call 9 1 1."
+    assert len(c.app.state.store.reports()) == before                  # nothing else said or done
+    c.app.state.voice.end(R1, reason="hung up")
+    tap = Tap(c)
+    text(c, R1, "for real, my kitchen is flooding")
+    assert tap.outs(R1) == [REAL_911]                                  # by text too
+
+
+@pytest.mark.parametrize("words,real", [
+    ("This is a real emergency.", True), ("I'm actually hurt", True), ("For real, help us", True),
+    ("this is not part of the simulation", True), ("Is this real?", True), ("she's really injured", True),
+    ("I really need help", False), ("I realize the water is high", False), ("I hurt my leg", False),
+    ("is it a real van?", False), ("it's a real mess out here", False), ("this is real, help", True),
+])
+def test_what_counts_as_saying_it_is_real(words, real):
+    from residents.talk import REAL
+    assert bool(REAL.search(words)) is real

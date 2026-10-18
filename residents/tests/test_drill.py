@@ -748,7 +748,8 @@ def test_a_player_is_called_and_an_undelivered_text_becomes_a_call(lobby):
     assert re.fullmatch(rf"{re.escape(DISCLOSURE)} You're Player 1, living by [^;]+; the river reaches your street in about "
                         rf"\d+ min\. We're calling you now\.", joined), joined
     [(to, first)] = openings()                                              # the question is on the call, not texted
-    assert to == h and first.startswith("This is EMBER, an automated assistant in a live flood simulation. The river reaches ")
+    assert to == h and first.startswith("Hi, this is EMBER, an automated flood-response assistant for this live demo. The river "
+                                        "reaches ")
     assert first.endswith(ASK_NEEDS)
     c.portal.call(v.hang_up, h)                                             # nobody answered: a retry later, no text yet
     assert len(fp.sends()) == 1

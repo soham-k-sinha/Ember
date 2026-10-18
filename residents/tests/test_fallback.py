@@ -58,6 +58,7 @@ def kinds(t, role="resident"):
     ("we don't need help", []),
     ("no need to hurry", []),
     ("we are not trapped", []),
+    ("I hurt my leg and I can't move", [("need", None, True, None, None, None)]),  # one person, collected at the door
     ("nobody needs help, but water is at our door", [("urgent", None, None, None, None, None)]),
     ("no help has arrived, please hurry", [("urgent", None, None, None, None, None)]),
     ("Yes. Yes, please hurry.", [("confirm", None, None, None, None, None)]),        # a yes, said urgently
