@@ -35,3 +35,4 @@ jobs:
         with: { node-version: 22, cache: npm, cache-dependency-path: web/package-lock.json }
       - run: npm ci
       - run: npm run build  # tsc --noEmit, then vite build
+      - run: npm test  # WebSocket contracts, closures, crowd budget and traffic behavior

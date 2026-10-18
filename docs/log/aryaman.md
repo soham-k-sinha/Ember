@@ -409,3 +409,7 @@ Run: full residents suite 307 passed; full engine suite 106 passed + smoke; web 
 Interfaces: no contract shape change; state schema description corrected. D100 adds VOICE_POLL_S (5 wall-s) and defaults VOICE_MAX_CONCURRENT to 3. Snapshot remains ember-engine-d9ea4508c1.
 Status: done locally on the takeover branch; original Claude worktrees and main untouched. No real calls/texts, provider reconfiguration, paid model calls or Daytona runs.
 Next: docs/CALLS_FIRST_HANDOFF.md lists the precise real-phone/provider checks; resume from this worktree rather than the older unfinished branches.
+
+### 2026-10-18 — Codex product polish (D102–D103)
+
+Scoped negative needs, explicit corrections, urgency and unknown-assistance clarification in the fallback; expanded the simulator eval to 56 messages with explicit urgency checks and honest clarification scoring. Fixed the voice-only goodbye, rejected clock-stale optimization results, paused the UI for stress tests and retried transient status failures. Added district loading/error/retry/flat-map recovery, retryable asset caching, phone layouts, bounded map labels, and web behavior checks in CI. Browser exercised the local 250-world batch and both district recovery paths; the expanded fallback eval reports 50 pass, 6 clarification, 0 fail and 56/56 urgency matches. Full verification and live limitations are in `docs/POLISH_QA.md`.

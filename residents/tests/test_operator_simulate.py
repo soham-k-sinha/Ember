@@ -90,7 +90,7 @@ def _wait_done(c, timeout=60):
     raise AssertionError("optimize never finished")
 
 
-def test_optimize_does_not_block_clock_or_reports(oc):
+def test_clock_keeps_working_and_supersedes_an_older_optimization(oc):
     real, started = _slow_optimize(oc, 2.0)
     try:
         assert oc.post("/optimize?seeds=2&k=2").status_code == 202
@@ -99,7 +99,9 @@ def test_optimize_does_not_block_clock_or_reports(oc):
         assert oc.post("/clock", json={"t_s": 600}).status_code == 200     # the web's play loop keeps working
         assert time.time() - t0 < 1.0
         last = _wait_done(oc)
-        assert last["error"] is None and last["plan_version"] == 2
+        assert oc.get("/state").json()["t_s"] == 600  # an old optimization must never rewind the live clock
+        assert last["plan_version"] is None and "clock changed" in last["error"]
+        assert oc.get("/state").json()["plan_version"] == 1
     finally:
         oc.app.state.planner.bridge.optimize = real
 

@@ -3,6 +3,7 @@
 import pytest
 
 from residents import fallback
+from residents.extract import to_outcome
 from residents.outbound import ASK_NEEDS
 from tests.helpers import PUTNAM, R1, Tap, register, text, thread_of
 
@@ -26,6 +27,10 @@ def kinds(t, role="resident"):
     ("Oh. Yes, yes please.", [("confirm", None, None, None, None, None)]),           # heard on calls (D80)
     ("Oh, okay. What changed?", [("question", None, None, None, "plan", None)]),     # a nod, then a question
     ("no thanks", [("reject", None, None, None, None, None)]),
+    ("No, we don't want the van", [("reject", None, None, None, None, None)]),
+    ("we won't leave", [("reject", None, None, None, None, None)]),
+    ("no, we want to travel with others, is there another person near me?", [
+        ("reject", None, None, None, None, None), ("question", None, None, None, "others", None)]),
     ("We're on the second floor, we'll be okay.", [("question", None, None, None, "safety", None)]),  # not a decline
     ("done", [("done", None, None, None, None, None)]),
     ("We're outside.", [("done", None, None, None, None, None)]),                   # "Tell me when you're outside."
@@ -46,6 +51,12 @@ def kinds(t, role="resident"):
     ("We're flooding inside!", [("urgent", None, None, None, None, None)]),
     ("we're trapped, 3 of us", [("need", 3, None, None, None, None), ("urgent", None, None, None, None, None)]),
     ("help", [("urgent", None, None, None, None, None)]),
+    ("there are 3 of us here, nobody needs help walking", [("need", 3, False, None, None, None)]),
+    ("we don't need help", []),
+    ("no need to hurry", []),
+    ("we are not trapped", []),
+    ("nobody needs help, but water is at our door", [("urgent", None, None, None, None, None)]),
+    ("no help has arrived, please hurry", [("urgent", None, None, None, None, None)]),
     ("Yes. Yes, please hurry.", [("confirm", None, None, None, None, None)]),        # a yes, said urgently
     ("hello?", [("other", None, None, None, None, None)]),
     ("Please stay on the line.", []),
@@ -60,6 +71,38 @@ def test_operator_status():
     assert (f.kind, f.facility_state, f.endurance_min) == ("facility_status", "backup", 40)
     [f] = fallback.parse("2 hours of fuel on the generator", "operator").facts
     assert f.endurance_min == 120
+
+
+@pytest.mark.parametrize("words,field", [
+    ("no one needs a wheelchair", "accessible_vehicle"),
+    ("we no longer need a wheelchair", "mobility"),
+    ("nobody is hurt", "medical"),
+    ("no one needs an accessible vehicle", "accessible_vehicle"),
+])
+def test_explicit_corrections_can_remove_a_previously_known_need(words, field):
+    ex = fallback.parse(words)
+    assert ex is not None
+    need = next(f for f in ex.facts if f.kind == "need")
+    assert getattr(need, field) is False
+
+
+def test_a_negative_mobility_answer_does_not_erase_a_positive_medical_answer():
+    need = fallback.parse("no wheelchair, I need oxygen").facts[0]
+    assert need.mobility is False and need.accessible_vehicle is False and need.medical is True
+
+
+def test_water_coming_in_under_the_door_is_urgent_even_when_asked_as_a_question():
+    facts = fallback.parse("water is coming in under the door, what should we do?").facts
+    assert any(f.kind == "urgent" for f in facts)
+
+
+@pytest.mark.parametrize("aid", ["a Welch's", "a whelcher", "some special equipment", "a Welch's, please hurry"])
+def test_an_unrecognized_aid_request_is_clarified_before_publishing_a_standard_pickup(aid):
+    words = f"4 people and we need {aid}"
+    out = to_outcome(fallback.parse(words), role="resident", thread={"household_id": 10296}, text=words,
+                     pending=None, resolve_road=lambda *_: [], last_assignment_id=None, known_needs={"people": 3})
+    assert not out.reports and out.question and "assistance" in out.question
+    assert out.urgent == ("hurry" in words)
 
 
 def test_a_whole_drill_by_text_without_the_llm(drill):

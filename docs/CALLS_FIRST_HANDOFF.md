@@ -20,7 +20,8 @@ calls-first decision is **D100**, followed by the delivery fixes in **D101**.
   flood deadlines, with three concurrent calls by default. An active text conversation is answered by text.
 - Instructions proceed without required YES/DONE replies. Delivered instructions become confirmed; later guidance
   follows the simulator clock. Repeated/revised speech turns are serialized and do not skip steps or double-decline.
-- An answered call gets a written follow-up. A missed call gets one retry after two simulation minutes or 60 wall
+- An answered call gets a written follow-up when the phone has opted into its iMessage chat. A voice-only caller
+  is told to send JOIN EMBER to their assigned line to enable it. A missed call gets one retry after two simulation minutes or 60 wall
   seconds, then a text. The five-second poll works even with the simulation clock paused.
 - First text/call carries the simulation disclosure; later messages use the plan's wording. No official authority
   is claimed. The medical-needs question and facility names agree across the engine, fixtures, seed and backend.
@@ -59,6 +60,10 @@ No real phones were called or texted, no provider settings changed, and no paid 
 The earlier main-branch 83/83 real-Daytona result is historical, not a result of this takeover.
 
 ## Next live checks
+
+Additional reliability and UI work after the initial calls-first commit is recorded in
+[POLISH_QA.md](POLISH_QA.md): scoped negative needs, unclear assistance, honest urgency scoring, clock-safe
+optimization, district-load recovery and a phone layout that keeps the join form accessible.
 
 1. Rehearse one opted-in iPhone: register → text → first-contact call → spoken needs → computed instruction →
    follow-up text → clock-driven arrival call. Also test a missed call and retry with the clock paused.

@@ -1,5 +1,5 @@
 {
- "_doc": "51 messages (#21 is DEMO.md beat 4, verbatim; #22-27 are the drill's location and DONE replies; #28-32 question topics, a decline with a question, a garbled need; #33-45 the D60 topics plan / flood / roads / safety / other, #33, #34 and #37 verbatim from the 2026-10-17 run; #46-51 the 2026-10-17 phone call, with the conversation as history: a 'no' that is a problem or a correction is not a decline) a resident or operator might text during the drill, with the expected extraction. `expect.kinds` = fact kinds in order; other keys are checked on the fact of that kind. `context` = what we last sent / what we're waiting on. `gold` = what is true when it differs from the ideal extraction (#32: \"Welch's\" is a wheelchair; scripts/eval_sim.py simulates it). Run: uv run python scripts/eval_extract.py",
+ "_doc": "56 messages (#21 is DEMO.md beat 4, verbatim; #22-27 are the drill's location and DONE replies; #28-32 question topics, a decline with a question, a garbled need; #33-45 the D60 topics plan / flood / roads / safety / other, #33, #34 and #37 verbatim from the 2026-10-17 run; #46-51 the 2026-10-17 phone call, with the conversation as history: a 'no' that is a problem or a correction is not a decline) a resident or operator might text during the drill, with the expected extraction. `expect.kinds` = fact kinds in order; other keys are checked on the fact of that kind. `context` = what we last sent / what we're waiting on. `gold` = what is true when it differs from the ideal extraction (#32: \"Welch's\" is a wheelchair; scripts/eval_sim.py simulates it). Run: uv run python scripts/eval_extract.py #52-56 cover urgent speech and scoped negative needs (D102); #42 now requires urgency as well as a safety question. Historical model scores used the original 51-message set.",
  "samples": [
   {
    "role": "resident",
@@ -529,6 +529,7 @@
    },
    "expect": {
     "kinds": [
+     "urgent",
      "question"
     ],
     "question_topic": "safety"
@@ -741,6 +742,56 @@
      "need"
     ],
     "people": 4
+   }
+  },
+  {
+   "role": "resident",
+   "text": "the water is at our door, please hurry",
+   "expect": {
+    "kinds": [
+     "urgent"
+    ]
+   }
+  },
+  {
+   "role": "resident",
+   "text": "no help has arrived, please hurry",
+   "expect": {
+    "kinds": [
+     "urgent"
+    ]
+   }
+  },
+  {
+   "role": "resident",
+   "text": "nobody needs help, but water is at our door",
+   "expect": {
+    "kinds": [
+     "urgent"
+    ]
+   }
+  },
+  {
+   "role": "resident",
+   "text": "no wheelchair, I need oxygen",
+   "expect": {
+    "kinds": [
+     "need"
+    ],
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": true
+   }
+  },
+  {
+   "role": "resident",
+   "text": "no one needs an accessible vehicle",
+   "expect": {
+    "kinds": [
+     "need"
+    ],
+    "mobility": false,
+    "accessible_vehicle": false
    }
   }
  ]

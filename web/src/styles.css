@@ -115,6 +115,9 @@ figure { margin: 0; }
 .map-wrap > div:first-child { position: absolute !important; inset: 0; }
 .iso-host { position: absolute; inset: 0; overflow: hidden; }
 .iso-host canvas { display: block; }
+.stage-status { position: absolute; z-index: 3; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(340px, calc(100% - 32px)); padding: 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); text-align: center; }
+.stage-status p { margin: 8px 0 16px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.stage-status > div { display: flex; justify-content: center; gap: 8px; }
 
 .chip {
   border: 1px solid var(--line);
@@ -189,7 +192,7 @@ figure { margin: 0; }
 .latest {
   position: absolute;
   z-index: 3;
-  top: 12px;
+  top: 52px;
   left: 314px;
   right: 252px;
   max-width: 640px;
@@ -416,4 +419,25 @@ dd { margin: 0; }
   .join { width: calc(100% - 24px); }
   .latest { display: none; }
   .toasts { left: 12px; right: 12px; }
+}
+
+@media (max-width: 600px) {
+  .stage { height: auto; display: flex; flex-direction: column; }
+  .join { position: relative; inset: auto; order: 1; margin: 12px; }
+  .join-head, .join-form button { min-height: 44px; }
+  .scorecard { position: relative; inset: auto; order: 2; width: calc(100% - 24px); margin: 0 12px 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; }
+  .scorecard header, .scorecard > p, .scorecard > .chip { grid-column: 1 / -1; }
+  .scorecard header span { font-size: 11px; }
+  .score span { font-size: 10.5px; letter-spacing: 0; }
+  .score strong { font-size: 24px; }
+  .score em { grid-column: 1 / -1; text-align: left; font-size: 11px; }
+  .score i, .scorecard > p, .scorecard .chip { font-size: 11px; }
+  .map-wrap { position: relative; order: 3; height: 52vh; min-height: 340px; }
+  .map-tools { flex-wrap: wrap; justify-content: flex-end; max-width: calc(100% - 24px); }
+  .map-tools button, .tabs button { min-height: 40px; }
+  .legend { right: 12px; }
+  .legend ul { flex-wrap: wrap; gap: 5px 12px; border-radius: 10px; font-size: 11px; }
+  .legend p { font-size: 9px; }
+  .replay-chip { position: static; order: 2; margin: 0 12px 12px; white-space: normal; }
+  .toasts { position: fixed; top: auto; bottom: 12px; }
 }

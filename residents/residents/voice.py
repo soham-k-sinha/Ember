@@ -309,7 +309,13 @@ class Voice:
         elif text and AGAIN.match(text) and s.last_said:
             s.outbox.insert(0, s.last_said)
         elif text and CLOSING.match(text):
-            s.outbox.append(("You're welcome. " if "thank" in text.lower() else "Great. ") + BYE)
+            goodbye = BYE
+            phone = self.store.phone(handle=handle)
+            if self.messenger.photon is not None and (phone is None or not self.messenger.opted_in(phone)):
+                goodbye = "Take care."
+                if phone and phone.get("assigned_number"):
+                    goodbye += f" For a written copy, send JOIN EMBER by iMessage to {phone['assigned_number']}."
+            s.outbox.append(("You're welcome. " if "thank" in text.lower() else "Great. ") + goodbye)
         elif text:
             if revision:
                 self.messenger.revising.add(handle)

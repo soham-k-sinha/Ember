@@ -4,7 +4,7 @@
  * container; markers and labels are drawn in screen space so they stay crisp and readable at any zoom.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Application, Container, Graphics, Sprite, Text, type FederatedPointerEvent } from "pixi.js";
 import { loadDiorama, type Diorama } from "./data";
 import { agentWorld, buildAgents, setScene, waitLonLat, type AgentWorld } from "./agents";
@@ -42,6 +42,7 @@ export type IsoProps = {
   onFollow: (selection: Selection | null) => void;
   /** camera presets (Treehouse, Judge's corner…): ease the stage camera to a place */
   focus?: { lon: number; lat: number; zoom: number; key: number } | null;
+  onFallback: () => void;
 };
 
 const KIND: Record<string, { color: number; label: string }> = {
@@ -121,11 +122,14 @@ export function IsoView(props: IsoProps) {
   const host = useRef<HTMLDivElement | null>(null);
   const ctxRef = useRef<Ctx | null>(null);
   const propsRef = useRef(props);
+  const [attempt, setAttempt] = useState(0);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   propsRef.current = props;
 
   useEffect(() => {
     const el = host.current;
     if (!el) return;
+    setStatus("loading");
     let dead = false;
     let ready = false;
     const cleanups: Array<() => void> = [];
@@ -139,7 +143,8 @@ export function IsoView(props: IsoProps) {
       }
       el.appendChild(app.canvas);
       const data = await loadDiorama("stage");
-      if (dead || !data) return;
+      if (dead) return;
+      if (!data) throw new Error("The district data could not be loaded.");
       const p = projector(data.bbox);
       const scene = buildStatic(data, p);
       const world = new Container();
@@ -242,8 +247,13 @@ export function IsoView(props: IsoProps) {
       });
       refit.observe(el);
       cleanups.push(() => refit.disconnect());
-      if (new URLSearchParams(location.search).has("perf")) perfHud(app, ctx, el);
-    })();
+      if (new URLSearchParams(location.search).has("perf")) cleanups.push(perfHud(app, ctx, el));
+      setStatus("ready");
+    })().catch((error: unknown) => {
+      if (dead) return;
+      console.error("EMBER stage failed to load", error);
+      setStatus("error");
+    });
     return () => {
       dead = true;
       ctxRef.current = null;
@@ -256,9 +266,18 @@ export function IsoView(props: IsoProps) {
         }
       }
     };
-  }, []);
+  }, [attempt]);
 
-  return <div className="iso-host" ref={host} />;
+  return <div className="iso-host" ref={host}>
+    {status !== "ready" && <div className="stage-status" role={status === "error" ? "alert" : "status"}>
+      <strong>{status === "error" ? "The district view couldn't load" : "Building the district…"}</strong>
+      <p>{status === "error" ? "Try again, or continue on the flat map." : "Loading real streets, buildings and trees."}</p>
+      {status === "error" && <div>
+        <button className="chip" onClick={() => setAttempt((n) => n + 1)}>Try again</button>
+        <button className="chip" onClick={props.onFallback}>Use flat map</button>
+      </div>}
+    </div>}
+  </div>;
 }
 
 /** Screen-space atmospheric haze falling in from the upper left (additive; tinted and faded by the light). */
@@ -297,6 +316,7 @@ function perfHud(app: Application, ctx: Ctx, host: HTMLElement) {
     box.textContent = `${fps.toFixed(0)} fps  p95 ${p95.toFixed(1)} ms\n${app.screen.width}×${app.screen.height} @${app.renderer.resolution}x  zoom ${ctx.cam.s.toFixed(2)}\npeople ${people}  budget ${ctx.crowdBudget.limit}  snapshot ${ctx.snapshot.active ? "on" : "off"}`;
     dts.length = 0;
   });
+  return () => box.remove();
 }
 
 /** Bake the snapshot in neutral light without the night glows; the live tint is applied to the image instead. */
@@ -644,6 +664,7 @@ function uiScale(): number {
 function pill(ctx: Ctx, key: string, text: string, x: number, y: number, style: { bg: number; fg?: number; size?: number; border?: number }, prio: number = PRIO.ALWAYS) {
   const k = uiScale();
   const size = Math.round((style.size ?? 11) * k);
+  const maxTextWidth = Math.max(80, ctx.app.screen.width - 24 * k);
   let item = ctx.pills.get(key);
   if (!item) {
     const root = new Container();
@@ -654,10 +675,13 @@ function pill(ctx: Ctx, key: string, text: string, x: number, y: number, style: 
     item = { root, bg, text: label, key: "", used: true, w: 0, h: 0 };
     ctx.pills.set(key, item);
   }
-  const sig = `${text}|${style.bg}|${style.border ?? 0}|${size}`;
+  const sig = `${text}|${style.bg}|${style.border ?? 0}|${size}|${maxTextWidth}`;
   if (item.key !== sig) {
     item.key = sig;
     item.text.style.fontSize = size;
+    item.text.style.wordWrap = true;
+    item.text.style.wordWrapWidth = maxTextWidth;
+    item.text.style.breakWords = true;
     item.text.text = text;
     const w = item.text.width + 12 * k;
     const h = item.text.height + 5 * k;
@@ -679,7 +703,10 @@ function placeLabels(ctx: Ctx) {
   const H = ctx.app.screen.height;
   const box = (x: number, y: number, item: { w: number; h: number }): [number, number, number, number] => [x - item.w / 2 - 2, y - item.h - 2, x + item.w / 2 + 2, y + 2];
   const over = (r: [number, number, number, number]) => placed.find((q) => r[0] < q[2] && r[2] > q[0] && r[1] < q[3] && r[3] > q[1]);
-  for (const { item, x, y: y0, prio } of queued) {
+  for (const { item, x: x0, y: y0, prio } of queued) {
+    // Keep important names readable on narrow displays; their markers still show the actual location.
+    const x = prio >= PRIO.JUDGE && prio < PRIO.ALWAYS
+      ? Math.max(item.w / 2 + 6, Math.min(W - item.w / 2 - 6, x0)) : x0;
     let y = y0;
     let r = box(x, y, item);
     // the judge, players and the selection never yield: a clash lifts them above what is already there

@@ -35,6 +35,7 @@ export function MapView(props: MapViewProps) {
   );
   const closures = useMemo(() => closedEdges(state, t, props.judge), [state, t, props.judge]);
   const [focus, setFocus] = useState<{ lon: number; lat: number; zoom: number; key: number } | null>(null);
+  const [fallback, setFallback] = useState(false);
 
   const judge = props.snapshot.households.find((household) => household.judge);
   const presets: Array<{ label: string; at: LngLat | null; zoom: number }> = [
@@ -45,8 +46,8 @@ export function MapView(props: MapViewProps) {
 
   return (
     <div className="map-wrap">
-      {props.flat ? (
-        <Suspense fallback={null}>
+      {props.flat || fallback ? (
+        <Suspense fallback={<div><div className="stage-status" role="status">Loading the flat map…</div></div>}>
           <FlatMap
             state={state}
             previous={props.playback ? null : props.previous}
@@ -76,10 +77,12 @@ export function MapView(props: MapViewProps) {
           onSelect={props.onSelect}
           onFollow={props.onFollow}
           focus={focus}
+          onFallback={() => setFallback(true)}
         />
       )}
 
       <div className="map-tools">
+        {fallback && !props.flat && <button className="chip" onClick={() => setFallback(false)}>Retry district view</button>}
         {presets.map((preset) =>
           preset.at ? (
             <button

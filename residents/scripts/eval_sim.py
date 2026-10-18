@@ -9,7 +9,8 @@ planner replans on each, and both plans are simulated in the gold world. Scored 
 - reached: the judge's household is picked up before its deadline under the extracted plan whenever the gold plan
   manages it (the simulator only boards a wheelchair user on an accessible vehicle);
 - regret = extracted − gold in people unreached, hospital outage and sewage overflow;
-- ASK: the extractor's facts left something to ask instead of a guess (or it read nothing): safe, not a pass.
+- urgency must match the gold reading; a physically unchanged plan cannot conceal missed urgent speech;
+- ASK: no actionable report was published and a clarification is needed. A harmful partial read still fails.
 --extractor fallback is the D75 keyword parser (no network); llm calls the real model.
 """
 
@@ -95,16 +96,26 @@ async def run(ev: Eval, samples: list[dict], read) -> list[dict]:
                           resolve_road=ev.b.resolve_road, last_assignment_id=last, known_needs=KNOWN if role == "resident" else None)
         ex = await read(s)  # None: nothing readable → the backend asks the plan's open question, no report
         x = outcome(ex or Extraction(facts=[], confidence=1.0, clarifying_question=None))
-        truth, g_rej = ev.reports(role, outcome(gold(s)), "g")
+        expected = outcome(gold(s))
+        truth, g_rej = ev.reports(role, expected, "g")
         m_g, reached_g, _ = ev.score(ev.plan(role, truth, g_rej), truth)
         m_x, reached_x, vehicle = ev.score(ev.plan(role, *ev.reports(role, x, "x")), truth)
         regret = {k: m_x[k] - m_g[k] for k, _ in REGRET}
         ok = (reached_x or not reached_g or g_rej) and all(regret[k] < eps for k, eps in REGRET)
         asked = ex is None or bool(x.question or x.follow_up)
+        urgency_ok = x.urgent == expected.urgent
         rows.append({"i": i, "role": role, "text": s["text"], "facts": [f.kind for f in ex.facts] if ex else [],
                      "vehicle": vehicle, "reached": None if role == "operator" or g_rej else reached_x, "regret": regret,
-                     "result": "PASS" if ok and ex else "ASK" if asked else "FAIL"})
+                     "urgency_match": urgency_ok, "result": classify(ok, ex is not None, asked, bool(x.reports), urgency_ok)})
     return rows
+
+
+def classify(ok: bool, extracted: bool, asked: bool, reports: bool, urgency_ok: bool) -> str:
+    if not urgency_ok:
+        return "FAIL"
+    if asked and not reports:
+        return "ASK"
+    return "PASS" if ok and extracted else "FAIL"
 
 
 def table(rows: list[dict]) -> str:
@@ -117,7 +128,8 @@ def table(rows: list[dict]) -> str:
                    f"{reached:7s}  {g['people_unreached']:+10d}  {g['hospital_outage_s'] / 60:+11.0f}  {g['overflow_m3']:+12.0f}  {r['result']}")
     n = {k: sum(r["result"] == k for r in rows) for k in ("PASS", "ASK", "FAIL")}
     out.append(f"\n{n['PASS']}/{len(rows)} pass ({100 * n['PASS'] / len(rows):.0f}%), {n['ASK']} asked instead of guessing, "
-               f"{n['FAIL']} fail · safe (pass or ask) {100 * (n['PASS'] + n['ASK']) / len(rows):.0f}%")
+               f"{n['FAIL']} fail · pass or clarification {100 * (n['PASS'] + n['ASK']) / len(rows):.0f}%")
+    out.append(f"Urgency matched in {sum(r['urgency_match'] for r in rows)}/{len(rows)} messages.")
     return "\n".join(out)
 
 

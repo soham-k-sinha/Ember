@@ -47,7 +47,7 @@ For scale, the real Cottage Farm station released ≈ **80,700 m³** of untreate
 One call reads each text in context (`extract.py`); one words the reply, and a deterministic guard rejects any number, vehicle, street or facility the planner didn't compute (`reply.py`). If the model is down, a keyword parser takes over (`fallback.py`). Routes, times and assignments are always computed.
 
 ## How we evaluate
-- **Simulator-graded eval** (`docs/eval.md`): 51 sample messages; a reading passes only if, after the replan, the household still gets out in time with no regret. Claude Sonnet 5.5 through **Chalk's Model Gateway: 50/51 pass, 1 ask, 0 fail (100 % safe)**; the keyword fallback alone: 46/51 pass, 4 ask, 1 fail.
+- **Simulator-graded eval** ([results](docs/eval.md)): the expanded 56-message set checks simulator regret and urgency. The keyword fallback has **50 passes, 6 clarifications, 0 failures**, with urgency matching in all 56. The earlier paid Sonnet 5.5 run through **Chalk's Model Gateway** had 50/51 passes and one clarification on the original set; it has not been rerun under the expanded checks.
 - **End to end** (`engine/scripts/e2e.py --big`): **83/83 checks** against a live backend with real Daytona: every demo beat, contracts, WebSocket, playback, 250 and 10,000 worlds, the sewage kept out before and after the hospital trade, register-then-text joins (iPhone-only note) and the player cap, and the second scenario validating.
 - **Unit tests**: engine 106, residents 301; CI runs them, ruff and the web build (`.github/workflows/ci.yml`).
 

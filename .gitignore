@@ -3,7 +3,7 @@ data/*
 !data/.gitkeep
 
 # python
-.venv/
+.venv
 __pycache__/
 *.pyc
 *.egg-info/
@@ -11,7 +11,8 @@ __pycache__/
 .ruff_cache/
 
 # node
-node_modules/
+node_modules
+.vite/
 dist/
 .next/
 

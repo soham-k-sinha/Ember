@@ -36,9 +36,14 @@ const pending = new Map<string, Promise<Diorama | null>>();
 export function loadDiorama(name = "stage"): Promise<Diorama | null> {
   let p = pending.get(name);
   if (!p) {
-    p = fetch(`${import.meta.env.BASE_URL}diorama/${name}.json`)
+    p = fetch(`${import.meta.env.BASE_URL}diorama/${name}.json`, { signal: AbortSignal.timeout(20000) })
       .then((response) => (response.ok ? (response.json() as Promise<Diorama>) : null))
-      .catch(() => null);
+      .catch(() => null)
+      .then((data) => {
+        // A failed first load must be retryable when the connection returns.
+        if (!data) pending.delete(name);
+        return data;
+      });
     pending.set(name, p);
   }
   return p;

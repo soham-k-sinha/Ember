@@ -18,7 +18,7 @@ worlds**; the scatter and a throughput tile).
 ## 0 · Setup (T−15 min)
 | # | Who | Action | Expected | Blocker / fallback | ✓ |
 |---|---|---|---|---|---|
-| 0.1 | A | `cd engine && uv sync --extra dev && uv run pytest -q`; `cd residents && uv run pytest -q`; `engine/scripts/e2e.py --big` against a fresh backend (HANDOFF § Run) | engine 106, residents 301 pass; e2e 83/83 | **blocker**: fix or cut the beat | |
+| 0.1 | A | `cd engine && uv sync --extra dev && uv run pytest -q`; `cd residents && uv run pytest -q`; `engine/scripts/e2e.py --big` against a fresh backend (HANDOFF § Run) | all checks pass; latest local/keyless checks are in POLISH_QA.md; historical real-Daytona e2e 83/83 | **blocker**: fix or cut the beat | |
 | 0.2 | A | both `.env` files on the backend machine | `DAYTONA_API_KEY`, `EMBER_DAYTONA_WORKERS`, `PHOTON_*`, `ANTHROPIC_API_KEY`, `ELEVENLABS_*` present (names only) | Daytona missing → local pool; Photon/model missing → DEMO fallbacks | |
 | 0.3 | A | `cd engine && uv run ember daytona-snapshot` | "ready" in seconds (`ember-engine-d9ea4508c1`) | build takes ~90 s; never let a stress test be first to need it | |
 | 0.4 | S | start backend (DEMO § Before going on stage) | plan v1, listener connected, no pool warm-up error | | |

@@ -649,3 +649,24 @@ def test_a_missed_call_retries_while_the_simulation_clock_is_paused(vd, monkeypa
     c.app.state.voice.http = fake_eleven(c.seen, [])
     c.portal.call(c.app.state.voice.check)
     assert len(dials(c)) == 2 and c.app.state.planner.now() == t0
+
+
+@pytest.mark.parametrize("assigned", [True, False])
+def test_a_voice_only_caller_is_told_how_to_enable_the_written_follow_up(vd, assigned):
+    from tests.fake_photon import LINE, FakePhoton
+
+    c = vd
+    register(c, R1)
+    text(c, R1, PUTNAM)
+    photon = FakePhoton().client()
+    c.app.state.messenger.photon = photon
+    c.app.state.store.upsert_phone(R1, "resident", assigned_number=LINE if assigned else None)
+    try:
+        words = spoken(say(c, "Thanks, bye."))
+        assert "I'll text you" not in words
+        if assigned:
+            assert "iMessage" in words and LINE in words
+        else:
+            assert words == "You're welcome. Take care."
+    finally:
+        c.portal.call(photon.aclose)

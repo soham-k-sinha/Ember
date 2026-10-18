@@ -2,7 +2,21 @@
 import subprocess
 import sys
 
+import pytest
+
 from residents.config import PKG_ROOT
+from scripts.eval_sim import classify
+
+
+@pytest.mark.parametrize("ok,extracted,asked,reports,urgency_ok,want", [
+    (True, True, False, True, True, "PASS"),
+    (True, True, False, False, False, "FAIL"),  # equal metrics cannot conceal missed urgency
+    (False, True, True, True, True, "FAIL"),   # asking does not excuse a harmful partial report
+    (False, False, True, False, True, "ASK"),
+    (True, True, True, False, True, "ASK"),
+])
+def test_scoring_distinguishes_clarification_from_a_wrong_action(ok, extracted, asked, reports, urgency_ok, want):
+    assert classify(ok, extracted, asked, reports, urgency_ok) == want
 
 
 def test_eval_sim_runs_on_three_samples():
