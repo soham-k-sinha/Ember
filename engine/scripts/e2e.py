@@ -2,13 +2,13 @@
 
 Drives a live backend over HTTP and WS the way the website and the phones do, and checks every step against the
 contracts and the demo story. No real phones, LLM or calls: texts go through /reports, /disruption and /dev/inbound,
-and the empty keys below beat residents/.env. Use a fresh DB: players (D78) survive resets, and MAX_PLAYERS=3 makes the
-cap check run. Daytona is real when engine/.env has its key.
+and the empty keys below beat residents/.env. Use a fresh DB: players (D89) survive resets, and MAX_PLAYERS=3 makes the
+cap check run. Daytona is real when engine/.env has its key; --big also runs /optimize on 10,000 worlds (seeds 2000).
 
     cd residents && DB_PATH=/tmp/e2e.db RESET_ON_START=1 PHOTON_ENABLED=0 EXTRACT_ENABLED=0 MAX_PLAYERS=3 \
         ANTHROPIC_API_KEY= ELEVENLABS_API_KEY= ELEVENLABS_AGENT_ID= ELEVENLABS_PHONE_NUMBER_ID= \
         uv run uvicorn residents.app:app --port 8000
-    cd residents && uv run python ../engine/scripts/e2e.py [--base http://127.0.0.1:8000] [--skip-optimize]
+    cd residents && uv run python ../engine/scripts/e2e.py [--base http://127.0.0.1:8000] [--skip-optimize] [--big]
 
 Exit code 0 = every check passed. Re-run it after any merge.
 """
@@ -73,7 +73,27 @@ def mine(plan: dict, hid: int) -> list[dict]:
     return [a for a in plan["assignments"] if a["target"].get("household_id") == hid and live(a)]
 
 
-async def main(base: str, skip_optimize: bool) -> int:
+async def run_optimize(get, post, seeds: int | None) -> tuple[dict, float]:
+    """POST /optimize and wait for it; (robust summary, wall seconds)."""
+    t0 = time.time()
+    await post("/optimize", params={"k": 4, **({"seeds": seeds} if seeds else {})})
+    last = None
+    while time.time() - t0 < 600:
+        o = await get("/optimize")
+        if not o["running"]:
+            last = o["last"]
+            break
+        await asyncio.sleep(0.5)
+    check(last is not None and not last.get("error"), f"optimize ({seeds or 50} seeds) finishes without error",
+          f"{last and last.get('error')} in {time.time() - t0:.1f}s")
+    rob = (last or {}).get("robust") or {}
+    print(f"      pool={rob.get('pool')} workers={rob.get('workers')} jobs={rob.get('jobs')} startup={rob.get('startup_s')}s "
+          f"fan-out={rob.get('fanout_wall_s')}s wall={time.time() - t0:.1f}s chosen={rob.get('chosen')} nominal={rob.get('nominal_best')} "
+          f"worst20_unreached={ {r_['candidate']: r_['worst20_people_unreached'] for r_ in rob.get('ranking', [])} }")
+    return rob, time.time() - t0
+
+
+async def main(base: str, skip_optimize: bool, big: bool = False) -> int:
     from ember_engine.scenario import load_scenario
     from ember_engine.state import validate_state
     from residents.contracts import errors
@@ -214,21 +234,7 @@ async def main(base: str, skip_optimize: bool) -> int:
         print("\n[6] robust optimization (Daytona, local fallback)")
         n = len(ev.items)
         v_before = (await get("/state"))["plan_version"]
-        t0 = time.time()
-        await post("/optimize", params={"k": 4})
-        last = None
-        while time.time() - t0 < 300:
-            o = await get("/optimize")
-            if not o["running"]:
-                last = o["last"]
-                break
-            await asyncio.sleep(1)
-        check(last is not None and not last.get("error"), "optimize finishes without error",
-              f"{last and last.get('error')} in {time.time() - t0:.1f}s")
-        rob = (last or {}).get("robust") or {}
-        print(f"      pool={rob.get('pool')} workers={rob.get('workers')} startup={rob.get('startup_s')}s fan-out={rob.get('fanout_wall_s')}s "
-              f"chosen={rob.get('chosen')} nominal={rob.get('nominal_best')} "
-              f"worst20_unreached={ {r_['candidate']: r_['worst20_people_unreached'] for r_ in rob.get('ranking', [])} }")
+        rob, _ = await run_optimize(get, post, None)
         await asyncio.sleep(0.5)
         pts = ev.since(n, "scatter_point")
         check(rob.get("pool") == "daytona" and rob.get("startup_s") is not None, "the runs go to the Daytona pool, startup reported",
@@ -238,6 +244,14 @@ async def main(base: str, skip_optimize: bool) -> int:
         check(st["plan_version"] == v_before + 1 and (st["plan"].get("search") or {}).get("robust"),
               "optimize publishes a new plan version with the robustness ranking", f"v{st['plan_version']}")
         check(all(p_["data"]["batch_id"] == rob.get("batch_id") for p_ in pts), "points carry the published batch id")
+        if big:  # the scale where Daytona clearly beats the laptop (D86): 2000 seeds × (4 candidates + baseline)
+            n = len(ev.items)
+            rob, _ = await run_optimize(get, post, 2000)
+            await asyncio.sleep(2)
+            pts = ev.since(n, "scatter_point")
+            check(rob.get("pool") == "daytona" and rob.get("jobs") == 10000, "10,000 worlds run on the Daytona pool",
+                  f"pool={rob.get('pool')} jobs={rob.get('jobs')} fan-out={rob.get('fanout_wall_s')}s")
+            check(len(pts) == 10000, "all 10,000 runs stream as scatter_points", f"{len(pts)}")
 
     print("\n[7] texting endpoints (no real phones)")
     try:
@@ -270,13 +284,21 @@ async def main(base: str, skip_optimize: bool) -> int:
     check(st["metrics"]["hospital_outage_s"] < 1800, "hospital outage stays under 30 min by the end",
           f"{st['metrics']['hospital_outage_s'] / 60:.0f} min")
 
-    print("\n[9] three strangers text JOIN EMBER (multiplayer)")
+    print("\n[9] three phones register (POST /join), then text JOIN EMBER (multiplayer, D89)")
     await post("/dev/reset")
-    await asyncio.sleep(3)  # players from earlier runs are placed again, with their own replan
+    await asyncio.sleep(3)  # players from earlier runs who texted are placed again, with their own replan
     v0 = (await get("/state"))["plan_version"]
     n0 = sum(p_["player"] is not None for p_ in await get("/phones"))
     first = 5550000 + int(time.time()) % 1000 * 10
     phones = [f"+1617{first + i}" for i in range(4)]
+    regs = [await post("/join", {"handle": ph}) for ph in phones[:3]]
+    check([r_["player"] for r_ in regs] == [n0 + 1, n0 + 2, n0 + 3] and all(r_["assigned_number"] for r_ in regs),
+          "POST /join returns Player N and the line to text", str([(r_["player"], r_["assigned_number"]) for r_ in regs]))
+    again = await post("/join", {"handle": phones[0]})
+    check(again["player"] == n0 + 1, "POST /join is idempotent per phone", f"player {again['player']}")
+    ps = {p_["handle"]: p_ for p_ in await get("/phones")}
+    check(all(ps[ph]["household_id"] is None for ph in phones[:3]) and (await get("/state"))["plan_version"] == v0,
+          "registered phones wait for their first text (no household, no replan yet)")
     for ph in phones[:3]:
         await post("/dev/inbound", {"role": "resident", "handle": ph, "text": "JOIN EMBER"})
     t0 = time.time()
@@ -292,11 +314,15 @@ async def main(base: str, skip_optimize: bool) -> int:
     hh = {h_["household_id"]: h_ for h_ in st["households"]}
     check(None not in hids and len(set(hids)) == 3 and all(hh.get(x, {}).get("deadline_s") for x in hids),
           "on three distinct flood-zone households in /state", f"{[(x, hh.get(x, {}).get('deadline_s')) for x in hids]}")
+    check(sorted(hh.get(x, {}).get("label") for x in hids) == [f"Player {n0 + k}" for k in (1, 2, 3)],
+          "labelled Player N on the map", str([hh.get(x, {}).get("label") for x in hids]))
     check(v0 < st["plan_version"] <= v0 + 1, "the burst of joins costs one replan", f"v{v0} → v{st['plan_version']}")
+    r = await c.post("/dev/inbound", json={"role": "resident", "handle": phones[3], "text": "JOIN EMBER"})
+    check(r.status_code == 422, "a phone that never registered can't join by texting", f"{r.status_code}")
     if (await get("/health")).get("max_players") == n0 + 3:
-        r = await post("/dev/inbound", {"role": "resident", "handle": phones[3], "text": "join ember"})
-        check(r.get("message") is None and phones[3] not in {p_["handle"] for p_ in await get("/phones")},
-              "a 4th join over MAX_PLAYERS is refused")
+        r = await c.post("/join", json={"handle": phones[3]})
+        check(r.status_code == 409 and "full" in r.text and phones[3] not in {p_["handle"] for p_ in await get("/phones")},
+              "a 4th POST /join over MAX_PLAYERS is refused with 409", f"{r.status_code} {r.text[:80]}")
     else:
         print(f"      cap check skipped: start the backend with MAX_PLAYERS={n0 + 3} on a fresh DB")
 
@@ -313,5 +339,6 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://127.0.0.1:8000")
     ap.add_argument("--skip-optimize", action="store_true")
+    ap.add_argument("--big", action="store_true", help="also /optimize on 10,000 worlds (seeds 2000)")
     a = ap.parse_args()
-    sys.exit(asyncio.run(main(a.base, a.skip_optimize)))
+    sys.exit(asyncio.run(main(a.base, a.skip_optimize, a.big)))
