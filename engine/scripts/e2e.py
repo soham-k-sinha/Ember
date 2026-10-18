@@ -342,6 +342,29 @@ async def main(base: str, skip_optimize: bool, big: bool = False, allow_local: b
     else:
         print(f"      cap check skipped: start the backend with MAX_PLAYERS={n0 + 3} on a fresh DB")
 
+    print("\n[10] pause on arrival: the clock waits where a player's vehicle reaches them (D112)")
+    if not (await get("/health")).get("auto_hold"):
+        print("      skipped: the backend runs with AUTO_HOLD=0")
+    else:
+        await post("/dev/inbound", {"role": "resident", "handle": phones[0], "text": "2 of us"})
+        n = len(ev.items)
+        r = await post("/clock", {"t_s": 14400})
+        held = r.get("held_by")
+        check(held is not None and r["t_s"] == held["t_s"] < 14400 and held["player"] in [g.get("player") for g in got],
+              "POST /clock past a player's arrival is clamped to it (held_by)", f"t={r['t_s']} held_by={held}")
+        await asyncio.sleep(0.3)
+        arr = ev.since(n, "arrival")
+        check(bool(arr) and arr[0]["data"] == held and not errors("ws-events", arr[0]), "WS broadcasts the arrival (contract-valid)",
+              str(arr[:1]))
+        check((await get("/health")).get("hold") == held, "GET /health shows the hold")
+        check((await post("/clock", {"t_s": 14400}))["t_s"] == r["t_s"], "the clock stays there until the call ends or resume")
+        for _ in range(4):  # every player's arrival in turn, then free
+            r = await post("/clock", {"t_s": 14400, "resume": True})
+            if r["held_by"] is None:
+                break
+        check(r["t_s"] == 14400 and (await get("/health")).get("hold") is None, "resume releases the clock",
+              f"t={r['t_s']} held_by={r['held_by']}")
+
     await ev.stop()
     await c.aclose()
     failed = [r_ for r_ in results if not r_[0]]

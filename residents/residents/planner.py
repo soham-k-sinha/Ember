@@ -51,6 +51,9 @@ class Planner:
         self._playback: dict[str, tuple[tuple, dict]] = {}
         self._optimizing = False
         self.last_optimize: dict | None = None
+        self.arrivals = None  # guide.Guide: where a player's vehicle reaches their door, the clock waits (D112)
+        self.auto_hold = True
+        self._holding: list[dict] = []  # the `arrival`s the clock waits at (one time; several players at once)
 
     # ---------- clock + state ----------
     def now(self) -> float:
@@ -70,6 +73,7 @@ class Planner:
             self.store.add_plan(plan, reports_used=[])
             self._comparison = None
             self._playback.clear()
+            self._holding = []
             state = await self._refresh(t_s)
         await self._run_hooks(state["plan"])
         return self.store.snapshot()
@@ -107,12 +111,31 @@ class Planner:
         self.store.apply_snapshot(state)
         return self.store.snapshot()
 
-    async def set_clock(self, t_s: float) -> dict:
+    def held(self) -> dict | None:
+        """The `arrival` the clock waits at (D112): a player's vehicle at their door, until its call ends (every call, when
+        several arrive at once) or the operator resumes. None: the clock moves freely."""
+        self._holding = [a for a in self._holding if self.arrivals.waiting(a)]
+        return self._holding[0] if self._holding else None
+
+    async def set_clock(self, t_s: float, resume: bool = False) -> dict:
+        """Move the clock (play / scrub). A player's vehicle reaching their door on the way stops it there (D112): `arrival`
+        is broadcast, the player is called, and later moves are clamped to it until that call ends or `resume`."""
         if not 0 <= t_s <= self.bridge.t_end_s:
             raise ValueError(f"t_s must be within [0, {self.bridge.t_end_s:.0f}]")
+        arrived: list[dict] = []
         async with self.lock:
-            state = await self._refresh(t_s)
+            if resume:
+                self._holding = []
+            hold = self.held()
+            if hold is None and self.auto_hold and self.arrivals is not None:
+                due = await self.arrivals.arrivals(self.now(), t_s)
+                arrived = self._holding = [a for a in due if a["t_s"] == due[0]["t_s"]]
+                hold = self.held()
+            state = await self._refresh(min(t_s, hold["t_s"]) if hold else t_s)
         await self.hub.broadcast("state", state, state["t_s"])
+        for a in arrived:  # rung before the clock hooks, so the "outside now" step is said on the call
+            a["call"] = self.arrivals.ring(a)
+            await self.hub.broadcast("arrival", a, state["t_s"])
         for hook in self.clock_hooks:
             try:
                 await hook()

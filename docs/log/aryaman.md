@@ -429,3 +429,9 @@ What: `ambulance` resource kind (scenario 0.4, state 0.3) and "Ambulance 1" in a
 Interfaces: state schema version 0.3 (residents' `load_seed` follows it; seed state and fixtures regenerated); web needs an `ambulance` sprite/colour (web/src/opening.ts still writes state "0.2").
 Status: engine 108 pass, ruff clean, smoke OK, residents full suite green; plan v1 78 vs 58 reached, 0 vs 2,316.7 m³ (unchanged). New snapshot `ember-engine-3884c8eb34`, not built.
 Next: integrator builds the snapshot, web draws the ambulance, DEMO.md can mention it.
+
+### 2026-10-18 06:00 · Pause on arrival (D112)
+What: `aryaman/arrival-pause` (from `aryaman/call-to-join`): when the clock reaches a player's vehicle at their door, WS `arrival`, the player is called with the "outside now" step, and the clock holds there (POST /clock clamped, `held_by`; /health `hold`) until that call ends or `POST /clock {resume: true}`. `AUTO_HOLD=0` turns it off.
+Interfaces: ws-events.schema.json 0.2 adds `arrival` (+ fixture); /clock answers `held_by`, /health `auto_hold` + `hold`; bus EVENT_TYPES, Settings.auto_hold. Engine's `_ws_examples` (ember fixtures) doesn't emit `arrival` yet.
+Status: residents 366 pass (tests/test_arrival.py), engine 107, ruff clean, e2e 79/79 with the new [10].
+Next: web (D113) stops playback on `arrival` / `held_by` and shows the hold; merge.

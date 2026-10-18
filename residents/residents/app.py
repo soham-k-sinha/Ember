@@ -96,6 +96,7 @@ class SimulateIn(BaseModel):
 
 class ClockIn(BaseModel):
     t_s: float = Field(ge=0)
+    resume: bool = Field(default=False, description="release the arrival the clock waits at (D112), then move")
 
 
 class DisruptionIn(BaseModel):
@@ -202,6 +203,7 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
             app.state.guide = Guide(app.state.store, app.state.messenger, app.state.planner)
             app.state.planner.plan_hooks.append(app.state.guide.on_plan)
             app.state.planner.clock_hooks.append(app.state.guide.tick)
+            app.state.planner.arrivals, app.state.planner.auto_hold = app.state.guide, settings.auto_hold  # D112
             app.state.outbound.guide = app.state.guide  # "what do I do?" includes the step they're on
         app.state.intake = None
         if app.state.planner is not None:  # no model (no key, or EXTRACT_ENABLED=0): texts go to the keyword parser
@@ -305,6 +307,7 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
                 "photon_listener": listener.status() if listener is not None else None,
                 "max_players": settings.max_players, "players": len(store().kv_prefix("player:")),
                 "voice_number": settings.photon_voice_number if voice_open() else None,  # call it to join (D100)
+                "auto_hold": settings.auto_hold, "hold": app.state.planner.held() if app.state.planner is not None else None,  # D112
                 "reader": ("Claude via Chalk" if settings.chalk_router_key else "Claude") if app.state.intake and app.state.intake.llm
                 else "keyword parser"}
 
@@ -434,12 +437,13 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
 
     @app.post("/clock")
     async def post_clock(body: ClockIn) -> dict:
-        """Move the sim clock (play / scrub). Broadcasts `state`."""
+        """Move the sim clock (play / scrub). Broadcasts `state`. A player's vehicle reaching their door stops it there
+        (D112): `t_s` is clamped to that `arrival` (`held_by`) until its call ends or a move with `resume`."""
         try:
-            state = await planner().set_clock(body.t_s)
+            state = await planner().set_clock(body.t_s, body.resume)
         except ValueError as e:
             raise HTTPException(422, str(e)) from e
-        return {"t_s": state["t_s"], "plan_version": state["plan_version"]}
+        return {"t_s": state["t_s"], "plan_version": state["plan_version"], "held_by": planner().held()}
 
     @app.get("/comparison")
     async def get_comparison(seeds: int = 5) -> dict:
