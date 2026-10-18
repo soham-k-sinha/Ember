@@ -145,7 +145,7 @@ function QrCode(props: { text: string }) {
     return { size: n + 4, path: d };
   }, [props.text]);
   return (
-    <svg className="qr" viewBox={`0 0 ${size} ${size}`} role="img" aria-label="QR code: text JOIN EMBER to the drill line" shapeRendering="crispEdges">
+    <svg className="qr" viewBox={`0 0 ${size} ${size}`} role="img" aria-label="QR code: text JOIN EMBER to the EMBER line" shapeRendering="crispEdges">
       <rect width={size} height={size} fill="#fff" />
       <path d={path} fill="#0b0e14" />
     </svg>
@@ -186,7 +186,7 @@ export function JoinCard(props: { apiBase: string | null; phones: Phone[]; calls
       setJoined((await postJson(`${props.apiBase}/join`, { handle: handle.trim() }, 15000)) as Joined);
     } catch (err) {
       const text = err instanceof Error ? err.message : "Join failed";
-      setError(text.startsWith("409") && text.includes("full") ? "The drill is full." : text.startsWith("422") ? "Enter a mobile number, e.g. +1 617 555 0123." : text);
+      setError(text.startsWith("409") && text.includes("full") ? "The simulation is full." : text.startsWith("422") ? "Enter a mobile number, e.g. +1 617 555 0123." : text);
     } finally {
       setBusy(false);
     }
@@ -194,7 +194,7 @@ export function JoinCard(props: { apiBase: string | null; phones: Phone[]; calls
   return (
     <section className={open ? "join open" : "join"}>
       <button className="join-head" onClick={() => setOpen(!open)} aria-expanded={open}>
-        <strong>Join the flood drill</strong>
+        <strong>Join the flood</strong>
         <span>{players.length}/{props.max}</span>
       </button>
       {open ? (
@@ -219,7 +219,7 @@ export function JoinCard(props: { apiBase: string | null; phones: Phone[]; calls
               {error ? <p className="join-error">{error}</p> : null}
             </form>
           ) : (
-            <p className="muted">Switch to Live to join the drill from your phone.</p>
+            <p className="muted">Switch to Live to join from your phone.</p>
           )}
           {players.length > 0 ? (
             <ol className="roster">
@@ -263,7 +263,7 @@ export function Sources(props: { synthetic: string[]; onClose: () => void }) {
             <li key={line}>{line}</li>
           ))}
           <li>household names and members are generated from ids</li>
-          <li>drill players get a real town building in the forecast flood zone, chosen by us; their needs are what they text</li>
+          <li>players get a real town building in the forecast flood zone, chosen by us; their needs are what they text</li>
           <li>neighbours on foot, people gathering at doors and passers-by are illustrative (not simulated, not in any metric)</li>
           <li>everyday street traffic and the traffic-light timing are illustrative; the signal locations are OpenStreetMap's, and the evacuation traffic the vans feel is the engine's staged-evacuation run</li>
           <li>vehicles, pickups, deadlines, facility states and overflow come from the engine's simulation of {scenario.scenario_id}</li>
