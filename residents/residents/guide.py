@@ -9,7 +9,8 @@ assignment (plan_sim Outcome), the names are the scenario's.
 
 Rescue (a resident):           1 the instruction: who, when, what to bring, where to be (the crew comes to the door
                                if someone needs help to walk) → 2 "2 minutes away, come to the door / corner now"
-                               (a call, D100) → 3 outside now → 4 on board, on the way → 5 checked in at the shelter.
+                               (a call, D100) → 3 outside now (a player: a call, and the clock waits for it, D112)
+                               → 4 on board, on the way → 5 checked in at the shelter.
 Protect (a facility operator): 1 meet the generator crew → 2 it's connecting → 3 powered.
 
 Steps go out when the clock reaches them: the web's playback, `POST /clock`, or the drill console (`next`, `+N`).
@@ -32,7 +33,7 @@ from starlette.concurrency import run_in_threadpool
 from .briefing import walk_phrase
 from .db import Store, thread_key
 from .messaging import Messenger
-from .threads import phone_for_thread
+from .threads import phone_for_thread, player
 
 log = logging.getLogger("residents.guide")
 
@@ -177,11 +178,44 @@ class Guide:
         plan = self.store.current_plan()
         return next((x for x in (plan or {}).get("assignments", []) if x["id"] == assignment_id), None)
 
-    def _ring(self, thread: dict, reason: str) -> None:
-        """One of the moments that matter (D100): the next text to this phone is said on a call, if it takes calls."""
+    def _ring(self, thread: dict, reason: str) -> bool:
+        """One of the moments that matter (D100): the next text to this phone is said on a call, if it takes calls.
+        True: a call is queued or on."""
         phone = phone_for_thread(self.store, thread)
-        if phone is not None and self.messenger.voice is not None:
-            self.messenger.voice.ring(phone["handle"], reason)
+        return (phone is not None and self.messenger.voice is not None
+                and self.messenger.voice.ring(phone["handle"], reason) is not None)
+
+    # ---------- the clock waits where a player's vehicle arrives (D112) ----------
+    async def arrivals(self, after: float, until: float) -> list[dict]:
+        """`arrival`s in (after, until], earliest first: a player's vehicle reaching them (their guide's "outside now"
+        step, not said yet). Only players: the scenario's synthetic households have no phone and never stop the clock."""
+        found, outcomes = [], None
+        for key, st in self.active().items():
+            if st.get("finished") or not key.startswith("household:"):
+                continue
+            thread = {"household_id": int(key.split(":", 1)[1])}
+            phone = phone_for_thread(self.store, thread)
+            n = player(self.store, phone["handle"]) if phone else None
+            a = self._assignment(st["assignment_id"]) if n else None
+            if a is None or a["resource_id"] != st["resource_id"] or a["status"] in ("cancelled", "rejected"):
+                continue
+            outcomes = outcomes if outcomes is not None else await self._outcomes()
+            i, board = next((i, s) for i, s in enumerate(self.steps(a, thread, outcomes.get(a["id"]))) if s.name == "board")
+            if st["sent"] < i and after < board.due_t <= until:
+                found.append({"t_s": board.due_t, "household_id": thread["household_id"], "resource_id": a["resource_id"],
+                              "resource_name": self._names()[0].get(a["resource_id"], {}).get("name", a["resource_id"]),
+                              "player": n, "call": False})
+        return sorted(found, key=lambda x: x["t_s"])
+
+    def ring(self, arrival: dict) -> bool:
+        """The vehicle is outside: the player's phone rings and the "outside now" step is said on the call (texted when
+        they don't take calls). True: a call is queued or on."""
+        return self._ring({"household_id": arrival["household_id"]}, "soon")
+
+    def waiting(self, arrival: dict) -> bool:
+        """The clock still waits at `arrival`: its call is queued or on (with no call, until the operator resumes)."""
+        phone = phone_for_thread(self.store, {"household_id": arrival["household_id"]})
+        return not arrival["call"] or (phone is not None and self.messenger.voice.live(phone["handle"]) is not None)
 
     def adopt(self, a: dict, thread: dict) -> None:
         """The instruction for `a` (step 1) just went out: follow it with the later steps, on the clock. A step that is

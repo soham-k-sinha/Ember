@@ -67,6 +67,8 @@ class Settings:
     drill_operators: tuple[str, ...] = field(default_factory=lambda: _csv("DRILL_OPERATORS"))  # PHONE@FACILITY
     drill_solo: bool = field(default_factory=lambda: _flag("DRILL_SOLO", False))
     auto_clock: bool = field(default_factory=lambda: _flag("AUTO_CLOCK", False))
+    # D112: the clock stops where a player's vehicle reaches them, until that call ends or POST /clock resumes (0: never)
+    auto_hold: bool = field(default_factory=lambda: _flag("AUTO_HOLD", True))
     # Phone calls (D74): ElevenLabs runs the call on the Photon SMS number; our backend is its Custom LLM.
     photon_voice_number: str = field(default_factory=lambda: os.environ.get("PHOTON_VOICE_NUMBER", ""))
     elevenlabs_api_key: str = field(default_factory=lambda: os.environ.get("ELEVENLABS_API_KEY", ""))

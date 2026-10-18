@@ -8,6 +8,8 @@ from referencing import Registry, Resource
 
 from residents.config import CONTRACTS
 
+ARRIVAL = {"t_s": 1.0, "household_id": 10296, "resource_id": "van-3", "resource_name": "Accessible Van 3", "player": 1, "call": True}
+
 
 @pytest.fixture(scope="module")
 def validator():
@@ -44,6 +46,7 @@ def test_each_event_type(validator, fixture_state):
     ok(validator, {"type": "scatter_point", "seq": 7, "t_s": 1,
                    "data": {"run_id": "v1/baseline/s1", "batch_id": "v1", "candidate": "baseline", "seed": 1,
                             "perturbation": {"travel_time_mult": 1.2}, "metrics": st["metrics"]}})
+    ok(validator, {"type": "arrival", "seq": 8, "t_s": 1, "data": ARRIVAL})
 
 
 def test_engine_example_events_validate(validator):
@@ -66,6 +69,7 @@ def test_rejects_malformed(validator, fixture_state):
     bad(validator, {"type": "plan", "seq": 1, "t_s": 0, "data": None})                 # plan events carry a plan
     bad(validator, {"type": "report", "seq": 1, "t_s": 0, "data": {"id": "r", "source": "resident", "kind": "need", "observed_at_t_s": 0}})  # need w/o household
     bad(validator, {"type": "assignment", "seq": 1, "t_s": 0, "data": {"plan_version": 2, "change": "added", "assignment_id": "x"}})
+    bad(validator, {"type": "arrival", "seq": 1, "t_s": 0, "data": {**ARRIVAL, "player": None}})  # only players hold the clock
 
 
 def test_hub_envelope_matches_schema(validator, fixture_state):
