@@ -11,26 +11,9 @@ from fastapi.testclient import TestClient
 from residents.app import create_app
 from residents.contracts import validate_report
 from residents.engine_bridge import normalize_street, street_matches
-from residents.extract import Extraction, Fact, make_llm, to_outcome
+from residents.extract import make_llm
 from residents.intake import SORRY
-from tests.test_engine import JUDGE, SCENARIO, bridge  # noqa: F401  (session fixture)
-
-NONE = dict(people=None, mobility=None, accessible_vehicle=None, medical=None, road_hint=None, cross_street=None, address=None,
-            endurance_min=None, facility_state=None, question_topic=None)
-
-
-def fact(kind, **kw):
-    return Fact(kind=kind, **{**NONE, **kw})
-
-
-def ex(*facts, confidence=0.9, q=None):
-    return Extraction(facts=list(facts), confidence=confidence, clarifying_question=q)
-
-
-def outcome(e, role="resident", thread=None, pending=None, roads=None, last_assignment=None):
-    return to_outcome(e, role=role, thread=thread or {"household_id": JUDGE}, text="msg", pending=pending,
-                      resolve_road=lambda h, c, hid: (roads or {}).get(h, []), last_assignment_id=last_assignment)
-
+from tests.helpers import JUDGE, SCENARIO, FakeLLM, ex, fact, outcome
 
 def complete(r):  # what planner.submit_report adds before validating
     return {"id": "r-x", "observed_at_t_s": 0, **r}
@@ -47,7 +30,7 @@ def test_street_matching():
     assert not street_matches(None, "River St")
 
 
-def test_resolve_road_near_household_and_at_cross_street(bridge):  # noqa: F811
+def test_resolve_road_near_household_and_at_cross_street(bridge):
     near = bridge.resolve_road("River St", None, JUDGE)
     assert near and all(bridge.edge_name(e) == "River Street" for e in near)
     assert sorted(near) == sorted(bridge.both_directions(near))     # both directions included
@@ -125,21 +108,8 @@ def test_facts_for_the_wrong_thread_are_ignored():
 
 
 # ---------- intake end to end ----------
-class FakeLLM:
-    def __init__(self, script):
-        self.script, self.prompts = script, []
-
-    async def __call__(self, system, user):
-        self.prompts.append(user)
-        text = user.split("Message:\n", 1)[1]
-        r = self.script[text]
-        if isinstance(r, Exception):
-            raise r
-        return r
-
-
 @pytest.fixture
-def make_client(settings, bridge):  # noqa: F811
+def make_client(settings, bridge):
     def make(script):
         llm = FakeLLM(script)
         s = replace(settings, scenario=SCENARIO, extract_enabled=True)
@@ -163,7 +133,7 @@ def test_judge_text_replans_and_links_the_report(make_client):
         assert rep["text"] == "we are 2, my mom uses a wheelchair" and rep["source"] == "resident" and rep["resolved"]
 
 
-def test_two_facts_one_replan(make_client, bridge):  # noqa: F811
+def test_two_facts_one_replan(make_client, bridge):
     text = "2 of us need a wheelchair van and River St is flooded"
     c, _ = make_client({text: ex(fact("need", people=2, accessible_vehicle=True, mobility=True),
                                  fact("closure_report", road_hint="River St"))})

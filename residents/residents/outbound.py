@@ -58,13 +58,17 @@ class Outbound:
             mine = [a for a in live if a["task"] == "protect" and a["target"].get("facility_id") == thread["facility_id"]]
         return min(mine, key=lambda a: a["eta_s"]) if mine else None
 
+    def confirmed(self, a: dict) -> bool:
+        """Did they say yes to `a`? The view shows sim progress (en_route…), so the stored plan's status decides."""
+        return a["status"] == "confirmed" or any(x["id"] == a["id"] and x["status"] == "confirmed"
+                                                 for x in (self.store.current_plan() or {}).get("assignments", []))
+
     def compose(self, a: dict, thread: dict, now: float, version: int) -> str:
         res, fac = self._names()
         r = res.get(a["resource_id"], {})
         who = r.get("name", a["resource_id"])
-        if a.get("status") == "confirmed":  # they already said yes: just the update (and why), no second confirmation
-            why = self.news(version)
-            return f"Update: {why + ', so ' if why else ''}{who} is now arriving {_mins(a['eta_s'], now)}. (plan v{version})"
+        if self.confirmed(a):  # they already said yes: just the update and why, no second confirmation
+            return f"Update: {self.news(version, thread)}, so {who} is now arriving {_mins(a['eta_s'], now)}. (plan v{version})"
         if "household_id" in thread:
             drop = fac.get(a.get("dropoff_facility_id") or "", {}).get("name")
             h = next((x for x in self.store.households() if x["household_id"] == thread["household_id"]), {})
@@ -87,12 +91,16 @@ class Outbound:
         return (f"{who} is on its way to you, arriving {_mins(a['eta_s'], now)}. "
                 f"Reply YES to confirm someone will meet it. (plan v{version})")
 
-    def news(self, version: int) -> str | None:
-        """Why plan `version` moved pickups, in a resident's words: the roads it newly knows are blocked."""
-        new = set(self.store.plan_reports_used(version)) - set(self.store.plan_reports_used(version - 1))
-        roads = sorted({self.bridge.edge_name(e) for r in self.store.reports_by_id(sorted(new))
-                        if r["kind"] == "closure_report" for e in r["payload"]["edge_ids"]})
-        return f"{' and '.join(roads)} {'was' if len(roads) == 1 else 'were'} reported blocked" if roads else None
+    def news(self, version: int, thread: dict) -> str:
+        """Why plan `version` moved this thread's pickup, in a resident's words: the roads it newly knows are blocked, else
+        new needs (theirs, or other households'), else the re-plan itself (a decline, the robust optimization)."""
+        new = self.store.reports_by_id(sorted(set(self.store.plan_reports_used(version)) - set(self.store.plan_reports_used(version - 1))))
+        roads = sorted({self.bridge.edge_name(e) for r in new if r["kind"] == "closure_report" for e in r["payload"]["edge_ids"]})
+        if roads:
+            return f"{' and '.join(roads)} {'was' if len(roads) == 1 else 'were'} reported blocked"
+        mine = {r.get("household_id") == thread.get("household_id") for r in new if r["kind"] == "need"}
+        return ("your household's needs changed" if True in mine else "other households asked for pickups" if mine
+                else "we re-planned the routes")
 
     async def on_plan(self, view: dict, raw: dict | None = None) -> list[dict]:
         await self.mark_declined(view)
@@ -153,7 +161,7 @@ class Outbound:
                                                            "eta_s": a["eta_s"], "plan_version": view["version"],
                                                            "message_id": msg["id"],
                                                            "changed_t_s": now if last is not None and not force else None,
-                                                           "why": self.news(view["version"]) if a["status"] == "confirmed" else None}))
+                                                           "why": self.news(view["version"], thread) if self.confirmed(a) else None}))
             if delivery in ("sent", "dev") and self.store.mark_offered(view["version"], a["id"]):
                 await self.messenger.hub.broadcast("assignment", {
                     "plan_version": view["version"], "change": "status_changed", "assignment_id": a["id"],
@@ -235,8 +243,7 @@ class Outbound:
                         f"changes. (plan v{v})")
         if a is not None:
             who = res.get(a["resource_id"], {}).get("name", a["resource_id"])
-            stored = next((x["status"] for x in (self.store.current_plan() or {}).get("assignments", []) if x["id"] == a["id"]), None)
-            if a["status"] == "confirmed" or stored == "confirmed":  # the view shows sim progress (en_route…)
+            if self.confirmed(a):
                 told = json.loads(self.store.kv_get(f"instr:{key}") or "{}")  # "what changed?": the reason we gave
                 why = f"{told['why']}, so " if told.get("assignment_id") == a["id"] and told.get("why") else ""
                 return f"Your pickup is confirmed: {why}{who} is arriving {_mins(a['eta_s'], now)}. (plan v{v})" \

@@ -10,8 +10,7 @@ from fastapi.testclient import TestClient
 from residents.app import create_app
 from residents.photon import PhotonListener, parse_inbound
 from tests.fake_photon import FakePhoton, received
-from tests.test_engine import JUDGE, SCENARIO, bridge  # noqa: F401
-from tests.test_extract import FakeLLM, ex, fact
+from tests.helpers import SCENARIO, FakeLLM, ex, fact
 
 PHONE = "+16175550120"
 
@@ -21,7 +20,7 @@ def iso(dt):
 
 
 @pytest.fixture
-def live(settings, bridge, monkeypatch):  # noqa: F811
+def live(settings, bridge, monkeypatch):
     async def no_wait(*_a, **_k):
         return None
     monkeypatch.setattr("residents.photon._backoff", no_wait)

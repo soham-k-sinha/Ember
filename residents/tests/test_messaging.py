@@ -8,9 +8,9 @@ from ember_engine.scenario import load_scenario
 from ember_engine.state import validate_state
 from residents.app import create_app
 from residents.config import CONTRACTS
-from residents.photon import parse_inbound
 from residents.threads import normalize_handle
 from tests.fake_photon import LINE, FakePhoton, received
+from tests.helpers import deliver
 
 JUDGE_PHONE = "+16175550120"
 OPERATOR_PHONE = "+16175550140"
@@ -27,11 +27,6 @@ def app_client(settings, fp, monkeypatch):
     s = replace(settings, photon_enabled=True, photon_listen=False)  # inbound driven by hand below
     with TestClient(create_app(s, photon_client=fp.client())) as c:
         yield c
-
-
-def deliver(client, obj):
-    """What the Photon listener does with a message.received event."""
-    return client.portal.call(client.app.state.messenger.handle_inbound, parse_inbound(obj))
 
 
 def test_normalize_handle():

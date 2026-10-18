@@ -7,8 +7,10 @@ exactly what the thread would text, minus what only makes sense on a screen.
   and the plan's reasons behind it ("It picks up 8 other households first; you share the trip with ..."), the
   "Step 1 of 4" labels and packing lists (the follow-up text has them), a pickup's destination, an ETA said twice, and
   asides like "or tell us what changed" or, before a new offer in the same turn, "tell me if you change your mind";
-- "Reply YES / NO / DONE" → "Say yes / no / done", "reply with / send your" → "tell me", "we'll text you" →
-  "we'll let you know", "text us" → "tell us";
+- asks, as a person would make them: "Reply YES to confirm." → "Can you be ready?", "Reply DONE when you're there." →
+  "Tell me when you're outside.", "Reply DONE when / once …" → "Tell me when / once …"; any other "Reply YES / NO" →
+  "Say yes / no", "reply with / send your" → "tell me", "we'll text you" → "we'll let you know", "text us" → "tell us";
+- "Utility truck" → "the utility truck";
 - street suffixes ("Western Ave" → "Western Avenue", "N Harvard St" → "North Harvard Street");
 - units ("12 min" → "12 minutes", "120 m" → "120 meters", "m³"), "#10296" → "number 10296", "911" → "9 1 1"
   (said as digits, never "nine hundred eleven"), "e.g." → "for example".
@@ -45,6 +47,10 @@ _RULES: list[tuple[re.Pattern, object]] = [
     (re.compile(r"; we need a few details to send the right vehicle|Please tell us: |, or tell us what changed"), ""),
     (re.compile(r": 6 inches of moving water [^.]*\."), "."),
     (re.compile(r"\s*Reply here if you change your mind\.(?=.*\bReply YES\b)"), ""),
+    (re.compile(r"Reply YES to confirm someone will meet it\."), "Can someone meet it?"),
+    (re.compile(r"Reply YES to confirm\."), "Can you be ready?"),
+    (re.compile(r"Reply DONE when you're there\."), "Tell me when you're outside."),
+    (re.compile(r"Reply DONE (when|once)\b"), r"Tell me \1"),
     (re.compile(r"\b([Rr])eply (YES|NO|DONE)\b"), lambda m: _case("say", m[1]) + " " + m[2].lower()),
     (re.compile(r"\b(YES|NO|DONE)\b"), lambda m: m[1].lower()),
     (re.compile(r"\b([Rr])eply (?:with|here)\b"), lambda m: _case("tell me", m[1])),
@@ -53,6 +59,8 @@ _RULES: list[tuple[re.Pattern, object]] = [
     (re.compile(r"\b([Ww]e'll|[Ww]e will|will) text you\b"), r"\1 let you know"),
     (re.compile(r"\b([Tt])ext us\b"), lambda m: _case("tell", m[1]) + " us"),
     (re.compile(r"\be\.g\.\s*"), "for example, "),
+    (re.compile(r"(^|[.:;] )Utility truck\b"), r"\1The utility truck"),
+    (re.compile(r"\bUtility truck\b"), "the utility truck"),
     (re.compile(r"\b(N|S|E|W) (?=[A-Z][a-z])"), lambda m: _DIR[m[1]] + " "),
     (re.compile(r"(?<=[A-Za-z]) (" + "|".join(_SUFFIX) + r")\b\.?"), lambda m: " " + _SUFFIX[m[1]]),
     (re.compile(r"(\d[\d,]*) m³"), r"\1 cubic meters"),

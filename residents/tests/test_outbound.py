@@ -9,12 +9,11 @@ from fastapi.testclient import TestClient
 
 from residents.app import create_app
 from residents.outbound import MATERIAL_ETA_S, Outbound
-from tests.test_engine import JUDGE, SCENARIO, bridge, judge_need  # noqa: F401
-from tests.test_extract import FakeLLM, ex, fact
+from tests.helpers import JUDGE, SCENARIO, FakeLLM, ex, fact, judge_need
 
 
 @pytest.fixture
-def oc(settings, bridge):  # noqa: F811
+def oc(settings, bridge):
     s = replace(settings, scenario=SCENARIO)
     with TestClient(create_app(s, bridge=bridge)) as c:
         c.post("/phones", json={"role": "resident", "handle": "6175550120"})   # Photon off → delivery "dev"
@@ -90,7 +89,7 @@ def test_generator_instruction_goes_to_the_operator(oc):
     assert m["thread"] == {"facility_id": "mt-auburn"} and m["text"].startswith("[EMBER drill] Generator 1 (500 kW, camlock) is on its way")
 
 
-def test_info_request_asked_once_after_hi(settings, bridge):  # noqa: F811
+def test_info_request_asked_once_after_hi(settings, bridge):
     llm = FakeLLM({"hi": ex(fact("other")), "hello?": ex(fact("other"))})
     s = replace(settings, scenario=SCENARIO, extract_enabled=True)
     with TestClient(create_app(s, bridge=bridge, llm=llm)) as c:

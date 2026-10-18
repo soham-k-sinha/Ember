@@ -94,12 +94,14 @@ async def run_optimize(get, post, seeds: int | None) -> tuple[dict, float]:
 
 
 async def main(base: str, skip_optimize: bool, big: bool = False) -> int:
-    from ember_engine.scenario import load_scenario
+    from ember_engine.scenario import load_scenario, validate
     from ember_engine.state import validate_state
     from residents.contracts import errors
 
     scn = load_scenario(ROOT / "scenarios" / "allston_flood_v1" / "scenario.json")
     town = json.loads(gzip.decompress((ROOT / "engine" / "data" / "town.json.gz").read_bytes()))
+    plume = validate(load_scenario(ROOT / "scenarios" / "allston_plume_v1" / "scenario.json"), town)  # D94: second hazard
+    check(plume.ok, "the second scenario (allston_plume_v1, ellipse plume) validates against the town", plume.summary)
     c = httpx.AsyncClient(base_url=base, timeout=120)
 
     async def get(path, **kw):
@@ -149,6 +151,9 @@ async def main(base: str, skip_optimize: bool, big: bool = False) -> int:
     check(any(q["to"].get("household_id") == JUDGE for q in p["info_requests"]), "plan v1 has a question for the judge")
     shared = [a for a in rescues if "shares the trip" in a.get("rationale", "")]
     check(len(shared) > 0, "neighbours share vans (shared trips in v1)", f"{len(shared)} shared pickups")
+    kept_v1 = (p.get("search") or {}).get("kept_before_tradeoff_m3")
+    check(isinstance(kept_v1, (int, float)) and kept_v1 > 0, "plan v1 records the sewage kept out (kept_before_tradeoff_m3)",
+          f"{kept_v1} m³")
     print(f"      v1 metrics: {json.dumps({k: p['metrics'][k] for k in ('people_reached_before_deadline', 'people_unreached', 'overflow_m3', 'vehicle_km')})}")
 
     print("\n[2] judge at minute 5: need + River St closed")
@@ -213,6 +218,10 @@ async def main(base: str, skip_optimize: bool, big: bool = False) -> int:
     check(cf is not None and "instead" in cf["blocked_by"], "the overflow cost is stated with simulated numbers",
           (cf or {}).get("blocked_by", "")[:120])
     check(gens and "down at 25 min" in gens[0].get("rationale", ""), "the rationale uses the operator's 10 minutes")
+    kept = (st["plan"].get("search") or {}).get("kept_before_tradeoff_m3")
+    check(isinstance(kept, (int, float)) and isinstance(kept_v1, (int, float)) and kept >= kept_v1,
+          "after the trade the sewage kept out stays at its last value before it",
+          f"{kept} m³ (v1 {kept_v1} m³, overflow now {m['overflow_m3']} m³)")
 
     print("\n[5] comparison + simulate")
     cmp_ = await get("/comparison", params={"seeds": 5})
@@ -294,6 +303,8 @@ async def main(base: str, skip_optimize: bool, big: bool = False) -> int:
     regs = [await post("/join", {"handle": ph}) for ph in phones[:3]]
     check([r_["player"] for r_ in regs] == [n0 + 1, n0 + 2, n0 + 3] and all(r_["assigned_number"] for r_ in regs),
           "POST /join returns Player N and the line to text", str([(r_["player"], r_["assigned_number"]) for r_ in regs]))
+    check(all("iMessage" in (r_.get("note") or "") for r_ in regs), "POST /join says iPhone (iMessage) only",
+          str(regs[0].get("note")))
     again = await post("/join", {"handle": phones[0]})
     check(again["player"] == n0 + 1, "POST /join is idempotent per phone", f"player {again['player']}")
     ps = {p_["handle"]: p_ for p_ in await get("/phones")}

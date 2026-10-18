@@ -1,0 +1,334 @@
+{
+ "version": "0.3",
+ "scenario_id": "allston_plume_v1",
+ "name": "Chemical plume south of the Treehouse (drill)",
+ "description": "A synthetic hazardous-materials release next to the David Rubenstein Treehouse, on the same engine, roads and household ids as allston_flood_v1. Release point, plume growth, fleet and needs are synthetic (assumptions.md).",
+ "synthetic": [
+  "release point, timing and plume growth (GrowingEllipseHazard, not a dispersion model)",
+  "fleet and service times",
+  "which households are assisted, their needs and the judge",
+  "EMS Station 14 as response base and drop-off"
+ ],
+ "t_end_s": 7200,
+ "tick_s": 60,
+ "deadline_margin_s": 600,
+ "district": {
+  "name": "Allston-Riverside, downwind of the release",
+  "geometry": {
+   "type": "Polygon",
+   "coordinates": [
+    [
+     [
+      -71.135,
+      42.3535
+     ],
+     [
+      -71.1065,
+      42.3535
+     ],
+     [
+      -71.1065,
+      42.373
+     ],
+     [
+      -71.135,
+      42.373
+     ],
+     [
+      -71.135,
+      42.3535
+     ]
+    ]
+   ]
+  }
+ },
+ "hazard": {
+  "type": "ellipse",
+  "source": "Synthetic release from the storage tank 180 m south of the Treehouse (town asset 9, contents unknown in OSM); west wind, so the plume drifts east across Western Ave and the Charles toward Riverside. Engine GrowingEllipseHazard, sampled every 5 min; nothing here is a dispersion model.",
+  "center": [
+   -71.120828,
+   42.361958
+  ],
+  "start_t_s": 300,
+  "speed_mps": 0.1,
+  "heading_deg": 90,
+  "ratio": 2.5,
+  "keyframe_every_s": 300
+ },
+ "facilities": [
+  {
+   "id": "ems14",
+   "type": "response_base",
+   "name": "Boston EMS Station 14 (drill staging)",
+   "asset_id": 5,
+   "capacity_people": 80,
+   "consequence": "Upwind of the plume: where evacuees are taken."
+  }
+ ],
+ "resources": [
+  {
+   "id": "van-1",
+   "kind": "van",
+   "name": "Van 1",
+   "at_facility": "ems14",
+   "capacity_people": 6,
+   "fuel_l": 60,
+   "fuel_l_per_km": 0.15,
+   "service_s": 300
+  },
+  {
+   "id": "van-2",
+   "kind": "van",
+   "name": "Van 2",
+   "at_facility": "ems14",
+   "capacity_people": 6,
+   "fuel_l": 60,
+   "fuel_l_per_km": 0.15,
+   "service_s": 300
+  },
+  {
+   "id": "van-3",
+   "kind": "accessible_van",
+   "name": "Accessible Van 3",
+   "accessible": true,
+   "at_facility": "ems14",
+   "capacity_people": 6,
+   "fuel_l": 60,
+   "fuel_l_per_km": 0.18,
+   "service_s": 600
+  }
+ ],
+ "households": [
+  {
+   "household_id": 1902,
+   "label": "household #1902 (elderly, no car)",
+   "needs": {
+    "people": 2,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 1908,
+   "label": "household #1908 (elderly, no car)",
+   "needs": {
+    "people": 4,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 2441,
+   "label": "household #2441 (mobility, no car)",
+   "needs": {
+    "people": 1,
+    "mobility": true,
+    "accessible_vehicle": true,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 2576,
+   "label": "household #2576 (elderly, no car)",
+   "needs": {
+    "people": 4,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 2758,
+   "label": "household #2758 (elderly, mobility, no car)",
+   "needs": {
+    "people": 4,
+    "mobility": true,
+    "accessible_vehicle": true,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 3164,
+   "label": "household #3164 (mobility, no car)",
+   "needs": {
+    "people": 2,
+    "mobility": true,
+    "accessible_vehicle": true,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 4578,
+   "label": "household #4578 (elderly, no car)",
+   "needs": {
+    "people": 1,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 4581,
+   "label": "the judge's household",
+   "needs": "unknown",
+   "judge": true,
+   "phone_role": "resident"
+  },
+  {
+   "household_id": 4597,
+   "label": "household #4597 (elderly, no car)",
+   "needs": {
+    "people": 3,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 4603,
+   "label": "household #4603 (elderly, no car)",
+   "needs": {
+    "people": 3,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 4644,
+   "label": "household #4644 (elderly, no car)",
+   "needs": {
+    "people": 1,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 4649,
+   "label": "household #4649 (medical, no car)",
+   "needs": {
+    "people": 2,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": true
+   }
+  },
+  {
+   "household_id": 4657,
+   "label": "household #4657 (elderly, no car)",
+   "needs": {
+    "people": 2,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 4672,
+   "label": "household #4672 (medical, no car)",
+   "needs": {
+    "people": 2,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": true
+   }
+  },
+  {
+   "household_id": 6209,
+   "label": "household #6209 (elderly, no car)",
+   "needs": {
+    "people": 4,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 6247,
+   "label": "household #6247 (elderly, no car)",
+   "needs": {
+    "people": 2,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 7345,
+   "label": "household #7345 (mobility, no car)",
+   "needs": {
+    "people": 3,
+    "mobility": true,
+    "accessible_vehicle": true,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 7667,
+   "label": "household #7667 (medical, no car)",
+   "needs": {
+    "people": 2,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": true
+   }
+  },
+  {
+   "household_id": 9360,
+   "label": "household #9360 (elderly, no car)",
+   "needs": {
+    "people": 1,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 9497,
+   "label": "household #9497 (mobility, no car)",
+   "needs": {
+    "people": 2,
+    "mobility": true,
+    "accessible_vehicle": true,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 10340,
+   "label": "household #10340 (elderly, mobility, no car)",
+   "needs": {
+    "people": 4,
+    "mobility": true,
+    "accessible_vehicle": true,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 17777,
+   "label": "household #17777 (elderly, no car)",
+   "needs": {
+    "people": 2,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  },
+  {
+   "household_id": 17789,
+   "label": "household #17789 (elderly, no car)",
+   "needs": {
+    "people": 3,
+    "mobility": false,
+    "accessible_vehicle": false,
+    "medical": false
+   }
+  }
+ ],
+ "reserve": {
+  "vans": 1,
+  "generators": 0
+ }
+}

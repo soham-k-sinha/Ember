@@ -4,7 +4,7 @@ import type { MultiPolygon, Polygon } from "geojson";
 type Ring = LngLat[];
 type PolygonRings = Ring[];
 
-export function pointInRing(lon: number, lat: number, ring: Ring): boolean {
+function pointInRing(lon: number, lat: number, ring: Ring): boolean {
   let inside = false;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
     const xi = ring[i][0];
@@ -31,7 +31,7 @@ function onSegment(a: LngLat, b: LngLat, c: LngLat): boolean {
   );
 }
 
-export function segmentsIntersect(a: LngLat, b: LngLat, c: LngLat, d: LngLat): boolean {
+function segmentsIntersect(a: LngLat, b: LngLat, c: LngLat, d: LngLat): boolean {
   const o1 = orient(a, b, c);
   const o2 = orient(a, b, d);
   const o3 = orient(c, d, a);
@@ -65,14 +65,14 @@ function asRings(coordinates: number[][][]): PolygonRings {
   return coordinates.map((ring) => ring.map((pair) => [pair[0], pair[1]] as LngLat));
 }
 
-export function polygonsOf(geometry: Polygon | MultiPolygon | null): PolygonRings[] {
+function polygonsOf(geometry: Polygon | MultiPolygon | null): PolygonRings[] {
   if (!geometry) return [];
   if (geometry.type === "Polygon") return [asRings(geometry.coordinates)];
   if (geometry.type === "MultiPolygon") return geometry.coordinates.map((poly) => asRings(poly));
   return [];
 }
 
-export function lineIntersectsPolygon(line: LngLat[], rings: PolygonRings): boolean {
+function lineIntersectsPolygon(line: LngLat[], rings: PolygonRings): boolean {
   if (line.length === 0 || rings.length === 0) return false;
   for (const point of line) {
     if (pointInPolygon(point[0], point[1], rings)) return true;

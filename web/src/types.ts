@@ -45,7 +45,7 @@ export type TownEdge = {
   geom: LngLat[];
 };
 
-export type TownHousehold = {
+type TownHousehold = {
   id: number;
   lon: number;
   lat: number;
@@ -57,7 +57,7 @@ export type TownHousehold = {
 
 export type TownNode = { id: number; lon: number; lat: number };
 
-export type TownAsset = {
+type TownAsset = {
   id: number;
   type: string;
   name: string;
@@ -192,13 +192,13 @@ export type Assignment = {
   route?: LngLat[];
 };
 
-export type PlanChange = {
+type PlanChange = {
   assignment_id: string;
   change: "added" | "removed" | "retargeted" | "eta_changed" | "resource_changed" | "status_changed";
   note?: string;
 };
 
-export type Unresolved = {
+type Unresolved = {
   target: Target;
   need: string;
   blocked_by: string;
@@ -206,7 +206,7 @@ export type Unresolved = {
   alternatives?: string[];
 };
 
-export type InfoRequest = {
+type InfoRequest = {
   id: string;
   to: Target;
   question: string;
@@ -258,7 +258,7 @@ export type Report = {
   payload?: Record<string, unknown>;
 };
 
-export type ThreadRef = { household_id: number } | { facility_id: string };
+type ThreadRef = { household_id: number } | { facility_id: string };
 
 export type Message = {
   id: string;
@@ -294,7 +294,7 @@ export type StateSnapshot = {
   metrics: PlanMetrics;
 };
 
-export type ComparisonMetric = {
+type ComparisonMetric = {
   metric: string;
   label: string;
   better: "higher" | "lower";
@@ -307,7 +307,7 @@ export type ComparisonMetric = {
   sentence: string;
 };
 
-export type EmberPlanVersion = {
+type EmberPlanVersion = {
   version: number;
   t_s: number;
   trigger: string;
@@ -330,7 +330,7 @@ export type Comparison = {
 };
 
 /** plan.search.robust after a robustness fan-out (engine ember_engine.daytona.robust). */
-export type RobustRanking = {
+type RobustRanking = {
   candidate: string;
   runs: number;
   eligible: boolean;
@@ -349,6 +349,8 @@ export type RobustSummary = {
   workers?: number;
   fanout_wall_s?: number;
   startup_s?: number;
+  /** the same worlds' fan-out on this laptop, when the backend measured it */
+  laptop_s?: number;
   rule: string;
   chosen: string;
   nominal_best: string;
@@ -386,7 +388,7 @@ export type Selection =
 /** GET /phones row: a registered phone; drill players carry their 1-based join order. */
 export type Phone = { handle: string; player: number | null; household_id: number | null };
 
-export type CallReason = "no_reply" | "mobility" | "pickup_changed" | "console" | "inbound";
+type CallReason = "no_reply" | "mobility" | "pickup_changed" | "console" | "inbound";
 
 /** GET /calls: voice calls in progress and recently ended. */
 export type Calls = {

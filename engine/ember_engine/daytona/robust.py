@@ -2,7 +2,8 @@
 
     plan, points = robust_plan(world, scenario, reports, pool=get_pool())
 
-The allocator's top-K different candidates (plans with the same live assignments are run once) and the
+The allocator's top-K different candidates (plans with the same live assignments are run once), the forecast-best
+with its new generators sent at the grid trip instead of now (same rescues, so only overflow tells them apart), and the
 baseline (a reference cloud for the scatter) are each run on the same M perturbed worlds (paired seeds) through
 the pool. A candidate's robust score is the mean of its worst 20% of runs on people unreached, then on overflow
 m³. The best robust candidate becomes the plan if it beats the forecast-best by at least MIN_GAIN people there;
@@ -15,8 +16,9 @@ from __future__ import annotations
 import math
 import time
 
-from ..allocator.search import finalize, search
+from ..allocator.search import Candidate, finalize, objective, search
 from ..baseline import baseline_plan
+from ..sim import simulate
 from .jobs import make_jobs
 from .pool import get_pool
 
@@ -62,6 +64,18 @@ def distinct(cands, k: int) -> dict:
     return {c.cid: c for c in list(out.values())[:k]}
 
 
+def staged_at_trip(s, c):
+    """c with each new generator sent when its facility's grid feed trips on the forecast instead of now: the
+    conventional timing, so the robust runs price early staging in overflow m³ (D94). None if nothing changes."""
+    trip = {k: b for k, (b, _) in s.ctx.power_risk.items() if b is not None and b > s.ctx.t_now}
+    late = [dict(a, not_before_t_s=trip[a["target"]["facility_id"]])
+            if a["task"] == "protect" and a["plan_version"] == s.version and a["target"]["facility_id"] in trip else a for a in c.assignments]
+    if late == c.assignments:
+        return None
+    r = simulate(s.ctx.world, s.ctx.scn, {"assignments": late}, reports=s.reports, record=False)
+    return Candidate(f"{c.cid}-trip", objective(r.metrics), c.pol, late, r, "generators sent at the grid trip")
+
+
 def robust_plan(world, scn: dict, reports=(), t_now: float = 0.0, prev: dict | None = None, prev_reports=None,
                 k: int = 4, seeds: int = 50, pool=None, on_point=None, seed: int = 0, trigger: str | None = None,
                 include_baseline: bool = True, moves: int | None = None, version: int | None = None) -> tuple[dict, list]:
@@ -70,6 +84,9 @@ def robust_plan(world, scn: dict, reports=(), t_now: float = 0.0, prev: dict | N
     if version is not None:   # a fresh plan that replaces an existing version (optimize at t=0): tag points with it
         s.version = version
     cands = distinct(s.ranked, k)
+    late = staged_at_trip(s, s.ranked[0])
+    if late:
+        cands[late.cid] = late
     plans = {cid: {"assignments": c.assignments} for cid, c in cands.items()}
     if include_baseline:
         plans["baseline"] = baseline_plan(world, scn, s.reports)

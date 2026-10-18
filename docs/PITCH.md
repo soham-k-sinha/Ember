@@ -1,6 +1,6 @@
 # EMBER: the 3-minute pitch and judge Q&A
 
-Numbers marked † are re-measured after round 2 (`engine/scripts/e2e.py`, DEMO.md). Never say a number that isn't on screen or in DEMO.md.
+Numbers marked † are re-measured on round 3 (`engine/scripts/e2e.py --big` 83/83, DEMO.md). Never say a number that isn't on screen or in DEMO.md.
 
 ## The pitch (≈3:00)
 
@@ -14,7 +14,7 @@ Numbers marked † are re-measured after round 2 (`engine/scripts/e2e.py`, DEMO.
 
 **1:45 Beat 3: hospital vs sewage, people first (25 s).** The operator says "on backup, 10 minutes left". The generator moves to Mount Auburn, and EMBER states the cost: "9,600 m³ of untreated sewage into the Charles, stated, not hidden." "Before that call, EMBER had kept 5,167 m³ † out of the river. The real Cottage Farm facility released 80,700 m³ in one 2024 storm."
 
-**2:10 Beat 4: Daytona stress test (30 s).** Press Optimize. "Ninety Daytona sandboxes run every candidate plan against thousands of versions of tonight: slower roads, an earlier flood, a van failing. 10,000 worlds in about 5 s †, 4.6× our laptop. We pick the plan that holds up when things go wrong."
+**2:10 Beat 4: Daytona, the pre-season stress test (30 s).** At clock 0:00 press Stress test 10,000 worlds (in the live demo this beat opens, see DEMO.md). "Ninety Daytona sandboxes run every candidate plan against 10,000 versions of tonight: slower roads, an earlier flood, a van failing. About 4 s †; our laptop needs 24 s. The forecast's favourite plan leaves 30.3 † people stranded in the worst 20 % of storms; the robust pick leaves 15.7 †. We stage the plan that holds up when things go wrong."
 
 **2:40 Close (20 s).** "Versus the baseline that handles each call as it comes: 37 † more people reached before the water, a shorter hospital outage, zero sewage until the hospital needs the generator. Real streets and facilities; households and timings are synthetic and labelled. Every decision has a computed reason. Ask us anything."
 
@@ -23,7 +23,7 @@ Numbers marked † are re-measured after round 2 (`engine/scripts/e2e.py`, DEMO.
 - **"Is the AI making the plan?"** No. The AI only reads a text into a fact and words the reply; a guard rejects any number, vehicle or street the planner didn't produce. Routes, ETAs and assignments come from a deterministic numpy simulator and local search, about 0.7 s per replan.
 - **"How is this different from LANDFALL / forecast planners?"** They plan once from a forecast, in minutes to hours. We replan in under a second from what people report, and send each person their own instruction.
 - **"What's real?"** OSM streets and buildings, the venue, Mount Auburn Hospital, the Cottage Farm CSO and outfall MWR201, and the MWRA 2024 discharge figures. Synthetic, labelled in the app: households and needs, flood timing, fleet, background traffic and passers-by.
-- **"Why Daytona and not your laptop?"** Isolation and scale. At 250 worlds they're even; at 10,000 Daytona is 4.6× faster (24 s vs 5 s †), fast enough to stress-test a plan during a call.
+- **"Why Daytona and not your laptop?"** Isolation and scale. At 250 worlds they're even; at 10,000 Daytona takes 3–5 s † against the laptop's 24 s (4.6× in the head-to-head, D86), fast enough to stress-test a plan during a call.
 - **"Why trust the text understanding?"** We grade it by outcomes, not words: a simulator-graded eval asks whether the household was reached in time with the right vehicle. 50/51 pass, 100% safe through Chalk's Model Gateway; when unsure it asks instead of guessing. With no AI available, a keyword parser keeps texts working.
 - **"What about the hospital vs the environment?"** The objective is lexicographic: people first, then hospital outage, then sewage overflow. Every trade-off is stated with simulated numbers.
 - **"Voice?"** EMBER calls the most at-risk people first: no reply while the water is close, a wheelchair or medical need, or a changed pickup. Same words as the texts, short and calm, and a text follows. ElevenLabs on our Photon number. (Say "tested in simulation" unless the live call was verified.)

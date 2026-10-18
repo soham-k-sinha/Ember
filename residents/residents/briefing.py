@@ -114,10 +114,6 @@ class Briefing:
                and a["status"] in LIVE and a["resource_id"] not in rej]
         return min(own, key=lambda a: a["eta_s"]) if own else None
 
-    def raw_status(self, a: dict) -> str | None:
-        """The stored status (confirmed / offered / rejected); the view shows simulated progress instead."""
-        return next((x["status"] for x in self._raw().get("assignments", []) if x["id"] == a["id"]), None)
-
     def fits(self, thread: dict) -> list[dict]:
         """Every vehicle in the fleet that could carry this household (capacity + wheelchair access)."""
         n = self.needs(thread)

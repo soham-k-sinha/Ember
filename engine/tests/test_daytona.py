@@ -68,12 +68,15 @@ def test_distinct_runs_each_plan_once():
     assert list(distinct(cands, 2)) == ["c00", "c02"]               # c01 only cancels work: the same plan as c00
 
 
-def test_hundred_jobs_complete_and_pick_a_plan(world, scn, town):
+def test_every_job_completes_and_picks_a_plan(world, scn, town):
     streamed = []
     plan, pts = robust_plan(world, scn, k=4, seeds=20, pool=LocalPool(1, world=world), on_point=streamed.append)
-    assert len(pts) == 100 and len(streamed) == 100                # 4 candidates + baseline × 20 seeds
+    assert len(pts) == 120 and len(streamed) == 120                # 4 candidates + c00 staged late + baseline × 20 seeds
     r = plan["search"]["robust"]
-    assert r["jobs"] == 100 and r["chosen"] in {c for c in r["candidates"] if c != "baseline"}
+    assert r["jobs"] == 120 and r["chosen"] in {c for c in r["candidates"] if c != "baseline"}
+    row = {x["candidate"]: x for x in r["ranking"]}                 # D94: same rescues, so only overflow separates them
+    assert row["c00-trip"]["worst20_people_unreached"] == row["c00"]["worst20_people_unreached"]
+    assert row["c00-trip"]["worst20_overflow_m3"] > row["c00"]["worst20_overflow_m3"]
     assert r["chosen"] in (r["ranking"][0]["candidate"], r["nominal_best"])
     st = __import__("ember_engine.sim", fromlist=["simulate"]).simulate(world, scn, plan).state_at(3600)
     assert validate_state(st, scn, town) == []
@@ -190,6 +193,30 @@ def test_a_dropped_connection_during_batch_setup_keeps_the_sandbox(world, scn):
     ci.run_code = once
     pts = asyncio.run(pool.arun("v1", scn, {"c00": {"assignments": []}}, [], J.make_jobs("v1", ["c00"], [1, 2], scn, world.n_edges)))
     assert len(pts) == 2 and pool.sandboxes == first and not pool.log
+
+
+def test_orphan_sweep_spares_another_backends_live_pool():
+    """Only this process's sandboxes, or app sandboxes past the TTL, are orphans; another backend's warm pool is not."""
+    from datetime import UTC, datetime, timedelta
+
+    from ember_engine.daytona.pool import LABELS, OWNER
+    now = datetime.now(UTC)
+    other = {**LABELS, "owner": "laptop-2-4242"}
+    sbs = [SimpleNamespace(id="mine", labels=OWNER, created_at=now), SimpleNamespace(id="theirs", labels=other, created_at=now),
+           SimpleNamespace(id="stale", labels=other, created_at=now - timedelta(hours=7))]
+    deleted = []
+
+    async def listing(q):
+        for s in sbs:
+            if q.labels.items() <= s.labels.items() and (q.created_at_before is None or s.created_at < q.created_at_before):
+                yield s
+
+    async def delete(sb, timeout=None):
+        deleted.append(sb.id)
+    pool = DaytonaPool(2)
+    pool.client = SimpleNamespace(list=listing, delete=delete)
+    asyncio.run(pool._delete_orphans())
+    assert sorted(deleted) == ["mine", "stale"] and pool.log == ["deleted 2 orphaned sandboxes"]
 
 
 def test_get_pool_falls_back_to_local(monkeypatch):

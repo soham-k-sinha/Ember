@@ -4,7 +4,8 @@ drill actually needs, so a text or a call keeps working instead of answering "co
 It returns the same `Extraction` the model would, so everything after it is unchanged (`to_outcome`: a need
 without a head count still asks "how many", a YES only counts if something was offered, ...). It only reads
 what is unmistakable: "yes" / "no" / "done", "2 of us" / "just me" / "me and my mom", "wheelchair", a question's
-topic by its key words, "<street> is flooded", "we'll be okay here" (the safety advice for staying). Anything else → None (the caller asks a specific question, never
+topic by its key words, "<street> is flooded", "we'll be okay here" (the safety advice for staying), and urgency ("the water
+is at our door", "we're trapped", "hurry", "help"). Anything else → None (the caller asks a specific question, never
 a guess). Confidence is fixed at 0.8 (above the ask threshold, below a clear model read).
 """
 
@@ -21,7 +22,7 @@ YES = re.compile(r"^((oh|um+|uh+|well) )*(yes|yeah|yep|yup|sure|ok|okay|confirm(
 ACK = re.compile(r"^((oh|um+|uh+|well) )*(ok|okay)\b")  # "okay, what changed?": a nod, then the question
 NO = re.compile(r"^(no|nope|nah|cancel|decline|don'?t|do not)\b")
 STAY = re.compile(r"\b(stay(ing)? (put|here|home)|(we|i)'?re staying|(we|i)'?ll be (ok|okay|fine|alright))\b")
-DONE = re.compile(r"\b(done|ready|we'?re here|i'?m here|we are here|i am here|at the corner|on the (van|truck|bus)|"
+DONE = re.compile(r"\b(done|ready|(we'?re|i'?m|we are|i am) (here|outside)|at the corner|on the (van|truck|bus)|"
                   r"aboard|on board|arrived|checked in|it'?s connected|connected)\b")
 COUNT = re.compile(r"\b" + _N + r"\s+(of us|people|persons|adults|in total|total)\b")
 ALONE = re.compile(r"\b(just me|only me|myself|i'?m alone|i am alone|just one)\b")
@@ -31,6 +32,9 @@ MEDICAL = re.compile(r"\b(oxygen|dialysis|insulin|medical|injur\w*|medication)\b
 STREET = re.compile(r"\b([a-z]+(?: [a-z]+)? (?:st|street|ave|avenue|rd|road|dr|drive|pl|place|sq|square|bridge))\b")
 BLOCKED = re.compile(r"\b(flooded|blocked|closed|under water|impassable)\b")
 GREETING = re.compile(r"^(hi|hello|hey|hiya|good (morning|afternoon|evening))\b")
+URGENT = re.compile(r"\b(hurry|help|trapped|water('s| is)? (at|under|by|coming (in|under|through)) (our|my|the) (front )?"
+                    r"(door|house|home|apartment|basement|stairs)|(water|flooding|flooded)( is)? (inside|in (our|my|the) "
+                    r"(house|home|apartment|basement)))\b")
 _LEAD = {"is", "are", "the", "on", "at", "of", "a", "an", "near", "across", "get", "by", "to", "from", "via", "and"}
 QUESTION = re.compile(r"\?|^(what|when|where|how|is|are|can|could|will|would|should|who|why|do|does|did)\b")
 TOPICS = [  # first match wins
@@ -107,6 +111,8 @@ def parse(text: str, role: str = "resident") -> Extraction | None:
             facts.append(_fact("done"))
         elif STAY.search(t):  # "we're upstairs, we'll be okay" (no pickup cancelled on it): what to do if they stay
             facts.append(_fact("question", question_topic="safety"))
+    if URGENT.search(t) and not any(f.kind in ("confirm", "reject") for f in facts):  # "yes, please hurry" is a yes
+        facts.append(_fact("urgent"))
     if not facts and GREETING.search(t) and len(t.split()) <= 4:
         return Extraction(facts=[_fact("other")], confidence=0.8, clarifying_question=None)  # → their status / the plan's question
     if QUESTION.search(t) and not any(f.kind in ("confirm", "reject") for f in facts):

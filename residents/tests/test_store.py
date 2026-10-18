@@ -1,4 +1,6 @@
 """The DB round trip: seed(fixture) → snapshot() must give the fixture back exactly."""
+import sqlite3
+
 import pytest
 
 from residents.db import Store, thread_key
@@ -54,7 +56,7 @@ def test_failed_seed_rolls_back(tmp_path, state):
     store = Store(tmp_path / "a.db")
     store.seed(state)
     bad = dict(state, households=state["households"] + [state["households"][0]])  # duplicate primary key
-    with pytest.raises(Exception):
+    with pytest.raises(sqlite3.IntegrityError):
         store.seed(bad)
     assert without_source(store.snapshot()) == without_source(state)  # untouched
 
