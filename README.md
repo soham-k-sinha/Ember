@@ -6,6 +6,12 @@
 text or call (Photon) → structured fact (AI) → simulator-scored replan (~0.7 s, no AI) → personal text or call
 ```
 
+| Live | Photon · multiplayer |
+|---|---|
+| ![Live view: the district, the score card vs baseline and the decisions ticker](docs/img/live.png) | ![Photon view: phones → Photon → AI reads → planner → told](docs/img/photon.png) |
+| **Impact** | **Daytona** |
+| ![Impact view: people, hospital outage and sewage vs baseline, to scale against Cottage Farm's 2024 release](docs/img/impact.png) | ![Daytona view: 10,000 worlds on 90 sandboxes vs the laptop](docs/img/daytona.png) |
+
 Flood response is the first demonstration; adaptive coordination is the product. One engine handles two incident types: household rescue and critical-infrastructure power loss (Mount Auburn Hospital, the Cottage Farm sewage station). Forecasts are wrong by minute 10; EMBER keeps the plan right once real people start reporting.
 
 ## Architecture
