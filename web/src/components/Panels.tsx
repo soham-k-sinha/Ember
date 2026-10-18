@@ -1,16 +1,15 @@
+/** The inspector drawer (a household, vehicle, facility, road or neighbour on foot) and the decisions story it shares with the ticker. */
+
 import {
   formatMinutes,
   formatNeeds,
   formatNumber,
   formatSim,
-  keptBeforeTradeoff,
   planDiff,
   planTiming,
-  replanSeconds,
   reporterJob,
   statusLabel,
   targetLabel,
-  tradedFacility,
 } from "../format";
 import {
   assignmentById,
@@ -25,94 +24,42 @@ import {
   targetName,
 } from "../model";
 import { town } from "../fixtures";
-import { robustOf } from "../live";
 import { householdName, members, type WalkerPlan } from "../people";
 import { householdTimeline, resourceTimeline, type Playback, type TimelineItem } from "../playback";
-import type {
-  Closure,
-  Comparison,
-  JudgeClosure,
-  PlanMetrics,
-  PlanSnapshot,
-  RobustSummary,
-  ScatterPoint,
-  Selection,
-  StateSnapshot,
-  Target,
-  Wastewater,
-} from "../types";
+import type { Closure, JudgeClosure, PlanSnapshot, Selection, StateSnapshot, Target, Wastewater } from "../types";
 
-export type PanelId = "feed" | "plan" | "proof";
-
-const TABS: Array<{ id: PanelId; label: string }> = [
-  { id: "feed", label: "Feed" },
-  { id: "plan", label: "Plan" },
-  { id: "proof", label: "Proof" },
-];
-
-export function Panels(props: {
-  tab: PanelId;
-  onTab: (tab: PanelId) => void;
+type DrawerProps = {
+  selection: Selection;
   state: StateSnapshot;
   t: number;
   closures: Closure[];
-  selection: Selection | null;
-  comparison: Comparison | null;
-  nominal: { ember?: PlanMetrics; baseline?: PlanMetrics };
-  scatter: ScatterPoint[];
-  scatterTotal: number | null;
-  robust: RobustSummary | null;
-  plans: PlanSnapshot[];
   judge: JudgeClosure[];
   busy: string | null;
-  onCloseRoad: (edgeId: number) => void;
-  onUndoClosure: (edgeId: number) => void;
-  onReplan: () => void;
-  onCompare: () => void;
-  onOptimize: (seeds?: number) => void;
   playback: Playback | null;
   walkers: WalkerPlan | null;
   follow: Selection | null;
+  onCloseRoad: (edgeId: number) => void;
+  onUndoClosure: (edgeId: number) => void;
   onFollow: (selection: Selection | null) => void;
   onSelect: (selection: Selection | null) => void;
-}) {
+};
+
+/** What was clicked, over the right edge of the workspace in every view. */
+export function Drawer(props: DrawerProps) {
   return (
-    <aside className="side">
-      <div className="tabs" role="tablist">
-        {TABS.map((tab) => (
-          <button
-            key={tab.id}
-            role="tab"
-            aria-selected={props.tab === tab.id}
-            className={props.tab === tab.id ? "tab on" : "tab"}
-            onClick={() => props.onTab(tab.id)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-      <div className="panel" role="tabpanel">
-        {props.tab === "feed" ? <Feed {...props} /> : null}
-        {props.tab === "plan" ? <PlanTab {...props} /> : null}
-        {props.tab === "proof" ? <Proof {...props} /> : null}
-      </div>
-      {props.selection ? (
-        <div className="drawer">
-          <button className="close" onClick={() => props.onSelect(null)} aria-label="Close">×</button>
-          <Inspector {...props} selection={props.selection} />
-        </div>
-      ) : null}
+    <aside className="drawer" aria-label="Details">
+      <button className="close" onClick={() => props.onSelect(null)} aria-label="Close">×</button>
+      <Inspector {...props} />
     </aside>
   );
 }
 
-type FeedItem = { key: string; t_s: number; kind: "in" | "fact" | "plan" | "out"; title: string; text: string; quote?: string; target?: Target };
+export type FeedItem = { key: string; t_s: number; kind: "in" | "fact" | "plan" | "out"; title: string; text: string; quote?: string; target?: Target };
 
 /** The story in order: a text comes in → it becomes a fact → the plan changes → EMBER texts back. */
 const ORDER: Record<FeedItem["kind"], number> = { in: 0, fact: 1, plan: 2, out: 3 };
-const KIND_LABEL: Record<FeedItem["kind"], string> = { in: "Text in", fact: "Fact", plan: "New plan", out: "Text out" };
 
-function feedItems(state: StateSnapshot, plans: PlanSnapshot[], playback: Playback | null, t: number): FeedItem[] {
+export function feedItems(state: StateSnapshot, plans: PlanSnapshot[], playback: Playback | null, t: number): FeedItem[] {
   const items: FeedItem[] = [];
   for (const message of state.messages) {
     if (message.t_s > t) continue;
@@ -160,142 +107,7 @@ function feedItems(state: StateSnapshot, plans: PlanSnapshot[], playback: Playba
     .map(({ item }) => item);
 }
 
-function Feed(props: { state: StateSnapshot; plans: PlanSnapshot[]; playback: Playback | null; t: number; onSelect: (selection: Selection | null) => void }) {
-  const items = feedItems(props.state, props.plans, props.playback, props.t);
-  const unresolved = props.state.plan?.unresolved ?? [];
-  const questions = props.state.plan?.info_requests ?? [];
-  const open = unresolved.length + questions.length;
-  return (
-    <div className="stack">
-      {open > 0 ? (
-        <details className="open-needs">
-          <summary>{open} open {open === 1 ? "need" : "needs"} the plan cannot meet yet</summary>
-          <ul>
-            {questions.map((request) => (
-              <li key={request.id}>
-                <strong>{targetName(props.state, request.to)}</strong> {request.question}
-                <span>{request.why}</span>
-              </li>
-            ))}
-            {unresolved.map((item, index) => (
-              <li key={`${targetLabel(item.target)}-${index}`}>
-                <strong>{targetName(props.state, item.target)}</strong> {item.need}
-                <span>Blocked by {item.blocked_by}{item.would_unblock ? ` · would unblock: ${item.would_unblock}` : ""}</span>
-              </li>
-            ))}
-          </ul>
-        </details>
-      ) : null}
-      {items.length === 0 ? (
-        <p className="empty">Nothing yet. When someone calls or texts EMBER, their words, the fact EMBER takes from them and the new plan appear here.</p>
-      ) : (
-        <ol className="feed">
-          {items.map((item) => (
-            <li key={item.key} className={item.kind}>
-              <button
-                disabled={!item.target}
-                onClick={() => item.target && props.onSelect("household_id" in item.target ? { kind: "household", id: item.target.household_id } : { kind: "facility", id: item.target.facility_id })}
-              >
-                <span>
-                  {KIND_LABEL[item.kind]} · {item.title}
-                  <time>{formatSim(item.t_s)}</time>
-                </span>
-                {item.quote ? <q>{item.quote}</q> : null}
-                <p>{item.text}</p>
-              </button>
-            </li>
-          ))}
-        </ol>
-      )}
-    </div>
-  );
-}
-
-function PlanTab(props: { state: StateSnapshot; plans: PlanSnapshot[]; busy: string | null; onReplan: () => void; onSelect: (selection: Selection | null) => void; onFollow: (selection: Selection | null) => void }) {
-  return (
-    <div className="stack">
-      <button className="primary" disabled={props.busy != null} onClick={props.onReplan}>
-        {props.busy === "replan" ? "Replanning…" : "Replan now"}
-      </button>
-      <ol className="versions">
-        {[...props.plans].reverse().map((plan) => {
-          const seconds = replanSeconds(plan);
-          const diff = plan.version > 1 ? planDiff(plan, props.state) : "";
-          return (
-            <li key={plan.version}>
-              <header>
-                <strong>v{plan.version}</strong>
-                <span>{formatSim(plan.created_at_t_s)}</span>
-                {seconds != null ? <span className="pill">{seconds.toFixed(2)} s</span> : null}
-              </header>
-              {plan.trigger ? <p>{plan.trigger}</p> : null}
-              {diff ? <p className="meta">{diff}</p> : null}
-            </li>
-          );
-        })}
-      </ol>
-      <h3>Vehicles</h3>
-      <Ledger state={props.state} onSelect={props.onSelect} onFollow={props.onFollow} />
-    </div>
-  );
-}
-
-function Ledger(props: { state: StateSnapshot; onSelect: (selection: Selection | null) => void; onFollow: (selection: Selection | null) => void }) {
-  return (
-    <table className="grid">
-      <thead>
-        <tr>
-          <th>Vehicle</th>
-          <th>Status</th>
-          <th>Job</th>
-          <th>ETA</th>
-        </tr>
-      </thead>
-      <tbody>
-        {props.state.resources.map((resource) => {
-          const assignment = assignmentById(props.state, resource.assignment_id);
-          return (
-            <tr key={resource.id} className="clickable" onClick={() => props.onSelect({ kind: "resource", id: resource.id })}>
-              <td>
-                <strong>{resource.name}</strong>
-                <span>{resource.people_on_board ? `${resource.people_on_board} aboard` : resource.kind.replaceAll("_", " ")}</span>
-              </td>
-              <td><span className={`pill ${resource.status}`}>{statusLabel(resource.status)}</span></td>
-              <td>{assignment ? targetName(props.state, assignment.target) : "—"}</td>
-              <td>
-                {formatMinutes(resource.eta_s ?? assignment?.eta_s)}
-                <button
-                  className="mini"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    props.onFollow({ kind: "resource", id: resource.id });
-                  }}
-                >
-                  Follow
-                </button>
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  );
-}
-
-function Inspector(props: {
-  state: StateSnapshot;
-  t: number;
-  closures: Closure[];
-  selection: Selection;
-  judge: JudgeClosure[];
-  busy: string | null;
-  onCloseRoad: (edgeId: number) => void;
-  onUndoClosure: (edgeId: number) => void;
-  playback: Playback | null;
-  walkers: WalkerPlan | null;
-  follow: Selection | null;
-  onFollow: (selection: Selection | null) => void;
-}) {
+function Inspector(props: DrawerProps) {
   const selection = props.selection;
   const following = props.follow != null && props.follow.kind === selection.kind && props.follow.id === selection.id;
   const followButton = (
@@ -660,203 +472,5 @@ function ThreadList(props: { title: string; messages: StateSnapshot["messages"] 
         </ol>
       )}
     </section>
-  );
-}
-
-
-const PROOF_METRICS: Array<{ metric: "people_reached_before_deadline" | "people_unreached" | "hospital_outage_s" | "overflow_m3" | "vehicle_km"; label: string; unit: string }> = [
-  { metric: "people_reached_before_deadline", label: "Reached before the water", unit: "people" },
-  { metric: "people_unreached", label: "Not reached in time", unit: "people" },
-  { metric: "hospital_outage_s", label: "Hospital outage", unit: "min" },
-  { metric: "overflow_m3", label: "Sewage overflow to the Charles", unit: "m³" },
-  { metric: "vehicle_km", label: "Vehicle-km driven", unit: "km" },
-];
-
-function Proof(props: {
-  t: number;
-  plans: PlanSnapshot[];
-  robust: RobustSummary | null;
-  comparison: Comparison | null;
-  nominal: { ember?: PlanMetrics; baseline?: PlanMetrics };
-  scatter: ScatterPoint[];
-  scatterTotal: number | null;
-  busy: string | null;
-  onCompare: () => void;
-  onOptimize: (seeds?: number) => void;
-}) {
-  const comparison = props.comparison;
-  const rows = PROOF_METRICS.map(({ metric, label, unit }) => {
-    const row = comparison?.metrics.find((item) => item.metric === metric);
-    const scale = metric === "hospital_outage_s" ? 1 / 60 : 1;
-    return row
-      ? { metric, label, unit, baseline: row.baseline_mean * scale, ember: row.ember_mean * scale, spread: `EMBER − baseline: ${formatNumber(row.diff_min * scale)} to ${formatNumber(row.diff_max * scale)}` }
-      : { metric, label, unit, baseline: (props.nominal.baseline?.[metric] ?? 0) * scale, ember: (props.nominal.ember?.[metric] ?? 0) * scale, spread: "" };
-  });
-  const plan = props.plans[props.plans.length - 1];
-  const kept = tradedFacility(plan) ? keptBeforeTradeoff(plan) : undefined;
-  const points = props.scatter;
-  const robust = props.robust;
-  const result = robust && (points.length === 0 || robust.batch_id === points[0].batchId) ? robust : null;
-  // at t = 0 nothing has happened yet: the stress test picks the plan to stage before the season
-  const optimizeLabel = props.t === 0 ? "Pre-season stress test" : "Optimize";
-  return (
-    <div className="stack">
-      <section>
-        <header className="section-head">
-          <h3>EMBER vs baseline</h3>
-          <button className="ghost" disabled={props.busy != null} onClick={props.onCompare}>
-            {props.busy === "compare" ? "Running…" : "Run comparison"}
-          </button>
-        </header>
-        <table className="grid">
-          <thead>
-            <tr>
-              <th>Metric</th>
-              <th>Baseline</th>
-              <th>EMBER</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.metric}>
-                <td>
-                  {row.label}
-                  {row.spread ? <span>{row.spread}</span> : null}
-                  {row.metric === "overflow_m3" && kept != null ? <span>{formatNumber(kept)} m³ kept out before the hospital call</span> : null}
-                </td>
-                <td>{formatNumber(row.baseline, 0)} {row.unit}</td>
-                <td><strong>{formatNumber(row.ember, 0)}</strong> {row.unit}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <p className="meta">
-          {comparison
-            ? `Mean of ${comparison.seeds?.length ?? "?"} perturbed worlds; the spread is a range, not a confidence bound.`
-            : "The forecast world only. Run the comparison (Live) for perturbed worlds."}
-        </p>
-      </section>
-      <section>
-        <header className="section-head">
-          <h3>Stress test{result ? ` · ${result.pool === "daytona" ? `Daytona · ${result.workers ?? "?"} sandboxes` : "this laptop"}` : ""}</h3>
-        </header>
-        <div className="actions">
-          <button className="primary" disabled={props.busy != null} onClick={() => props.onOptimize()}>
-            {props.busy === "optimize" ? "Running…" : optimizeLabel}
-          </button>
-          <button className="ghost" disabled={props.busy != null} onClick={() => props.onOptimize(2000)}>
-            {props.busy === "stress" ? "Running…" : "Large stress test"}
-          </button>
-        </div>
-        {props.busy === "optimize" || props.busy === "stress" ? (
-          <p className="throughput">{formatNumber(points.length)}{props.scatterTotal ? ` / ${formatNumber(props.scatterTotal)}` : ""} worlds back</p>
-        ) : result ? (
-          <Throughput robust={result} />
-        ) : (
-          <p className="throughput">
-            Press {optimizeLabel} for 50 perturbed worlds per plan, or Large stress test for 2,000 per plan. The top distinct plans, alternative generator timing when available, and the baseline use the same worlds. Total runs depend on the number of plans; travel times, flood timing, backup endurance and a vehicle failing are perturbed.
-          </p>
-        )}
-        {points.length > 0 ? <ScatterChart points={points} chosen={result?.chosen ?? null} /> : null}
-        {result?.ranking ? <Verdict robust={result} preSeason={(props.plans.find((item) => robustOf(item)?.batch_id === result.batch_id)?.created_at_t_s ?? props.t) === 0} /> : null}
-      </section>
-    </div>
-  );
-}
-
-/** Fan-out wall time of the same worlds on 8 local processes, measured once (D86); shown next to a Daytona run. */
-const LAPTOP_S: Record<number, number> = { 250: 2.3, 1000: 4.5, 5000: 13.7, 10000: 24.3 };
-
-function Throughput(props: { robust: RobustSummary }) {
-  const r = props.robust;
-  const laptop = r.laptop_s ?? LAPTOP_S[r.jobs];
-  return (
-    <p className="throughput tile">
-      <strong>{formatNumber(r.jobs)} worlds</strong>
-      <span>
-        {r.pool === "daytona" ? `Daytona ${r.workers ?? "?"} sandboxes` : `this laptop, ${r.workers ?? "?"} workers`} <b>{formatNumber(r.fanout_wall_s, 1)} s</b>
-        {r.startup_s ? ` (+${formatNumber(r.startup_s, 1)} s startup)` : ""}
-      </span>
-      {r.pool === "daytona" && laptop != null ? <span>laptop <b>~{formatNumber(laptop)} s</b> measured</span> : null}
-    </p>
-  );
-}
-
-function Verdict(props: { robust: RobustSummary; preSeason: boolean }) {
-  const r = props.robust;
-  const worst = (candidate: string) => r.ranking?.find((row) => row.candidate === candidate)?.worst20_people_unreached;
-  const top = r.ranking?.find((row) => row.candidate !== "baseline")?.candidate;
-  const pre = props.preSeason && r.nominal_best !== r.chosen;
-  const rows: Array<{ label: string; value?: number; tone: string }> = [
-    { label: `${pre ? "Robust pick" : "Chosen"} · ${r.chosen}`, value: worst(r.chosen), tone: "chosen" },
-    ...(r.nominal_best !== r.chosen ? [{ label: `${pre ? "Forecast plan" : "Best on the forecast"} · ${r.nominal_best}`, value: worst(r.nominal_best), tone: "candidate" }] : []),
-    // D86: the most robust candidate may win by less than 1 person; then the forecast plan is kept and both are shown
-    ...(top && top !== r.chosen && top !== r.nominal_best ? [{ label: `Most robust · ${top}`, value: worst(top), tone: "candidate" }] : []),
-    { label: "Baseline", value: worst("baseline"), tone: "baseline" },
-  ];
-  return (
-    <>
-      <ul className="verdict">
-        {rows.map((row) => (
-          <li key={row.label} className={row.tone}>
-            <span>{row.label}</span>
-            <strong>{formatNumber(row.value, 1)}</strong>
-          </li>
-        ))}
-      </ul>
-      <p className="meta">People not reached in the worst 20% of {r.seeds} worlds. {pre ? `Pre-season, before any report: staging the robust pick leaves ${formatNumber((worst(r.nominal_best) ?? 0) - (worst(r.chosen) ?? 0), 1)} fewer people unreached in the worst 20% than the forecast plan.` : r.nominal_best !== r.chosen ? "EMBER keeps the plan that holds up when things go wrong, not the one that looks best on the forecast." : "Kept the forecast plan: no candidate beats it by ≥ 1 person in the worst 20%."}</p>
-    </>
-  );
-}
-
-const CLASSES = ["candidate", "baseline", "chosen"] as const;
-
-/** One path per class, not one element per run, and one dot per pixel: 10,000 runs land on a few hundred pixels, so
- * they stay cheap to redraw as they stream in while the caption counts every run. */
-function ScatterChart(props: { points: ScatterPoint[]; chosen: string | null }) {
-  const width = 320;
-  const height = 190;
-  const left = 34;
-  const bottom = 26;
-  const pad = 10;
-  let maxX = 1;
-  let maxY = 1;
-  for (const point of props.points) {
-    maxX = Math.max(maxX, point.peopleUnreached);
-    maxY = Math.max(maxY, point.overflowM3);
-  }
-  const paths: Record<(typeof CLASSES)[number], string> = { candidate: "", baseline: "", chosen: "" };
-  const drawn = new Set<string>();
-  for (const point of props.points) {
-    const kind = point.candidate === "baseline" ? "baseline" : point.candidate === props.chosen || point.candidate === "ember" ? "chosen" : "candidate";
-    const r = kind === "chosen" ? 3.5 : 2.8;
-    const cx = Math.round(left + (point.peopleUnreached / maxX) * (width - left - pad));
-    const cy = Math.round(height - bottom - (point.overflowM3 / maxY) * (height - bottom - pad));
-    const key = `${kind} ${cx} ${cy}`;
-    if (drawn.has(key)) continue;
-    drawn.add(key);
-    paths[kind] += `M${(cx - r).toFixed(1)} ${cy.toFixed(1)}a${r} ${r} 0 1 0 ${2 * r} 0a${r} ${r} 0 1 0 ${-2 * r} 0`;
-  }
-  return (
-    <figure className="scatter">
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Robustness scatter: one dot per simulated world">
-        <line className="axis" x1={left} y1={height - bottom} x2={width - pad} y2={height - bottom} />
-        <line className="axis" x1={left} y1={pad} x2={left} y2={height - bottom} />
-        <text className="tick" x={left} y={height - bottom + 12}>0</text>
-        <text className="tick end" x={width - pad} y={height - bottom + 12}>{Math.round(maxX)}</text>
-        <text className="tick end" x={left - 4} y={pad + 4}>{maxY.toLocaleString("en-US", { notation: "compact", maximumFractionDigits: 1 })}</text>
-        <text className="label" x={(left + width) / 2} y={height - 4}>people not reached →</text>
-        <text className="label" transform={`translate(10 ${(height - bottom) / 2}) rotate(-90)`}>overflow m³ →</text>
-        {CLASSES.map((kind) => (
-          <path key={kind} className={kind} d={paths[kind]} />
-        ))}
-      </svg>
-      <figcaption>
-        <span className="key"><i className="dot chosen" /> {props.chosen ? `chosen (${props.chosen})` : "chosen"}</span>
-        <span className="key"><i className="dot candidate" /> other candidates</span>
-        <span className="key"><i className="dot baseline" /> baseline</span>
-        <span>{formatNumber(props.points.length)} worlds</span>
-      </figcaption>
-    </figure>
   );
 }

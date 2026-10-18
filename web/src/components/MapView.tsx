@@ -7,6 +7,10 @@ import { stateFromPlayback, type Playback } from "../playback";
 import { IsoView, type PlayerPin } from "../iso/IsoView";
 import type { JudgeClosure, LngLat, Selection, StateSnapshot } from "../types";
 
+/** Where the stage camera should ease to; a new key re-runs the move. With a household, the stage aims at where its
+ * people wait for the vehicle (their pin), not the middle of the building. */
+export type Focus = { lon: number; lat: number; zoom: number; key: number; household?: number };
+
 const FlatMap = lazy(() => import("./FlatMap"));
 
 type MapViewProps = {
@@ -22,6 +26,9 @@ type MapViewProps = {
   flat: boolean;
   selection: Selection | null;
   follow: Selection | null;
+  focus: Focus | null;
+  spotlight: string | null;
+  onFocus: (focus: Focus) => void;
   onFollow: (selection: Selection | null) => void;
   onSelect: (selection: Selection | null) => void;
 };
@@ -34,7 +41,6 @@ export function MapView(props: MapViewProps) {
     [props.playback, props.snapshot, t],
   );
   const closures = useMemo(() => closedEdges(state, t, props.judge), [state, t, props.judge]);
-  const [focus, setFocus] = useState<{ lon: number; lat: number; zoom: number; key: number } | null>(null);
   const [fallback, setFallback] = useState(false);
 
   const judge = props.snapshot.households.find((household) => household.judge);
@@ -59,7 +65,7 @@ export function MapView(props: MapViewProps) {
             backgroundById={props.backgroundById}
             selection={props.selection}
             follow={props.follow}
-            focus={focus}
+            focus={props.focus}
             onFollow={props.onFollow}
             onSelect={props.onSelect}
           />
@@ -76,7 +82,8 @@ export function MapView(props: MapViewProps) {
           follow={props.follow}
           onSelect={props.onSelect}
           onFollow={props.onFollow}
-          focus={focus}
+          focus={props.focus}
+          spotlight={props.spotlight}
           onFallback={() => setFallback(true)}
         />
       )}
@@ -90,7 +97,7 @@ export function MapView(props: MapViewProps) {
               className="chip"
               onClick={() => {
                 props.onFollow(null);
-                setFocus({ lon: preset.at![0], lat: preset.at![1], zoom: preset.zoom, key: Date.now() });
+                props.onFocus({ lon: preset.at![0], lat: preset.at![1], zoom: preset.zoom, key: Date.now() });
               }}
             >
               {preset.label}

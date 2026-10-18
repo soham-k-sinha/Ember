@@ -1,17 +1,22 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { createClock, useClock, type Clock } from "./clock";
-import { MapView } from "./components/MapView";
-import { Panels, type PanelId } from "./components/Panels";
-import { JoinCard, Latest, ScoreCard, Sources, Toasts, useToasts } from "./components/Hud";
+import { MapView, type Focus } from "./components/MapView";
+import { Drawer } from "./components/Panels";
+import { ArrivalAlerts, ScoreCard, Sources, Ticker, Toasts, useToasts } from "./components/Hud";
+import { JoinBadge, PhotonView } from "./components/Photon";
+import { ImpactView } from "./components/Impact";
+import { DaytonaView } from "./components/Daytona";
 import { API_BASE, fixturePlaybacks, publishedComparison, publishedScatter, publishedState, scenario, town } from "./fixtures";
 import { buildGraph, planWalkers, type BgHousehold } from "./people";
 import { asPlayback, stateFromPlayback, type Playback } from "./playback";
 import { loadFullTown, type FullTown } from "./townFull";
-import { formatSim } from "./format";
+import { formatSim, shortName } from "./format";
 import { clockLabel } from "./iso/lighting";
-import { asCalls, asComparison, asPhones, asState, getJson, openSocket, postJson, robustOf, type LiveStatus } from "./live";
-import { closedEdges } from "./model";
+import { asArrival, asCalls, asPhones, asState, getJson, openSocket, postJson, robustOf, type LiveStatus } from "./live";
+import { closedEdges, householdById, targetName } from "./model";
+import { detectArrivals, doorsFrom } from "./arrivals";
 import type {
+  Arrival,
   AssignmentEvent,
   Calls,
   Comparison,
@@ -29,9 +34,26 @@ import type {
 
 type Mode = "fixture" | "live";
 type Replay = "ember" | "baseline";
+type View = "live" | "photon" | "impact" | "daytona";
+
+/** The four paths a judge is walked through; keys 1–4 switch. */
+const VIEWS: Array<{ id: View; key: string; label: string }> = [
+  { id: "live", key: "1", label: "Live" },
+  { id: "photon", key: "2", label: "Photon · multiplayer" },
+  { id: "impact", key: "3", label: "Impact" },
+  { id: "daytona", key: "4", label: "Daytona" },
+];
+
+/** The stage camera on one home: about the Treehouse preset's zoom. */
+const HOME_ZOOM = 17.3;
+
+/** GET /health; `auto_hold` backends hold their clock at an arrival and report it as `hold` until resumed (D112). */
+type Health = { max_players?: number; players?: number; voice_number?: string | null; reader?: string; auto_hold?: boolean; hold?: unknown };
 
 const SPEEDS = [30, 60, 180, 600];
 const MAX_PLAYERS = 25;
+/** Earlier plan versions fetched on connect for the timeline. */
+const PLAN_HISTORY = 12;
 const NO_CALLS: Calls = { live: [], recent: [] };
 
 type Model = {
@@ -53,7 +75,7 @@ type Model = {
   judge: JudgeClosure[];
   selection: Selection | null;
   busy: string | null;
-  tab: PanelId;
+  view: View;
   follow: Selection | null;
   replay: Replay;
   livePlaybacks: { ember: Playback | null; baseline: Playback | null };
@@ -70,7 +92,7 @@ type Action =
   | { type: "live-status"; status: LiveStatus; detail?: string | null }
   | { type: "state"; state: StateSnapshot }
   | { type: "plan"; plan: PlanSnapshot }
-  | { type: "comparison"; comparison: Comparison }
+  | { type: "history"; plan: PlanSnapshot }
   | { type: "scatter"; points: ScatterPoint[] }
   | { type: "robust"; robust: RobustSummary | null }
   | { type: "assignment"; event: AssignmentEvent }
@@ -79,7 +101,7 @@ type Action =
   | { type: "metrics"; metrics: PlanMetrics }
   | { type: "select"; selection: Selection | null }
   | { type: "busy"; busy: string | null }
-  | { type: "tab"; tab: PanelId }
+  | { type: "view"; view: View }
   | { type: "follow"; follow: Selection | null }
   | { type: "replay"; replay: Replay }
   | { type: "playback"; which: Replay; playback: Playback }
@@ -89,20 +111,12 @@ type Action =
   | { type: "close"; edgeId: number; t: number }
   | { type: "undo"; edgeId: number };
 
-function planFromBody(value: unknown): PlanSnapshot | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  if (typeof record.version !== "number" || !Array.isArray(record.assignments)) return null;
-  if (Array.isArray(record.households)) return null;
-  return value as PlanSnapshot;
-}
-
 function withPlan(plans: PlanSnapshot[], plan: PlanSnapshot | null): PlanSnapshot[] {
   if (!plan) return plans;
   if (plans.some((item) => item.version === plan.version)) {
     return plans.map((item) => (item.version === plan.version ? plan : item));
   }
-  return [...plans, plan];
+  return [...plans, plan].sort((a, b) => a.version - b.version);
 }
 
 const fixtureModel = {
@@ -155,8 +169,6 @@ function reducer(state: Model, action: Action): Model {
           ? { ...state.snapshot, plan: action.plan, plan_version: action.plan.version }
           : state.snapshot,
       };
-    case "comparison":
-      return { ...state, comparison: action.comparison, tab: "proof" };
     case "scatter": {
       const batch = action.points[action.points.length - 1].batchId;
       const kept = state.scatterBatch === batch ? state.scatter : [];
@@ -174,6 +186,9 @@ function reducer(state: Model, action: Action): Model {
         scatter: [...kept, ...fresh],
       };
     }
+    case "history":
+      // an earlier version, fetched once on connect: the timeline only
+      return { ...state, plans: withPlan(state.plans, action.plan) };
     case "robust":
       return { ...state, robust: action.robust };
     case "assignment": {
@@ -216,8 +231,8 @@ function reducer(state: Model, action: Action): Model {
       };
     case "busy":
       return { ...state, busy: action.busy };
-    case "tab":
-      return { ...state, tab: action.tab };
+    case "view":
+      return { ...state, view: action.view };
     case "follow":
       return { ...state, follow: action.follow, selection: action.follow ?? state.selection };
     case "replay":
@@ -257,7 +272,7 @@ const initial: Model = {
   judge: [],
   selection: null,
   busy: null,
-  tab: "feed",
+  view: "live",
   follow: null,
   replay: "ember",
   livePlaybacks: { ember: null, baseline: null },
@@ -274,7 +289,11 @@ export function App() {
   const t = useClock(clock, 250);
   const [toasts, toast] = useToasts();
   const [sources, setSources] = useState(false);
-  const [health, setHealth] = useState<{ max_players?: number; voice_number?: string | null; reader?: string }>({});
+  const [health, setHealth] = useState<Health>({});
+  const [focus, setFocus] = useState<Focus | null>(null);
+  const [spotlight, setSpotlight] = useState<{ household: number; resource: string } | null>(null);
+  const [alerts, setAlerts] = useState<Arrival[]>([]);
+  const [hold, setHold] = useState<Arrival | null>(null);
   const settings = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
     const close = (event: PointerEvent) => {
@@ -302,6 +321,7 @@ export function App() {
     ember: model.snapshot.plan?.metrics ?? emberNow.plan?.metrics,
     baseline: baselinePb?.metrics ?? comparison?.nominal.baseline,
   };
+  const plan = model.snapshot.plan ?? emberNow.plan;
 
   // every household (full shared town) for the walking crowd; the fixture's 1-in-12 sample until it loads
   const [fullTown, setFullTown] = useState<FullTown | null>(null);
@@ -340,23 +360,78 @@ export function App() {
 
   const phones = live ? model.phones : [];
   const calls = live ? model.calls : NO_CALLS;
-  const players = useMemo(() => {
+  // each player's home, its player number, and whether EMBER has them on a call
+  const watched = useMemo(() => {
     const onCall = new Set(calls.live.map((call) => call.handle));
     return new Map(
       phones
         .filter((phone) => phone.player != null && phone.household_id != null)
-        .map((phone) => [phone.household_id!, { label: `Player ${phone.player}`, onCall: onCall.has(phone.handle) }]),
+        .map((phone) => [phone.household_id!, { player: phone.player, onCall: onCall.has(phone.handle) }]),
     );
   }, [phones, calls]);
+  const players = useMemo(
+    () => new Map([...watched].map(([id, who]) => [id, { label: `Player ${who.player}`, onCall: who.onCall }])),
+    [watched],
+  );
+  const playerCount = phones.filter((phone) => phone.player != null).length;
+  const maxPlayers = health.max_players ?? MAX_PLAYERS;
 
   const playingRef = useRef(model.playing);
   playingRef.current = model.playing;
+  // paused on an arrival: a late state event must not move the clock off it
+  const holdRef = useRef(hold);
+  holdRef.current = hold;
   const serverClock = useRef<number | null>(null);
   const applyState = (snapshot: StateSnapshot) => {
     dispatch({ type: "state", state: snapshot });
     serverClock.current = snapshot.t_s;
-    if (!playingRef.current) clock.set(snapshot.t_s);
+    if (!playingRef.current && !holdRef.current) clock.set(snapshot.t_s);
   };
+
+  // arrivals: a vehicle reached a player's (or the judge's) home. The WS event, /health.hold and POST /clock's
+  // held_by make it immediate; the same households' statuses catch it from the state too. Each one alerts once and
+  // pauses the clock at the arrival. A backend that holds its clock (auto_hold) owns the pause: it shows while
+  // /health.hold is set and clears when that does; otherwise the pause is this page's until Resume.
+  const alerted = useRef(new Map<number, number>());
+  const reached = useRef(new Map<number, boolean>());
+  const arrive = (arrival: Arrival) => {
+    if (alerted.current.has(arrival.household_id)) return;
+    alerted.current.set(arrival.household_id, arrival.t_s);
+    setAlerts((list) => [arrival, ...list.filter((item) => item.household_id !== arrival.household_id)].slice(0, 3));
+    holdRef.current ??= arrival;
+    setHold((held) => held ?? arrival);
+    setHealth((current) => (current.auto_hold && current.hold == null ? { ...current, hold: arrival } : current));
+    dispatch({ type: "playing", playing: false });
+    // stop on the arrival itself while playing (and tell the backend's clock); a long scrub past it stays where it was dropped
+    if (Math.abs(clock.get() - arrival.t_s) < 120) {
+      clock.set(arrival.t_s);
+      if (live) postJson(`${root}/clock`, { t_s: arrival.t_s }, 20000).catch(() => undefined);
+    }
+  };
+  const arriveRef = useRef(arrive);
+  arriveRef.current = arrive;
+  const doors = useMemo(() => doorsFrom(emberPb?.outcomes), [emberPb]);
+  const doorsSeen = useRef(doors);
+  useEffect(() => {
+    // live, nothing counts before the backend's first state; a new replay only re-records who is reached
+    if (live && serverClock.current == null) return;
+    const quiet = doorsSeen.current !== doors;
+    doorsSeen.current = doors;
+    const found = detectArrivals(reached.current, emberNow, watched, clock.get(), doors);
+    if (!quiet) for (const arrival of found) arriveRef.current(arrival);
+    // not reached any more (the clock went back): that home can alert again
+    for (const [id, at] of alerted.current) if (reached.current.get(id) === false && clock.get() < at) alerted.current.delete(id);
+  }, [live, emberNow, watched, t, doors]);
+  const backendHold = asArrival(health.hold);
+  useEffect(() => {
+    if (backendHold) arriveRef.current(backendHold);
+    // the backend let go (its call ended, or resumed elsewhere): so does this page
+    else if (health.auto_hold) setHold(null);
+    // a new hold is a new household
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backendHold?.household_id]);
+  const held = live && health.auto_hold ? backendHold : hold;
+  const who = (arrival: Arrival) => (arrival.player != null ? `Player ${arrival.player}` : targetName(model.snapshot, { household_id: arrival.household_id }));
 
   useEffect(() => {
     if (!live) {
@@ -386,9 +461,11 @@ export function App() {
     let cancelled = false;
     const run = async () => {
       dispatch({ type: "live-status", status: "connecting", detail: null });
+      let latest = 0;
       try {
         const snapshot = asState(await getJson(`${root}/state`));
         if (!cancelled && snapshot) applyState(snapshot);
+        latest = snapshot?.plan_version ?? 0;
         if (!cancelled && !snapshot) {
           dispatch({ type: "live-status", status: "error", detail: "GET /state did not return a state snapshot. Showing the last good picture." });
         }
@@ -396,8 +473,13 @@ export function App() {
         if (!cancelled) dispatch({ type: "live-status", status: "error", detail: error instanceof Error ? error.message : "GET /state failed." });
       }
       if (cancelled) return;
-      // the drill's player cap, and the last robust optimisation (a later replan drops it from the plan)
-      getJson(`${root}/health`).then((body) => setHealth(body as typeof health)).catch(() => undefined);
+      // the versions before this page loaded, for the plan timeline
+      for (let version = Math.max(1, latest - PLAN_HISTORY); version < latest; version++) {
+        getJson(`${root}/plan/${version}`)
+          .then((plan) => !cancelled && dispatch({ type: "history", plan: plan as PlanSnapshot }))
+          .catch(() => undefined);
+      }
+      // the last robust optimisation (a later replan drops it from the plan)
       getJson(`${root}/optimize`)
         .then((body) => dispatch({ type: "robust", robust: robustOf({ search: (body as { last?: unknown }).last }) }))
         .catch(() => undefined);
@@ -438,6 +520,7 @@ export function App() {
           else if (event.type === "message") dispatch({ type: "message", message: event.message });
           else if (event.type === "report") dispatch({ type: "report", report: event.report });
           else if (event.type === "metrics") dispatch({ type: "metrics", metrics: event.metrics });
+          else if (event.type === "arrival") arriveRef.current(event.arrival);
         },
         (status, detail) => dispatch({ type: "live-status", status, detail }),
         async () => {
@@ -476,7 +559,7 @@ export function App() {
     return () => abort.abort();
   }, [live, root, livePlanVersion, reportCount]);
 
-  // live: the drill roster and the calls in progress (no WebSocket events for either)
+  // live: the roster, the calls in progress, and the player cap, call-in number and clock hold (no WebSocket events for these)
   useEffect(() => {
     if (!live) return;
     const poll = () => {
@@ -492,6 +575,7 @@ export function App() {
           if (list) dispatch({ type: "calls", calls: list });
         })
         .catch(() => undefined);
+      getJson(`${root}/health`).then((body) => setHealth(body as Health)).catch(() => undefined);
     };
     poll();
     const handle = window.setInterval(poll, 2000);
@@ -503,9 +587,13 @@ export function App() {
     if (!live) return;
     const push = () => {
       if (serverClock.current == null || Math.abs(clock.get() - serverClock.current) < 1) return;
-      postJson(`${root}/clock`, { t_s: clock.get() }, 20000).catch((error: unknown) =>
-        toast(`Clock failed: ${error instanceof Error ? error.message : "POST /clock failed"}`, "error"),
-      );
+      postJson(`${root}/clock`, { t_s: clock.get() }, 20000)
+        .then((body) => {
+          // a held backend clamps the clock to the arrival and says which one (covers a missed WS event)
+          const arrival = asArrival((body as { held_by?: unknown } | null)?.held_by);
+          if (arrival) arriveRef.current(arrival);
+        })
+        .catch((error: unknown) => toast(`Clock failed: ${error instanceof Error ? error.message : "POST /clock failed"}`, "error"));
     };
     if (model.playing) {
       const handle = window.setInterval(push, 1200);
@@ -541,28 +629,9 @@ export function App() {
     }
   }
 
-  async function replan() {
-    if (!live) {
-      toast("Replanning needs the backend: switch to Live in settings.");
-      return;
-    }
-    dispatch({ type: "busy", busy: "replan" });
-    try {
-      const body = await postJson(`${root}/replan`, {}, 30000);
-      const plan = planFromBody(body);
-      if (plan) dispatch({ type: "plan", plan });
-      const snapshot = asState(await getJson(`${root}/state`));
-      if (snapshot) applyState(snapshot);
-    } catch (error) {
-      toast(error instanceof Error ? `Replan failed: ${error.message}` : "Replan failed.", "error");
-    } finally {
-      dispatch({ type: "busy", busy: null });
-    }
-  }
-
   /** Paired worlds per plan: 50 by default, 2000 for the large test; distinct plans determine total runs. */
   async function optimize(seeds?: number) {
-    dispatch({ type: "tab", tab: "proof" });
+    dispatch({ type: "view", view: "daytona" });
     if (!live) {
       toast("Optimize runs on the backend (Daytona, or the local pool): switch to Live in settings.");
       return;
@@ -614,37 +683,73 @@ export function App() {
     }
   }
 
-  async function compare() {
-    dispatch({ type: "tab", tab: "proof" });
-    if (!live) {
-      toast("This is the published comparison. Live mode reruns it on the current reports.");
-      return;
+  /** The stage camera eases close onto a home and opens it; with a vehicle, that vehicle is ringed and named too. */
+  function showHousehold(id: number, resource?: string) {
+    const household = householdById(emberNow, id);
+    if (!household) return;
+    dispatch({ type: "view", view: "live" });
+    dispatch({ type: "select", selection: { kind: "household", id } });
+    setSpotlight(resource ? { household: id, resource } : null);
+    setFocus({ lon: household.lon, lat: household.lat, zoom: HOME_ZOOM, key: Date.now(), household: id });
+  }
+
+  function resume() {
+    setHold(null);
+    if (held) setAlerts((list) => list.filter((item) => item.household_id !== held.household_id));
+    if (live && backendHold) {
+      setHealth((current) => ({ ...current, hold: null }));
+      postJson(`${root}/clock`, { t_s: clock.get(), resume: true }, 20000).catch((error: unknown) =>
+        toast(`Resume failed: ${error instanceof Error ? error.message : "POST /clock failed"}`, "error"),
+      );
     }
-    dispatch({ type: "busy", busy: "compare" });
-    try {
-      const comparison = asComparison(await getJson(`${root}/comparison?seeds=5`, 90000));
-      if (!comparison) throw new Error("GET /comparison did not include nominal.baseline and nominal.ember.");
-      dispatch({ type: "comparison", comparison });
-    } catch (error) {
-      toast(error instanceof Error ? `Comparison failed: ${error.message}` : "Comparison failed.", "error");
-    } finally {
-      dispatch({ type: "busy", busy: null });
-    }
+    dispatch({ type: "playing", playing: true });
   }
 
   const status = live ? model.liveStatus : "idle";
-  const select = (selection: Selection | null) => dispatch({ type: "select", selection });
+  // a home picked on the map or in the ticker: the camera goes there too
+  const select = (selection: Selection | null) => {
+    if (selection?.kind === "household" && householdById(emberNow, selection.id)) showHousehold(selection.id);
+    else dispatch({ type: "select", selection });
+  };
   const follow = (selection: Selection | null) => dispatch({ type: "follow", follow: selection });
+  const view = model.view;
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey || event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+      const next = VIEWS.find((item) => item.key === event.key);
+      if (next) dispatch({ type: "view", view: next.id });
+      else if (event.key === "s" && alerts[0]) showHousehold(alerts[0].household_id, alerts[0].resource_id);
+      else if (event.key === "Escape") dispatch({ type: "select", selection: null });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   return (
     <div className="app">
       <header className="top">
         <p className="brand">
           <strong>EMBER</strong>
-          <span>Allston flood · live simulation</span>
+          <span>Allston flood</span>
         </p>
-        <Transport clock={clock} playing={model.playing} disabled={model.busy === "stress" || model.busy === "optimize"}
-          onPlay={(playing) => dispatch({ type: "playing", playing })} />
+        <nav className="views" role="tablist" aria-label="Views">
+          {VIEWS.map((item) => (
+            <button key={item.id} role="tab" aria-selected={view === item.id} className={view === item.id ? "on" : ""} onClick={() => dispatch({ type: "view", view: item.id })}>
+              <kbd>{item.key}</kbd>
+              {item.label}
+              {item.id === "photon" && calls.live.length > 0 ? <i className="badge live" title="on call">{calls.live.length}</i> : null}
+              {item.id === "daytona" && (model.busy === "stress" || model.busy === "optimize") ? <i className="badge live" title="running" /> : null}
+            </button>
+          ))}
+        </nav>
+        <Transport
+          clock={clock}
+          playing={model.playing}
+          disabled={model.busy === "stress" || model.busy === "optimize"}
+          held={held ? `Paused · ${shortName(held.resource_name)} at ${who(held)}` : null}
+          onPlay={(playing) => (held && playing ? resume() : dispatch({ type: "playing", playing }))}
+        />
         <label className="switch">
           <input
             type="checkbox"
@@ -658,7 +763,7 @@ export function App() {
           {live ? (status === "live" ? "Live" : status === "error" ? "Offline" : "Connecting") : "Replay"}
         </p>
         <button className="link" onClick={() => setSources(true)}>
-          Sources
+          Real vs synthetic
         </button>
         <details className="settings" ref={settings}>
           <summary aria-label="Settings">⚙</summary>
@@ -704,7 +809,7 @@ export function App() {
           </div>
         </details>
       </header>
-      <main className="workspace">
+      <main className={`workspace view-${view}`}>
         <section className="stage">
           <MapView
             clock={clock}
@@ -719,52 +824,68 @@ export function App() {
             flat={model.flat}
             selection={model.selection}
             follow={model.follow}
+            focus={focus}
+            spotlight={spotlight && model.selection?.kind === "household" && model.selection.id === spotlight.household ? spotlight.resource : null}
+            onFocus={setFocus}
             onFollow={follow}
             onSelect={select}
           />
-          <ScoreCard
-            plan={model.snapshot.plan ?? emberNow.plan}
-            projected={nominal.ember}
-            baseline={nominal.baseline}
-            state={emberNow}
-            onSources={() => setSources(true)}
-          />
-          <Latest plan={plans[plans.length - 1]} state={model.snapshot} />
-          {model.replay === "baseline" ? (
-            <p className="replay-chip">
-              {baselinePb ? "Showing the baseline: incident by incident, same reports" : "Baseline replay unavailable"}
-            </p>
-          ) : live && !emberPb ? (
-            <p className="replay-chip muted">No live replay yet · vehicles step between snapshots</p>
+          {view === "live" ? (
+            <>
+              <ScoreCard plan={plan} projected={nominal.ember} baseline={nominal.baseline} state={emberNow} />
+              <Ticker state={display} plans={plans} playback={playback} t={t} onSelect={select} />
+              <JoinBadge voiceNumber={live ? health.voice_number ?? null : null} players={playerCount} max={maxPlayers} onOpen={() => dispatch({ type: "view", view: "photon" })} />
+              {model.replay === "baseline" ? (
+                <p className="replay-chip">{baselinePb ? "Baseline: incident by incident, same reports" : "Baseline replay unavailable"}</p>
+              ) : live && !emberPb ? (
+                <p className="replay-chip muted">No live replay yet · vehicles step between snapshots</p>
+              ) : null}
+            </>
           ) : null}
           <Toasts toasts={toasts} />
-          <JoinCard apiBase={live ? root : null} phones={phones} calls={calls} state={emberNow} max={health.max_players ?? MAX_PLAYERS} voiceNumber={health.voice_number ?? null} reader={live ? health.reader ?? null : null} />
         </section>
-        <Panels
-          tab={model.tab}
-          onTab={(tab) => dispatch({ type: "tab", tab })}
-          state={display}
-          t={t}
-          closures={closures}
-          selection={model.selection}
-          playback={playback}
-          walkers={walkers}
-          follow={model.follow}
-          onFollow={follow}
-          onSelect={select}
-          comparison={comparison}
-          nominal={nominal}
-          scatter={model.scatter}
-          scatterTotal={model.scatterTotal}
-          robust={model.robust}
-          plans={plans}
-          judge={model.judge}
-          busy={model.busy}
-          onCloseRoad={(edgeId) => void closeRoad(edgeId)}
-          onUndoClosure={(edgeId) => dispatch({ type: "undo", edgeId })}
-          onReplan={() => void replan()}
-          onCompare={() => void compare()}
-          onOptimize={(seeds) => void optimize(seeds)}
+        {view === "photon" ? (
+          <PhotonView
+            apiBase={live ? root : null}
+            phones={phones}
+            calls={calls}
+            state={emberNow}
+            plans={plans}
+            t={t}
+            max={maxPlayers}
+            voiceNumber={health.voice_number ?? null}
+            reader={live ? health.reader ?? null : null}
+            onShow={(id) => showHousehold(id)}
+          />
+        ) : view === "impact" ? (
+          <ImpactView plan={plan} plans={plans} projected={nominal.ember} baseline={nominal.baseline} state={emberNow} onSources={() => setSources(true)} />
+        ) : view === "daytona" ? (
+          <DaytonaView t={t} plans={plans} robust={model.robust} scatter={model.scatter} scatterTotal={model.scatterTotal} busy={model.busy} onOptimize={(seeds) => void optimize(seeds)} />
+        ) : null}
+        {model.selection ? (
+          <Drawer
+            selection={model.selection}
+            state={display}
+            t={t}
+            closures={closures}
+            judge={model.judge}
+            busy={model.busy}
+            playback={playback}
+            walkers={walkers}
+            follow={model.follow}
+            onCloseRoad={(edgeId) => void closeRoad(edgeId)}
+            onUndoClosure={(edgeId) => dispatch({ type: "undo", edgeId })}
+            onFollow={follow}
+            onSelect={(selection) => dispatch({ type: "select", selection })}
+          />
+        ) : null}
+        <ArrivalAlerts
+          alerts={alerts}
+          hold={held}
+          who={who}
+          onShow={(arrival) => showHousehold(arrival.household_id, arrival.resource_id)}
+          onDismiss={(arrival) => setAlerts((list) => list.filter((item) => item.household_id !== arrival.household_id))}
+          onResume={resume}
         />
       </main>
       {sources ? <Sources synthetic={model.snapshot.synthetic ?? scenario.synthetic ?? []} onClose={() => setSources(false)} /> : null}
@@ -773,7 +894,7 @@ export function App() {
 }
 
 /** Play, scrub and the clock: follows every frame, so the scrubber never lags the stage. */
-function Transport(props: { clock: Clock; playing: boolean; disabled?: boolean; onPlay: (playing: boolean) => void }) {
+function Transport(props: { clock: Clock; playing: boolean; disabled?: boolean; held: string | null; onPlay: (playing: boolean) => void }) {
   const t = useClock(props.clock);
   return (
     <div className="transport">
@@ -790,9 +911,9 @@ function Transport(props: { clock: Clock; playing: boolean; disabled?: boolean; 
         disabled={props.disabled}
         onChange={(event) => props.clock.set(Number(event.target.value))}
       />
-      <p className="time">
+      <p className={props.held ? "time held" : "time"}>
         {formatSim(t)}
-        <small>{props.disabled ? "Paused for stress test" : clockLabel(t)}</small>
+        <small>{props.held ?? (props.disabled ? "Paused for stress test" : clockLabel(t))}</small>
       </p>
     </div>
   );

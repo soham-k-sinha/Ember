@@ -93,6 +93,7 @@ type CarStyle = { body: string; roof: string; stripe?: string; badge?: "wheel" |
 const CARS: Record<string, CarStyle> = {
   van: { body: "#f4f1ea", roof: "#d8d3c8", stripe: "#2f6fb5" },
   accessible_van: { body: "#f4f1ea", roof: "#d8d3c8", stripe: "#2f6fb5", badge: "wheel" },
+  ambulance: { body: "#f7f5f0", roof: "#ffffff", stripe: "#d62828", badge: "cross" },
   truck: { body: "#e0782f", roof: "#b85d1f", cargo: "#6b4a2b", long: true },
   generator: { body: "#f2c230", roof: "#c99a12", cargo: "#3a3a3a", badge: "bolt", long: true },
   crew: { body: "#3f7d5a", roof: "#2c5c41", cargo: "#2a2a2a", badge: "tools" },
@@ -142,7 +143,7 @@ function car(ctx: CanvasRenderingContext2D, ox: number, oy: number, style: CarSt
   if (style.badge) {
     const cx = x + w / 2;
     const cy = y + h * 0.4 + (style.cargo ? 8 * s : 0);
-    ctx.fillStyle = style.badge === "wheel" ? "#2f6fb5" : "#111";
+    ctx.fillStyle = style.badge === "wheel" ? "#2f6fb5" : style.badge === "cross" ? "#d62828" : "#111";
     ctx.beginPath();
     ctx.arc(cx, cy, 5.5 * s, 0, Math.PI * 2);
     ctx.fill();

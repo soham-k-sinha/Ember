@@ -35,6 +35,7 @@ type RGBA = [number, number, number, number];
 const RESOURCE_COLOR: Record<string, RGB> = {
   van: [125, 180, 255],
   accessible_van: [150, 120, 255],
+  ambulance: [255, 96, 96],
   truck: [255, 150, 70],
   generator: [255, 210, 60],
   crew: [90, 210, 140],
