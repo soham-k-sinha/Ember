@@ -1,9 +1,11 @@
 """End-to-end check of the running stack: backend (engine mode) + engine + Daytona/local pool + WebSocket.
 
 Drives a live backend over HTTP and WS the way the website and the phones do, and checks every step against the
-contracts and the demo story. No real phones: texts go through /reports, /disruption and /dev/inbound.
+contracts and the demo story. No real phones: texts go through /reports, /disruption and /dev/inbound. Use a fresh DB:
+players (D78) survive resets, and MAX_PLAYERS=3 makes the cap check run.
 
-    cd residents && RESET_ON_START=1 PHOTON_ENABLED=0 uv run uvicorn residents.app:app --port 8000
+    cd residents && DB_PATH=/tmp/e2e.db RESET_ON_START=1 PHOTON_ENABLED=0 EXTRACT_ENABLED=0 ELEVENLABS_API_KEY= \
+        MAX_PLAYERS=3 uv run uvicorn residents.app:app --port 8000
     cd residents && uv run python ../engine/scripts/e2e.py [--base http://127.0.0.1:8000] [--skip-optimize]
 
 Exit code 0 = every check passed. Re-run it after any merge, and on the machine with the Photon/Anthropic keys.
@@ -72,6 +74,7 @@ def mine(plan: dict, hid: int) -> list[dict]:
 async def main(base: str, skip_optimize: bool) -> int:
     from ember_engine.scenario import load_scenario
     from ember_engine.state import validate_state
+    from residents.contracts import errors
 
     scn = load_scenario(ROOT / "scenarios" / "allston_flood_v1" / "scenario.json")
     town = json.loads(gzip.decompress((ROOT / "engine" / "data" / "town.json.gz").read_bytes()))
@@ -200,6 +203,10 @@ async def main(base: str, skip_optimize: bool) -> int:
     for planner in ("ember", "baseline"):
         sim = await post("/simulate", {"planner": planner})
         check("metrics" in sim or "people_unreached" in json.dumps(sim), f"POST /simulate {planner} returns metrics")
+        pb = await get("/playback", params={"which": planner})
+        errs = errors("playback", pb)
+        check(not errs and pb["planner"] == planner, f"GET /playback?which={planner} validates against the contract",
+              "; ".join(errs[:3]))
 
     if not skip_optimize:
         print("\n[6] robust optimization (Daytona, local fallback)")
@@ -221,7 +228,9 @@ async def main(base: str, skip_optimize: bool) -> int:
               f"chosen={rob.get('chosen')} nominal={rob.get('nominal_best')}")
         await asyncio.sleep(0.5)
         pts = ev.since(n, "scatter_point")
-        check(len(pts) == rob.get("jobs"), "every run streams as a scatter_point", f"{len(pts)}/{rob.get('jobs')}")
+        check(rob.get("pool") == "daytona" and rob.get("startup_s") is not None, "the runs go to the Daytona pool, startup reported",
+              f"pool={rob.get('pool')} startup_s={rob.get('startup_s')}")
+        check(len(pts) == rob.get("jobs") == 250, "250 runs (50 seeds by default) stream as scatter_points", f"{len(pts)}/{rob.get('jobs')}")
         st = await state("after optimize")
         check(st["plan_version"] == v_before + 1 and (st["plan"].get("search") or {}).get("robust"),
               "optimize publishes a new plan version with the robustness ranking", f"v{st['plan_version']}")
@@ -240,6 +249,8 @@ async def main(base: str, skip_optimize: bool) -> int:
         check("409" in str(e), "inbound text without a resident thread answers 409", str(e)[:100])
     q = await get("/questions")
     check(isinstance(q, list), "GET /questions lists the coordinator queue", f"{len(q)} open")
+    calls = await get("/calls")
+    check(set(calls) == {"live", "recent"} and all(isinstance(v, list) for v in calls.values()), "GET /calls is {live, recent}")
 
     print("\n[8] play the clock to the end of the horizon")
     prev_closed = 0
@@ -255,6 +266,36 @@ async def main(base: str, skip_optimize: bool) -> int:
     check(len(safe) >= 25, "most households end safe at the shelter", f"{len(safe)}/{len(st['households'])}")
     check(st["metrics"]["hospital_outage_s"] < 1800, "hospital outage stays under 30 min by the end",
           f"{st['metrics']['hospital_outage_s'] / 60:.0f} min")
+
+    print("\n[9] three strangers text JOIN EMBER (multiplayer)")
+    await post("/dev/reset")
+    await asyncio.sleep(3)  # players from earlier runs are placed again, with their own replan
+    v0 = (await get("/state"))["plan_version"]
+    n0 = sum(p_["player"] is not None for p_ in await get("/phones"))
+    first = 5550000 + int(time.time()) % 1000 * 10
+    phones = [f"+1617{first + i}" for i in range(4)]
+    for ph in phones[:3]:
+        await post("/dev/inbound", {"role": "resident", "handle": ph, "text": "JOIN EMBER"})
+    t0 = time.time()
+    while (await get("/state"))["plan_version"] == v0 and time.time() - t0 < 20:
+        await asyncio.sleep(0.5)
+    await asyncio.sleep(3)
+    ps = {p_["handle"]: p_ for p_ in await get("/phones")}
+    got = [ps.get(ph, {}) for ph in phones[:3]]
+    hids = [g.get("household_id") for g in got]
+    check([g.get("player") for g in got] == [n0 + 1, n0 + 2, n0 + 3], "they are the next three players in GET /phones",
+          str([g.get("player") for g in got]))
+    st = await state("after joins")
+    hh = {h_["household_id"]: h_ for h_ in st["households"]}
+    check(None not in hids and len(set(hids)) == 3 and all(hh.get(x, {}).get("deadline_s") for x in hids),
+          "on three distinct flood-zone households in /state", f"{[(x, hh.get(x, {}).get('deadline_s')) for x in hids]}")
+    check(v0 < st["plan_version"] <= v0 + 1, "the burst of joins costs one replan", f"v{v0} → v{st['plan_version']}")
+    if (await get("/health")).get("max_players") == n0 + 3:
+        r = await post("/dev/inbound", {"role": "resident", "handle": phones[3], "text": "join ember"})
+        check(r.get("message") is None and phones[3] not in {p_["handle"] for p_ in await get("/phones")},
+              "a 4th join over MAX_PLAYERS is refused")
+    else:
+        print(f"      cap check skipped: start the backend with MAX_PLAYERS={n0 + 3} on a fresh DB")
 
     await ev.stop()
     await c.aclose()

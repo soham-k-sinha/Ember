@@ -30,6 +30,11 @@ RUN_STARTED_KEY = "run_started_at"  # wall-clock UTC ISO of the last bootstrap (
 JOIN_PHRASE = "join ember"  # an unknown phone texting this becomes a drill player (D78)
 FULL = "Thanks for joining! The EMBER flood drill is full right now; watch it on the big screen."
 
+
+def joins(text: str) -> bool:
+    return JOIN_PHRASE in " ".join(text.lower().split())
+
+
 # Called after a new inbound message is stored: (message, role). Task 3/4 hang extraction + replan here.
 InboundHook = Callable[[dict, str], Awaitable[Any]]
 # A text from a phone that has no household yet (registered with `locate`): (phone row, text).
@@ -168,7 +173,7 @@ class Messenger:
         except ValueError:
             handle = inbound.handle
         phone = self.store.phone(handle=handle)
-        if phone is None and JOIN_PHRASE not in " ".join(inbound.text.lower().split()):
+        if phone is None and not joins(inbound.text):
             log.warning("text from unregistered handle %s ignored", handle)
             return None
         if self.store.has_external_id(inbound.external_id) or self.store.inbound_seen(inbound.external_id):
@@ -201,7 +206,7 @@ class Messenger:
         return await self._in_turn(handle, inbound.text, self._store_inbound(
             phone["role"], inbound.text, external_id=inbound.external_id, thread=thread))
 
-    async def _join(self, handle: str, inbound: Inbound) -> dict | None:
+    async def _join(self, handle: str, inbound: Inbound | None = None) -> dict | None:
         """An unknown phone texted the join phrase: a drill player, unplaced until the Locator gives it a
         building (D78). Over max_players it is told the drill is full and stays unregistered."""
         async with self._registration_lock:
@@ -213,7 +218,7 @@ class Messenger:
                 return self.store.upsert_phone(handle, "resident", scenario_id=self.store.meta().get("scenario_id"))
         text = with_drill_prefix(FULL)
         delivery = "dev"
-        if self.photon is not None:  # they texted first, so the line may answer them
+        if self.photon is not None and inbound is not None:  # they texted first, so the line may answer them
             try:
                 await self.photon.send_text(inbound.space_id, inbound.agent_user_id, text,
                                             idempotency_key=f"ember-{inbound.external_id}-full")
@@ -243,9 +248,12 @@ class Messenger:
                                          thread=select_thread(self.store, role, household_id, facility_id))
 
     async def phone_inbound(self, raw_handle: str, text: str) -> dict | None:
-        """Dev / drill console: a text "from" a registered phone, without Photon (no opt-in learned).
-        Placed phones go the normal path; unplaced ones to the lobby (location first)."""
-        phone = self.store.phone(handle=normalize_handle(raw_handle))
+        """Dev / drill console: a text "from" a phone, without Photon (no opt-in learned). Placed phones go the
+        normal path; unplaced ones to the lobby (location first); an unknown one only by joining (D78)."""
+        handle = normalize_handle(raw_handle)
+        phone = self.store.phone(handle=handle)
+        if phone is None and joins(text) and (phone := await self._join(handle)) is None:
+            return None
         if phone is None:
             raise ValueError(f"{raw_handle} is not a registered phone")
         thread = phone_thread(self.store, phone)

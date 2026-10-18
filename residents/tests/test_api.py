@@ -34,7 +34,7 @@ def test_health(client, fixture_state):
     h = client.get("/health").json()
     assert h == {"ok": True, "scenario_id": fixture_state["scenario_id"], "plan_version": fixture_state["plan_version"],
                  "t_s": fixture_state["t_s"], "mode": "static", "extraction": "off", "photon": "disabled", "photon_listener": None,
-                 "join_number": None}
+                 "join_number": None, "max_players": 30}
 
 
 def test_cors_allows_vite_dev_server(client):

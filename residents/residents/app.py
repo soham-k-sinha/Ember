@@ -282,7 +282,8 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         return {"ok": True, "scenario_id": meta.get("scenario_id"), "plan_version": meta.get("plan_version"),
                 "t_s": meta.get("t_s"), "mode": "engine" if app.state.planner is not None else "static",
                 "extraction": "on" if app.state.intake is not None else "off", "photon": "enabled" if messenger().photon is not None else "disabled",
-                "photon_listener": listener.status() if listener is not None else None, "join_number": settings.join_number or None}
+                "photon_listener": listener.status() if listener is not None else None, "join_number": settings.join_number or None,
+                "max_players": settings.max_players}
 
     @app.get("/state")
     def get_state() -> dict:

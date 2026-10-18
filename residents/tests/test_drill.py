@@ -734,3 +734,11 @@ def test_reset_places_players_again(lobby):
     texts = [x["content"]["text"] for x in fp.sends()]
     assert not any("Where are you right now?" in t for t in texts)          # never asked where they are
     assert sum("You're Player 1:" in t for t in texts) == 2
+
+
+def test_the_console_joins_an_unknown_phone(lobby):
+    c, _ = lobby
+    r = c.post("/dev/inbound", json={"role": "resident", "handle": "+16175550201", "text": "JOIN EMBER"})
+    settle(c)
+    assert r.json()["message"] is None and players(c)["+16175550201"]["household_id"] is not None
+    assert c.post("/dev/inbound", json={"role": "resident", "handle": "+16175550202", "text": "hi"}).status_code == 422
