@@ -11,13 +11,14 @@ import { agentWorld, buildAgents, setScene, waitLonLat, type AgentWorld } from "
 import { Crowd } from "./crowd";
 import { FloodWater } from "./water";
 import { TrafficCars } from "./traffic";
+import { Fleet } from "./fleet";
 import { lightAt, tint } from "./lighting";
 import { SKY_BG } from "./palette";
 import { fixturePlaybacks, scenario, town } from "../fixtures";
 import { householdColor, peopleCount } from "../model";
 import type { WalkerPlan } from "../people";
 import { pathAhead, type Playback } from "../playback";
-import type { Closure, Selection, StateFacility, StateResource, StateSnapshot } from "../types";
+import type { Closure, Selection, StateFacility, StateSnapshot } from "../types";
 import { edgePoint, KZ, projector, type Projector } from "./project";
 import { buildStatic, type StaticScene } from "./scene";
 import { CrowdBudget, figureScale, populationAtZoom } from "./density";
@@ -62,7 +63,11 @@ const STATE_RING: Record<string, number> = { ok: 0x22a06b, backup: 0xf5a524, dow
 
 const toHex = (c: [number, number, number]) => (c[0] << 16) | (c[1] << 8) | c[2];
 
-type Pill = { root: Container; bg: Graphics; text: Text; key: string; used: boolean };
+type Pill = { root: Container; bg: Graphics; text: Text; key: string; used: boolean; w: number; h: number };
+
+/** Label priorities: higher wins a collision; ALWAYS never yields (markers' own glyphs, the selection). */
+const PRIO = { ALWAYS: 1000, SELECTED: 900, JUDGE: 800, COUNT: 700, ALARM: 600, VENUE: 550, VEHICLE: 400, FACILITY: 300, LANDMARK: 100 } as const;
+const queued: Array<{ item: Pill; x: number; y: number; prio: number }> = [];
 
 type Ctx = {
   app: Application;
@@ -81,6 +86,7 @@ type Ctx = {
   crowd: Crowd;
   crowdBudget: CrowdBudget;
   traffic: TrafficCars;
+  fleet: Fleet;
   aw: AgentWorld;
   awFor: Playback | null;
   lastT: number;
@@ -126,7 +132,7 @@ export function IsoView(props: IsoProps) {
       const scene = buildStatic(data, p);
       const world = new Container();
       const dyn = new Container();
-      const flood = new FloodWater(p, scenario.hazard.keyframes);
+      const flood = new FloodWater(p, scenario.hazard.keyframes, data);
       const closed = new Graphics();
       const trails = new Graphics();
       const decals = new Graphics();
@@ -137,6 +143,7 @@ export function IsoView(props: IsoProps) {
       world.addChild(scene.slab, scene.ground, scene.tiles.ground, scene.shadow, scene.tiles.shadow, scene.pools, scene.slabMask, dyn, scene.objects, top);
       const crowd = new Crowd(scene.objects, marks, scene.atlas, p, scene.depthFor);
       const traffic = new TrafficCars(app.renderer, scene.objects, p, scene.depthFor);
+      const fleet = new Fleet(app.renderer, scene.objects, p);
       const aw = agentWorld(p, scene.insideBuilding, scene.onRoad, propsRef.current.playback);
       setScene(aw, data, scenario.hazard.keyframes, [town.venue.lon, town.venue.lat]);
       const overlay = new Graphics();
@@ -146,11 +153,10 @@ export function IsoView(props: IsoProps) {
       app.stage.addChild(world, haze, overlay, pillLayer, hits);
 
       // camera: fit the stage
-      const b = scene.slab.getLocalBounds();
-      const s = Math.min(app.screen.width / (b.width * 1.08), app.screen.height / (b.height * 1.12));
-      const cam = { s, x: app.screen.width / 2 - (b.x + b.width / 2) * s, y: app.screen.height / 2 - (b.y + b.height / 2) * s };
+      const cam = fitStage(app, scene.slab, el);
+      const s = cam.s;
       const ctx: Ctx = {
-        app, data, p, scene, world, dyn, flood, floodTint: 0xffffff, closed, trails, decals, marks, top, crowd, crowdBudget: new CrowdBudget(), traffic, aw, awFor: propsRef.current.playback, lastT: propsRef.current.t, lastNow: performance.now() / 1000, vehicles: new Map(), lightKey: "", fitS: s, focusKey: 0, target: null, overlay, haze, hits, pills: new Map(), pillLayer,
+        app, data, p, scene, world, dyn, flood, floodTint: 0xffffff, closed, trails, decals, marks, top, crowd, crowdBudget: new CrowdBudget(), traffic, fleet, aw, awFor: propsRef.current.playback, lastT: propsRef.current.t, lastNow: performance.now() / 1000, vehicles: new Map(), lightKey: "", fitS: s, focusKey: 0, target: null, overlay, haze, hits, pills: new Map(), pillLayer,
         closedKey: "", cam, drag: { on: false, moved: false, x: 0, y: 0 },
       };
       ctxRef.current = ctx;
@@ -240,6 +246,24 @@ function hazeSprite(): Sprite {
   return sprite;
 }
 
+/** Camera that fits the whole stage into the part of the canvas the score card does not cover. */
+function fitStage(app: Application, slab: Graphics, host: HTMLElement | null): { s: number; x: number; y: number } {
+  const b = slab.getLocalBounds();
+  const W = app.screen.width;
+  const H = app.screen.height;
+  let left = 0;
+  const card = document.querySelector(".scorecard");
+  if (card && host) {
+    const c = card.getBoundingClientRect();
+    const h = host.getBoundingClientRect();
+    // the card floats over the top-left of the map: give the stage the width to its right
+    if (c.right > h.left && c.left < h.left + W * 0.5) left = Math.max(0, c.right - h.left + 8);
+  }
+  const free = W - left;
+  const s = Math.min(free / (b.width * 1.04), H / (b.height * 1.08));
+  return { s, x: left + free / 2 - (b.x + b.width / 2) * s, y: H / 2 - (b.y + b.height / 2) * s };
+}
+
 // ---------------------------------------------------------------------------------------------
 
 function frame(ctx: Ctx, props: IsoProps) {
@@ -261,10 +285,8 @@ function frame(ctx: Ctx, props: IsoProps) {
   if (props.focus && props.focus.key !== ctx.focusKey) {
     ctx.focusKey = props.focus.key;
     if (props.focus.zoom <= 14.4) {
-      // the district preset: the whole stage, fitted and centred
-      const bb = ctx.scene.slab.getLocalBounds();
-      const s = Math.min(ctx.app.screen.width / (bb.width * 1.06), ctx.app.screen.height / (bb.height * 1.1));
-      ctx.target = { s, x: ctx.app.screen.width / 2 - (bb.x + bb.width / 2) * s, y: ctx.app.screen.height / 2 - (bb.y + bb.height / 2) * s };
+      // the district preset: the whole stage, fitted beside the score card
+      ctx.target = fitStage(ctx.app, ctx.scene.slab, ctx.app.canvas.parentElement);
     } else {
       const s = Math.min(9, ctx.fitS * 2 ** (props.focus.zoom - 14.3));
       const [x, y] = p.lonlat(props.focus.lon, props.focus.lat);
@@ -460,97 +482,14 @@ function drawPeople(ctx: Ctx, props: IsoProps, t: number, now: number) {
   ctx.crowd.drawSelection(ctx.decals, ctx.top, sel, cam.s, now);
 }
 
-/** Oriented vehicle seen in iso: footprint L×W (m), height H, light bar and headlights glowing after dusk. */
-function vehicle(g: Graphics, p: Projector, r: StateResource, now: number, selected: boolean, lights: number, ox: number, oy: number) {
-  const [a, b] = p.toAB(r.lon, r.lat);
-  const hd = ((r.heading_deg ?? 0) * Math.PI) / 180;
-  const fa = Math.sin(hd);
-  const fb = -Math.cos(hd);
-  const sa = -fb;
-  const sb = fa;
-  const big = r.kind === "truck" || r.kind === "generator" ? 1.3 : 1;
-  const L = 6.2 * big;
-  const W = 2.5 * big;
-  const H = 2.4 * big;
-  const corner = (u: number, v: number): [number, number] => [a + fa * u + sa * v, b + fb * u + sb * v];
-  const iso = (x: number, y: number, z = 0): [number, number] => {
-    const [sx, sy] = p.iso(x, y, z);
-    return [sx - ox, sy - oy];
-  };
-  const base = [corner(L / 2, -W / 2), corner(L / 2, W / 2), corner(-L / 2, W / 2), corner(-L / 2, -W / 2)];
-  const color = KIND[r.kind]?.color ?? 0x888888;
-  g.poly(base.flatMap(([x, y]) => iso(x + 0.8, y - 0.3))).fill({ color: 0x000000, alpha: 0.3 });
-  for (let i = 0; i < 4; i++) {
-    const [a1, b1] = base[i];
-    const [a2, b2] = base[(i + 1) % 4];
-    const na = b2 - b1;
-    const nb = -(a2 - a1);
-    if (na + nb <= 0) continue;
-    const len = Math.hypot(na, nb) || 1;
-    g.poly([...iso(a1, b1, 0.35), ...iso(a2, b2, 0.35), ...iso(a2, b2, H), ...iso(a1, b1, H)]).fill(shadeHex(color, 0.6 * (na / len) ** 2 + 0.84 * (nb / len) ** 2 + 0.1)).stroke({ width: 0.12, color: 0x101010, alpha: 0.6 });
-    // wheels
-    g.poly([...iso(a1, b1, 0), ...iso(a2, b2, 0), ...iso(a2, b2, 0.4), ...iso(a1, b1, 0.4)]).fill({ color: 0x1a1a1a, alpha: 0.9 });
-  }
-  g.poly(base.flatMap(([x, y]) => iso(x, y, H))).fill(shadeHex(color, 1.08)).stroke({ width: selected ? 0.5 : 0.12, color: selected ? 0xffffff : 0x101010, alpha: selected ? 1 : 0.6 });
-  const [wa1, wb1] = corner(L / 2 - 0.3, -W / 2 + 0.35);
-  const [wa2, wb2] = corner(L / 2 - 0.3, W / 2 - 0.35);
-  const [wa3, wb3] = corner(L / 2 - 1.5, W / 2 - 0.35);
-  const [wa4, wb4] = corner(L / 2 - 1.5, -W / 2 + 0.35);
-  g.poly([...iso(wa1, wb1, H + 0.02), ...iso(wa2, wb2, H + 0.02), ...iso(wa3, wb3, H + 0.02), ...iso(wa4, wb4, H + 0.02)]).fill(0x1d2a36);
-  if (r.status === "en_route" || r.status === "returning" || r.status === "working") {
-    const on = Math.floor(now * 5) % 2 === 0;
-    const [la, lb] = corner(-0.2, -W / 4);
-    const [ra, rb] = corner(-0.2, W / 4);
-    g.rect(...iso(la, lb, H + 0.35), 0.7, 0.45).fill(on ? 0xff3b3b : 0x5a1010);
-    g.rect(...iso(ra, rb, H + 0.35), 0.7, 0.45).fill(on ? 0x2a1a60 : 0x4d8dff);
-    const glowAlpha = 0.35 + 0.65 * lights;
-    g.circle(...iso(on ? la : ra, on ? lb : rb, H + 0.5), 2.2).fill({ color: on ? 0xff3030 : 0x3a7dff, alpha: 0.28 * glowAlpha });
-  }
-  if (lights > 0.05 && r.status !== "available") {
-    const [l1a, l1b] = corner(L / 2, -W / 2 + 0.3);
-    const [l2a, l2b] = corner(L / 2, W / 2 - 0.3);
-    const [s1a, s1b] = corner(L / 2 + 7, -2.6);
-    const [s2a, s2b] = corner(L / 2 + 7, 2.6);
-    g.poly([...iso(l1a, l1b, 0.7), ...iso(s1a, s1b, 0), ...iso(s2a, s2b, 0), ...iso(l2a, l2b, 0.7)]).fill({ color: 0xfff1c8, alpha: 0.22 * lights });
-  }
-}
-
-function shadeHex(c: number, k: number): number {
-  const r = Math.min(255, Math.round(((c >> 16) & 255) * k));
-  const g = Math.min(255, Math.round(((c >> 8) & 255) * k));
-  const b = Math.min(255, Math.round((c & 255) * k));
-  return (r << 16) | (g << 8) | b;
-}
-
 function drawVehicles(ctx: Ctx, props: IsoProps, now: number) {
-  const sel = props.selection?.kind === "resource" ? props.selection.id : props.follow?.kind === "resource" ? props.follow.id : null;
-  const lights = lightAt(props.t).lights;
-  const seen = new Set<string>();
-  for (const r of props.state.resources) {
-    let g = ctx.vehicles.get(r.id);
-    if (!g) {
-      g = new Graphics();
-      ctx.scene.objects.addChild(g);
-      ctx.vehicles.set(r.id, g);
-    }
-    g.clear();
-    if (!ctx.p.inside(r.lon, r.lat)) {
-      g.visible = false;
-      continue;
-    }
-    seen.add(r.id);
-    const [a, b] = ctx.p.toAB(r.lon, r.lat);
-    const [ox, oy] = ctx.p.iso(a, b);
-    g.position.set(ox, oy);
-    vehicle(g, ctx.p, r, now, r.id === sel, lights, ox, oy);
-    g.zIndex = ctx.scene.depthFor(a, b, ox, oy, 4, 4);
-    g.visible = true;
-  }
+  const selected = props.selection?.kind === "resource" ? props.selection.id : props.follow?.kind === "resource" ? props.follow.id : null;
+  ctx.fleet.update(props.state.resources, { now, selected, lights: lightAt(props.t).lights, tint: ctx.scene.light.tint, depthFor: ctx.scene.depthFor });
 }
 
 // ---------- screen-space markers, labels, hit targets ----------
 
-function pill(ctx: Ctx, key: string, text: string, x: number, y: number, style: { bg: number; fg?: number; size?: number; border?: number }) {
+function pill(ctx: Ctx, key: string, text: string, x: number, y: number, style: { bg: number; fg?: number; size?: number; border?: number }, prio: number = PRIO.ALWAYS) {
   let item = ctx.pills.get(key);
   if (!item) {
     const root = new Container();
@@ -558,7 +497,7 @@ function pill(ctx: Ctx, key: string, text: string, x: number, y: number, style: 
     const label = new Text({ text, style: { fontFamily: "Inter, system-ui, sans-serif", fontSize: style.size ?? 11, fontWeight: "700", fill: style.fg ?? 0xffffff, letterSpacing: 0.4 }, resolution: 2 });
     root.addChild(bg, label);
     ctx.pillLayer.addChild(root);
-    item = { root, bg, text: label, key: "", used: true };
+    item = { root, bg, text: label, key: "", used: true, w: 0, h: 0 };
     ctx.pills.set(key, item);
   }
   const sig = `${text}|${style.bg}|${style.border ?? 0}`;
@@ -570,10 +509,30 @@ function pill(ctx: Ctx, key: string, text: string, x: number, y: number, style: 
     item.bg.clear().roundRect(-w / 2, -h, w, h, 5).fill({ color: style.bg, alpha: 0.94 });
     if (style.border) item.bg.roundRect(-w / 2, -h, w, h, 5).stroke({ width: 1.2, color: style.border });
     item.text.position.set(-item.text.width / 2, -h + 2.5);
+    item.w = w;
+    item.h = h;
   }
-  item.root.position.set(Math.round(x), Math.round(y));
-  item.root.visible = true;
   item.used = true;
+  queued.push({ item, x: Math.round(x), y: Math.round(y), prio });
+}
+
+/** Place the queued labels by priority; a label that would overlap one already placed is hidden. */
+function placeLabels(ctx: Ctx) {
+  queued.sort((a, b) => b.prio - a.prio);
+  const placed: Array<[number, number, number, number]> = [];
+  const W = ctx.app.screen.width;
+  const H = ctx.app.screen.height;
+  for (const { item, x, y, prio } of queued) {
+    const r: [number, number, number, number] = [x - item.w / 2 - 2, y - item.h - 2, x + item.w / 2 + 2, y + 2];
+    const off = r[2] < 0 || r[0] > W || r[3] < 0 || r[1] > H;
+    // the judge, players and the selection never yield; everything else gives way to what is already placed
+    const clash = prio < PRIO.JUDGE && placed.some((q) => r[0] < q[2] && r[2] > q[0] && r[1] < q[3] && r[3] > q[1]);
+    item.root.visible = !off && !clash;
+    if (!item.root.visible) continue;
+    item.root.position.set(x, y);
+    placed.push(r);
+  }
+  queued.length = 0;
 }
 
 function hit(ctx: Ctx, key: string, x: number, y: number, r: number, select: Selection) {
@@ -606,11 +565,11 @@ function drawOverlay(ctx: Ctx, props: IsoProps, _now: number, pulse: number) {
   const { p } = ctx;
   const zoomed = ctx.cam.s > 1.6;
 
-  // landmarks (real buildings)
-  if (ctx.cam.s > 0.75) {
+  // landmarks (real buildings): reference, so only zoomed in, and they yield to everything else
+  if (zoomed) {
     for (const lm of ctx.scene.labels) {
       const [x, y] = toScreen(ctx, ...p.iso(lm.at[0], lm.at[1], lm.at[2] + 4));
-      pill(ctx, `lm:${lm.text}`, lm.text, x, y, { bg: 0x1b1f27, fg: 0xe9e3d6, size: 10 });
+      pill(ctx, `lm:${lm.text}`, lm.text, x, y, { bg: 0x1b1f27, fg: 0xe9e3d6, size: 10 }, PRIO.LANDMARK);
     }
   }
 
@@ -644,15 +603,20 @@ function drawOverlay(ctx: Ctx, props: IsoProps, _now: number, pulse: number) {
     g.roundRect(x - 13, y - 13, 26, 26, 7).fill(meta.color).stroke({ width: 2.4, color: ring });
     pill(ctx, `glyph:${facility.id}`, meta.glyph, x, y + 7, { bg: meta.color, size: meta.glyph.length > 1 ? 9 : 12 });
     if (onStage) g.moveTo(x, y + 13).lineTo(x, y + 13 + 22 * ctx.cam.s * 0.5).stroke({ width: 1.5, color: meta.color, alpha: 0.8 });
-    // the shelter is the venue: its name goes on the YOU ARE HERE pill
-    if (facility.type !== "shelter") pill(ctx, `fac:${facility.id}`, facility.name, x, y - 17, { bg: 0x161a22, border: alarm ? ring : undefined });
+    // the name only when it matters: something is wrong there, it is selected, or the camera is close.
+    // The shelter is the venue: its name goes on the YOU ARE HERE pill.
+    const picked = props.selection?.kind === "facility" && props.selection.id === facility.id;
+    if (facility.type !== "shelter" && (alarm || picked || zoomed)) {
+      const state = facility.state === "backup" ? ` · on backup${facility.endurance_left_s != null ? ` ${Math.round(facility.endurance_left_s / 60)} min` : ""}` : facility.state === "down" ? " · DOWN" : "";
+      pill(ctx, `fac:${facility.id}`, `${facility.name}${state}`, x, y - 17, { bg: 0x161a22, border: alarm ? ring : undefined }, picked ? PRIO.SELECTED : alarm ? PRIO.ALARM : PRIO.FACILITY);
+    }
     hit(ctx, `hit:fac:${facility.id}`, x, y, 16, { kind: "facility", id: facility.id });
   }
 
   // you are here: the venue the judges are standing in, above its shelter marker
   {
     const [x, y] = toScreen(ctx, ...p.lonlat(town.venue.lon, town.venue.lat, 22));
-    pill(ctx, "venue", `YOU ARE HERE · ${town.venue.name}`, x, y - 17, { bg: 0xffc542, fg: 0x1a1406, size: 10 });
+    pill(ctx, "venue", `YOU ARE HERE · ${town.venue.name}`, x, y - 17, { bg: 0xffc542, fg: 0x1a1406, size: 10 }, PRIO.VENUE);
   }
 
   // incidents: households still waiting, and every drill player's home; zoomed out, an ordinary household is a dot
@@ -683,12 +647,12 @@ function drawOverlay(ctx: Ctx, props: IsoProps, _now: number, pulse: number) {
       const left = Math.max(0, Math.min(1, (household.deadline_s - props.t) / household.deadline_s));
       g.moveTo(gx, py - 13).arc(gx, py, 13, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * left).stroke({ width: 2.5, color: left < 0.25 ? 0xe5484d : 0xffffff, alpha: 0.95 });
     }
-    pill(ctx, `n:${household.household_id}`, String(peopleCount(household, 1)), gx, py + 7, { bg: gold ? 0xffc542 : color, fg: gold ? 0x1a1406 : 0xffffff, size: 11 });
+    pill(ctx, `n:${household.household_id}`, String(peopleCount(household, 1)), gx, py + 7, { bg: gold ? 0xffc542 : color, fg: gold ? 0x1a1406 : 0xffffff, size: 11 }, PRIO.ALWAYS);
     if (gold || selected) {
       const needs = household.needs;
       const extra = needs !== "unknown" && (needs.mobility || needs.accessible_vehicle) ? " · wheelchair" : needs !== "unknown" && needs.medical ? " · medical" : needs === "unknown" ? " · needs unknown" : "";
       const name = player ? `${player.label}${player.onCall ? " · ON CALL" : ""}` : `${household.judge ? "JUDGE · " : ""}${household.label ?? `#${household.household_id}`}`;
-      pill(ctx, `hh:${household.household_id}`, `${name}${extra}`, gx, py - 13, { bg: 0x161a22, border: gold ? 0xffc542 : undefined, size: 10 });
+      pill(ctx, `hh:${household.household_id}`, `${name}${extra}`, gx, py - 16, { bg: 0x161a22, border: gold ? 0xffc542 : undefined, size: 10 }, selected ? PRIO.SELECTED : PRIO.JUDGE);
     }
     hit(ctx, `hit:hh:${household.household_id}`, gx, py, 14, { kind: "household", id: household.household_id });
   }
@@ -698,15 +662,17 @@ function drawOverlay(ctx: Ctx, props: IsoProps, _now: number, pulse: number) {
     if (!p.inside(r.lon, r.lat)) continue;
     const [x, y] = toScreen(ctx, ...p.lonlat(r.lon, r.lat, 8));
     const picked = (props.selection?.kind === "resource" && props.selection.id === r.id) || (props.follow?.kind === "resource" && props.follow.id === r.id);
-    if (zoomed || picked || r.status !== "available") {
+    // a vehicle's tag: always when selected; zoomed in, for vehicles on a job
+    if (picked || (zoomed && r.status !== "available")) {
       const color = KIND[r.kind]?.color ?? 0x888888;
       const aboard = r.people_on_board ? ` · ${r.people_on_board} aboard` : "";
       const eta = r.eta_s != null && r.eta_s > props.t ? ` · ${Math.round((r.eta_s - props.t) / 60)} min` : "";
-      pill(ctx, `veh:${r.id}`, `${r.name}${aboard}${eta}`, x, y - 4, { bg: picked ? 0xffffff : color, fg: picked ? 0x111111 : 0xffffff, size: 10 });
+      pill(ctx, `veh:${r.id}`, `${r.name}${aboard}${eta}`, x, y - 4, { bg: picked ? 0xffffff : color, fg: picked ? 0x111111 : 0xffffff, size: 10 }, picked ? PRIO.SELECTED : PRIO.VEHICLE);
     }
     hit(ctx, `hit:veh:${r.id}`, x, y + 8, 14, { kind: "resource", id: r.id });
   }
 
+  placeLabels(ctx);
   for (const item of ctx.pills.values()) if (!item.used) item.root.visible = false;
 }
 
