@@ -869,8 +869,8 @@ def needs_of(c, handle=R1):
 
 def test_a_hurt_caller_hears_who_comes_to_the_door_and_what_to_do(two):
     words = turn(two, "I hurt my leg and I can't move.")
-    assert re.fullmatch(r"We've got you: [\w ]+'s crew knows someone is hurt and comes to your door (now|in about \d+ "
-                        r"minutes)\. Keep the injured leg still\.", words), words
+    assert re.fullmatch(r"We've got you: (Ambulance \d's paramedics know|[\w ]+'s crew knows) someone is hurt and comes? to "
+                        r"your door (now|in about \d+ minutes)\. Keep the injured leg still\.", words), words
     assert len(words.split()) <= 25                                           # about 8 s spoken
     assert needs_of(two) == {"people": 2, "mobility": True, "medical": True}  # replanned on it
 
