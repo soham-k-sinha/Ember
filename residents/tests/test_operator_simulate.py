@@ -112,6 +112,6 @@ def test_report_during_optimize_supersedes_it(oc):
         last = _wait_done(oc)
         assert last["error"] and "superseded" in last["error"]
         st = oc.get("/state").json()
-        assert st["plan_version"] == 2 and st["plan"]["trigger"].startswith("report")  # the newer facts win
+        assert st["plan_version"] == 2 and st["plan"]["trigger"] == "Judge: 2 people, wheelchair"  # the newer facts win
     finally:
         oc.app.state.planner.bridge.optimize = real

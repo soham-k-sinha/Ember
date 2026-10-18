@@ -165,7 +165,6 @@ class QueueTrafficEngine:
 
     def metrics(self, world, t_s):
         departed = self.state != WAITING
-        done = (self.state == EXITED) | (self.state == EXPOSED)
         exited = self.state == EXITED
         n_dep = int(departed.sum())
         clearance = None

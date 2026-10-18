@@ -13,7 +13,7 @@ import pytest
 
 from ember_engine.daytona import jobs as J
 from ember_engine.daytona.pool import CANONICAL_TOWN, PKG_DIR, DaytonaPool, LocalPool, get_pool
-from ember_engine.daytona.robust import robust_plan, robust_rank, worst_mean
+from ember_engine.daytona.robust import choose, distinct, robust_plan, robust_rank, worst_mean
 from ember_engine.state import validate_state
 from ember_engine.world import World
 
@@ -55,6 +55,17 @@ def test_worst_share_and_ranking():
     rank = robust_rank(pts)
     assert rank[0]["candidate"] == "b"                            # a has the better mean but the worse tail
     assert rank[-1]["candidate"] == "baseline" and not rank[-1]["eligible"]
+    row = lambda c, v: {"candidate": c, "worst20_people_unreached": v}  # noqa: E731
+    assert choose([row("c02", 16.27), row("c00", 16.4)], "c00") == "c00"   # 0.1 person is noise: keep the forecast-best
+    assert choose([row("c03", 12.0), row("c00", 27.8)], "c00") == "c03"
+
+
+def test_distinct_runs_each_plan_once():
+    a = lambda rid, hid, status="proposed": {"resource_id": rid, "task": "rescue", "target": {"household_id": hid},  # noqa: E731
+                                             "dropoff_facility_id": "s", "status": status}
+    c = lambda cid, *asg: SimpleNamespace(cid=cid, assignments=list(asg))  # noqa: E731
+    cands = [c("c00", a("v1", 1)), c("c01", a("v1", 2, "cancelled"), a("v1", 1)), c("c02", a("v1", 2)), c("c03", a("v2", 1))]
+    assert list(distinct(cands, 2)) == ["c00", "c02"]               # c01 only cancels work: the same plan as c00
 
 
 def test_hundred_jobs_complete_and_pick_a_plan(world, scn, town):
@@ -63,7 +74,7 @@ def test_hundred_jobs_complete_and_pick_a_plan(world, scn, town):
     assert len(pts) == 100 and len(streamed) == 100                # 4 candidates + baseline × 20 seeds
     r = plan["search"]["robust"]
     assert r["jobs"] == 100 and r["chosen"] in {c for c in r["candidates"] if c != "baseline"}
-    assert r["ranking"][0]["candidate"] == r["chosen"]
+    assert r["chosen"] in (r["ranking"][0]["candidate"], r["nominal_best"])
     st = __import__("ember_engine.sim", fromlist=["simulate"]).simulate(world, scn, plan).state_at(3600)
     assert validate_state(st, scn, town) == []
 

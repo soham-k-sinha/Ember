@@ -1,4 +1,4 @@
-import type { Feature, GeoJsonProperties, MultiPolygon, Polygon } from "geojson";
+import type { MultiPolygon, Polygon } from "geojson";
 
 export type LngLat = [number, number];
 
@@ -398,5 +398,3 @@ export type JudgeClosure = {
   edge_id: number;
   closed_from_t_s: number;
 };
-
-export type FloodFeature = Feature<FloodGeometry, GeoJsonProperties>;

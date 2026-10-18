@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import os
-
+from .config import Settings
 from .db import Store, thread_key
 
 ROLES = ("resident", "operator")
@@ -30,7 +29,7 @@ def resolve_thread(store: Store, role: str, household_id: int | None = None,
         return {"household_id": pick["household_id"]} if pick else None
     if role == "operator":
         fac = store.facilities()
-        want = os.environ.get("OPERATOR_FACILITY_ID")
+        want = Settings().operator_facility_id
         pick = (next((f for f in fac if f["id"] == want), None) if want else None) \
             or next((f for f in fac if f["type"] == "hospital" and f.get("critical")), None) \
             or next((f for f in fac if f["type"] == "hospital"), None)

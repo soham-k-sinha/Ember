@@ -2,12 +2,12 @@ import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { createClock, useClock, type Clock } from "./clock";
 import { MapView } from "./components/MapView";
 import { Panels, type PanelId } from "./components/Panels";
-import { JoinCard, ScoreCard, Sources, Toasts, useToasts, waitingPeople } from "./components/Hud";
-import { API_BASE, fixturePlaybacks, JOIN_NUMBER, publishedComparison, publishedScatter, publishedState, scenario, town } from "./fixtures";
+import { JoinCard, Latest, ScoreCard, Sources, Toasts, useToasts } from "./components/Hud";
+import { API_BASE, fixturePlaybacks, publishedComparison, publishedScatter, publishedState, scenario, town } from "./fixtures";
 import { buildGraph, planWalkers, type BgHousehold } from "./people";
 import { asPlayback, stateFromPlayback, type Playback } from "./playback";
 import { loadFullTown, type FullTown } from "./townFull";
-import { formatSim, planDiff, replanSeconds } from "./format";
+import { formatSim, planDiff, planTiming } from "./format";
 import { clockLabel } from "./iso/lighting";
 import { asCalls, asComparison, asPhones, asState, getJson, openSocket, postJson, robustOf, type LiveStatus } from "./live";
 import { closedEdges } from "./model";
@@ -21,6 +21,7 @@ import type {
   PlanMetrics,
   PlanSnapshot,
   Report,
+  RobustSummary,
   ScatterPoint,
   Selection,
   StateSnapshot,
@@ -30,7 +31,7 @@ type Mode = "fixture" | "live";
 type Replay = "ember" | "baseline";
 
 const SPEEDS = [30, 60, 180, 600];
-const MAX_PLAYERS = 30;
+const MAX_PLAYERS = 25;
 const NO_CALLS: Calls = { live: [], recent: [] };
 
 type Model = {
@@ -46,6 +47,8 @@ type Model = {
   scatter: ScatterPoint[];
   scatterBatch: string | null;
   scatterTotal: number | null;
+  /** the last robust optimisation (GET /optimize), kept after later replans drop it from the plan */
+  robust: RobustSummary | null;
   plans: PlanSnapshot[];
   judge: JudgeClosure[];
   selection: Selection | null;
@@ -69,6 +72,7 @@ type Action =
   | { type: "plan"; plan: PlanSnapshot }
   | { type: "comparison"; comparison: Comparison }
   | { type: "scatter"; points: ScatterPoint[] }
+  | { type: "robust"; robust: RobustSummary | null }
   | { type: "assignment"; event: AssignmentEvent }
   | { type: "message"; message: Message }
   | { type: "report"; report: Report }
@@ -111,7 +115,9 @@ const fixtureModel = {
   scatter: publishedScatter,
   scatterBatch: publishedScatter[0]?.batchId ?? null,
   scatterTotal: publishedScatter[0]?.nTotal ?? null,
+  robust: null,
 };
+const liveScatter = { scatter: [], scatterBatch: null, scatterTotal: null };
 
 function reducer(state: Model, action: Action): Model {
   switch (action.type) {
@@ -123,14 +129,14 @@ function reducer(state: Model, action: Action): Model {
       if (action.mode === state.mode) return state;
       return action.mode === "fixture"
         ? { ...state, ...fixtureModel, mode: "fixture" }
-        : { ...state, mode: "live", scatter: [], scatterBatch: null, scatterTotal: null };
+        : { ...state, ...liveScatter, mode: "live" };
     case "api":
       return { ...state, apiBase: action.apiBase };
     case "live-status":
       return {
         ...state,
         liveStatus: action.status,
-        liveDetail: action.detail === undefined ? state.liveDetail : action.detail,
+        liveDetail: action.status === "live" ? null : action.detail === undefined ? state.liveDetail : action.detail,
       };
     case "state":
       return {
@@ -166,35 +172,29 @@ function reducer(state: Model, action: Action): Model {
         scatter: [...kept, ...fresh],
       };
     }
+    case "robust":
+      return { ...state, robust: action.robust };
     case "assignment": {
-      if (!state.snapshot.plan) return state;
+      // a new version arrives whole as `plan`; this patches the current one (a confirm or a decline)
+      const current = state.snapshot.plan;
       const incoming = action.event;
-      const kept = state.snapshot.plan.assignments.filter((item) => item.id !== incoming.assignment_id);
+      if (!current || incoming.plan_version !== current.version) return state;
+      const kept = current.assignments.filter((item) => item.id !== incoming.assignment_id);
       const assignments = incoming.assignment == null || incoming.change === "removed"
         ? kept
         : [...kept, incoming.assignment];
-      const changes = [
-        ...(state.snapshot.plan.changes ?? []).filter(
-          (change) => !(change.assignment_id === incoming.assignment_id && change.change === incoming.change),
-        ),
-        { assignment_id: incoming.assignment_id, change: incoming.change, note: incoming.note },
-      ];
-      const plan = {
-        ...state.snapshot.plan,
-        version: incoming.plan_version,
-        assignments,
-        changes,
-      };
+      const plan = { ...current, assignments };
       return {
         ...state,
-        snapshot: { ...state.snapshot, plan, plan_version: plan.version },
+        snapshot: { ...state.snapshot, plan },
         plans: withPlan(state.plans, plan),
       };
     }
     case "message":
+      // re-sent with its report_id once the text is understood: upsert by id
       return {
         ...state,
-        snapshot: { ...state.snapshot, messages: [...state.snapshot.messages, action.message] },
+        snapshot: { ...state.snapshot, messages: [...state.snapshot.messages.filter((item) => item.id !== action.message.id), action.message] },
       };
     case "report":
       return {
@@ -241,9 +241,14 @@ function reducer(state: Model, action: Action): Model {
   }
 }
 
+// Live by default when the build names a backend; ?fixtures (or settings) shows the published fixtures
+const query = new URLSearchParams(window.location.search);
+const startLive = query.has("live") || (import.meta.env.VITE_API_BASE != null && !query.has("fixtures"));
+
 const initial: Model = {
   ...fixtureModel,
-  mode: new URLSearchParams(window.location.search).has("live") ? "live" : "fixture",
+  ...(startLive ? liveScatter : {}),
+  mode: startLive ? "live" : "fixture",
   apiBase: API_BASE,
   playing: false,
   speed: 60,
@@ -267,6 +272,15 @@ export function App() {
   const t = useClock(clock, 250);
   const [toasts, toast] = useToasts();
   const [sources, setSources] = useState(false);
+  const [health, setHealth] = useState<{ max_players?: number }>({});
+  const settings = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const close = (event: PointerEvent) => {
+      if (settings.current?.open && !settings.current.contains(event.target as Node)) settings.current.open = false;
+    };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, []);
   const root = model.apiBase.replace(/\/$/, "");
   const live = model.mode === "live";
 
@@ -380,6 +394,11 @@ export function App() {
         if (!cancelled) dispatch({ type: "live-status", status: "error", detail: error instanceof Error ? error.message : "GET /state failed." });
       }
       if (cancelled) return;
+      // the drill's player cap, and the last robust optimisation (a later replan drops it from the plan)
+      getJson(`${root}/health`).then((body) => setHealth(body as typeof health)).catch(() => undefined);
+      getJson(`${root}/optimize`)
+        .then((body) => dispatch({ type: "robust", robust: robustOf({ search: (body as { last?: unknown }).last }) }))
+        .catch(() => undefined);
       // The backend broadcasts `plan` after a replan but not always a fresh `state`, so closed roads and
       // vehicle ETAs would stay stale; refetch GET /state shortly after a plan unless a `state` event lands.
       let refetch: number | undefined;
@@ -485,8 +504,7 @@ export function App() {
     const seen = seenPlan.current;
     seenPlan.current = { mode: model.mode, version: latestPlan.version };
     if (!live || seen?.mode !== "live" || latestPlan.version <= seen.version) return;
-    const seconds = replanSeconds(latestPlan);
-    toast(`v${seen.version} → v${latestPlan.version}${seconds != null ? ` in ${seconds.toFixed(1)} s` : ""} · ${planDiff(latestPlan, model.snapshot) || "no assignment changed"}`, "plan");
+    toast([`v${seen.version} → v${latestPlan.version}`, planTiming(latestPlan), planDiff(latestPlan, model.snapshot) || "no assignment changed"].filter(Boolean).join(" · "), "plan");
   }, [latestPlan?.version, model.mode]);
 
   // live: the backend's clock follows the scrubber (debounced) and the play head
@@ -579,12 +597,13 @@ export function App() {
       const snapshot = asState(await getJson(`${root}/state`));
       if (snapshot) applyState(snapshot);
       const error = typeof last === "object" && last !== null ? (last as { error?: unknown }).error : undefined;
-      const robust = robustOf(snapshot?.plan);
+      const robust = robustOf({ search: last });
+      if (robust) dispatch({ type: "robust", robust });
       if (typeof error === "string") toast(`Optimize failed: ${error}`, "error");
       else if (robust) {
         toast(robust.chosen !== robust.nominal_best
           ? `Chose ${robust.chosen} over the forecast's best ${robust.nominal_best}: fewer people missed in the worst 20% of worlds.`
-          : `Kept ${robust.chosen}: the forecast's best plan is also the most robust.`, "plan");
+          : `Kept the forecast plan ${robust.chosen}: no candidate beats it by ≥ 1 person in the worst 20%.`, "plan");
       }
     } catch (error) {
       toast(error instanceof Error ? `Optimize failed: ${error.message}` : "Optimize failed.", "error");
@@ -638,7 +657,7 @@ export function App() {
         <button className="link" onClick={() => setSources(true)}>
           Sources
         </button>
-        <details className="settings">
+        <details className="settings" ref={settings}>
           <summary aria-label="Settings">⚙</summary>
           <div className="popover">
             <p>Data</p>
@@ -704,10 +723,10 @@ export function App() {
             plan={model.snapshot.plan ?? emberNow.plan}
             projected={nominal.ember}
             baseline={nominal.baseline}
-            soFar={emberNow.metrics}
-            waiting={waitingPeople(emberNow)}
-            waitingBaseline={baselineNow ? waitingPeople(baselineNow) : null}
+            state={emberNow}
+            onSources={() => setSources(true)}
           />
+          <Latest plan={plans[plans.length - 1]} state={model.snapshot} />
           {model.replay === "baseline" ? (
             <p className="replay-chip">
               {baselinePb ? "Showing the baseline: incident by incident, same reports" : "Baseline replay unavailable"}
@@ -716,7 +735,7 @@ export function App() {
             <p className="replay-chip muted">No live replay yet · vehicles step between snapshots</p>
           ) : null}
           <Toasts toasts={toasts} />
-          <JoinCard number={JOIN_NUMBER} phones={phones} calls={calls} state={emberNow} max={MAX_PLAYERS} />
+          <JoinCard apiBase={live ? root : null} phones={phones} calls={calls} state={emberNow} max={health.max_players ?? MAX_PLAYERS} />
         </section>
         <Panels
           tab={model.tab}
@@ -734,6 +753,7 @@ export function App() {
           nominal={nominal}
           scatter={model.scatter}
           scatterTotal={model.scatterTotal}
+          robust={robustOf(model.snapshot.plan) ?? model.robust}
           plans={plans}
           judge={model.judge}
           busy={model.busy}

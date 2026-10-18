@@ -50,12 +50,13 @@ WHY = {"no_reply": "calling because the water reaches your street in about {mins
        "mobility": "calling about your wheelchair-accessible pickup",
        "medical": "calling about your pickup, because of the medical needs you told us about",
        "pickup_changed": "calling because your pickup has changed",
+       "undelivered": "calling because our text to you didn't go through",
        "console": "calling about your evacuation plan"}
 PROMISE = "I'll text you this too."
 # What a caller says that is about the call, not a message for the thread; the call answers it itself:
-# "hello?" as they pick up our call: who we are and why, again
+# "hello?" / "sorry, what?" as they pick up our call: a short hello, then the one thing we need, never the opener again
 GREETING = re.compile(r"^(\W*(hello|hi|hey)( there)?)+\W*$", re.I)
-# "sorry, what?": the last thing we said, again
+# "sorry, what?" later on: the last thing we said, again
 AGAIN = re.compile(r"^\W*(sorry|pardon|huh|excuse me|what)\W*(what|was that|did you say)?\W*\?", re.I)
 # "thank you, dear" / "okay, got it" / "bye": the call is winding down
 CLOSING = re.compile(r"^(?=.*\b(thank|bye|got it|will do|take care))(\W*(ok(ay)?|great|alright|all right|perfect|"
@@ -72,7 +73,10 @@ SESSION_IDLE_S = 300.0           # a call with no turn for this long is over (it
 SCREENING = re.compile(r"\b(stay on the line|record (your|it)\b|recorded\b|reason for (your )?call|screening service|"
                        r"see if (this person|they)( is| are|'re)? (is )?available|i'll see if|who('s| is) (calling|this)|state your name|"
                        r"leave (a|your) (message|name))", re.I)
-WHO_WE_ARE = "This is EMBER, the HackHarvard flood drill, with your evacuation plan. It's a drill, not a real emergency."
+WHO_WE_ARE = "It's EMBER, the HackHarvard flood drill; this is a drill, not a real emergency."
+# someone frightened gets a calm word before the plan
+PANIC = re.compile(r"\b(oh my god|omg|scared|terrified|panick?ing|hurry|help me|what do i do)\b", re.I)
+CALM = "I'm here with you; we'll go one step at a time."
 NO_REPLY_S = 180.0               # an open offer / step / question unanswered this long (sim-s), not called about yet …
 NEAR_S = 45 * 60.0               # … while their deadline is this close: call
 CHANGED_S = 30 * 60.0            # their pickup changed this recently (they haven't written or been called since): call
@@ -90,7 +94,7 @@ SYSTEM_PROMPT = ("EMBER-CALL caller={{system__caller_id}} called={{system__calle
 class Session:
     handle: str
     conversation_id: str | None = None
-    reason: str = "inbound"      # inbound | console | no_reply | mobility | pickup_changed
+    reason: str = "inbound"      # inbound | console | no_reply | mobility | pickup_changed | undelivered
     started_t_s: float = 0.0
     reports_at: int = 0          # reports before the call: the ones after it are what the call changed
     outbox: list[str] = field(default_factory=list)
@@ -212,8 +216,8 @@ class Voice:
         if sim >= ECHO_EXACT or (sim >= ECHO_SIMILAR and not _answers(text)):
             log.info("call %s: ignored our own echo %r", handle, text[:60])
             return None  # say nothing
-        intro = (WHO_WE_ARE if SCREENING.search(text) and s.screened < 2 else
-                 self.hello(handle, s.reason) if s.turns == 1 and s.reason != "inbound" and GREETING.match(text) else None)
+        intro = (WHO_WE_ARE if SCREENING.search(text) and s.screened < 2 else f"{OPENER}." if s.turns == 1
+                 and s.reason != "inbound" and (GREETING.match(text) or AGAIN.match(text)) else None)
         if intro:  # who we are, then the one thing we need from them
             s.screened += 1
             if not s.outbox:
@@ -226,6 +230,8 @@ class Voice:
             s.promised = True
         elif text:
             await self.messenger.phone_inbound(handle, text)
+            if PANIC.search(text):
+                s.outbox.insert(0, CALM)
         elif not s.outbox:  # the call started with no first words from them: say where things stand
             await self.say_situation(handle)
         out, s.outbox = s.outbox, []
@@ -335,6 +341,29 @@ class Voice:
             except (RuntimeError, ValueError, httpx.HTTPError) as e:
                 log.warning("proactive call to %s (%s) failed: %s", handle, reason, e)
         return placed
+
+    async def undelivered(self, handle: str, text: str) -> dict | None:
+        """D90: a text Photon refused after its retries is said on a call instead (Messenger tells us). Same rules
+        as D80: a resident's real number, no call already on, VOICE_MAX_CONCURRENT, COOLDOWN_S per (phone, reason)."""
+        if not self.configured() or not handle.startswith("+") or self.live(handle) is not None:
+            return None
+        phone = self.store.phone(handle=handle)
+        if phone is None or phone["role"] != "resident":
+            return None
+        now = self._t_s()
+        last = self.store.kv_get(f"call:{handle}:undelivered")
+        if last is not None and now - float(last) < COOLDOWN_S:
+            return None
+        if sum(1 for h in list(self.sessions) if self.live(h)) >= self.settings.voice_max_concurrent:
+            return None
+        self.store.kv_set(f"call:{handle}:undelivered", str(now))
+        self.open(handle, reason="undelivered").outbox.append(text)  # the opening says this text, nothing else
+        try:
+            return await self.call(handle, "undelivered")
+        except (RuntimeError, ValueError, httpx.HTTPError) as e:
+            self.end(handle, reason="dial failed")
+            log.warning("call-back to %s for an undelivered text failed: %s", handle, e)
+            return None
 
     def _due(self, phone: dict, now: float) -> tuple[float, str, str] | None:
         """(deadline, handle, reason) when this resident should get a call now, else None."""

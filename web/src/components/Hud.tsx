@@ -1,16 +1,18 @@
-/** What floats over the stage: the score card, toasts, the join card, and the sources drawer. */
+/** What floats over the stage: the score card, the latest change, toasts, the join card, and the sources drawer. */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState, type FormEvent } from "react";
 import qrcode from "qrcode-generator";
 import { scenario } from "../fixtures";
-import { formatNumber, maskHandle, replanSeconds, statusLabel } from "../format";
-import { peopleCount } from "../model";
+import { postJson } from "../live";
+import { formatNumber, maskHandle, planCause, planDiff, planTiming, shortName, statusLabel } from "../format";
+import { facilityById, peopleCount, resourceById } from "../model";
 import type { Calls, Phone, PlanMetrics, PlanSnapshot, StateSnapshot } from "../types";
 
 const WAITING = new Set(["needs", "unknown", "assigned", "confirmed"]);
+const FACTS = new Set(["need", "closure_report", "facility_status"]);
 
 /** People still waiting for help at this moment. */
-export function waitingPeople(state: StateSnapshot): number {
+function waitingPeople(state: StateSnapshot): number {
   return state.households.filter((household) => WAITING.has(household.status)).reduce((sum, household) => sum + peopleCount(household, 1), 0);
 }
 
@@ -39,38 +41,70 @@ export function ScoreCard(props: {
   plan: PlanSnapshot | null;
   projected?: PlanMetrics;
   baseline?: PlanMetrics;
-  soFar: PlanMetrics;
-  waiting: number;
-  waitingBaseline: number | null;
+  state: StateSnapshot;
+  onSources: () => void;
 }) {
-  const { projected, baseline, soFar } = props;
-  const seconds = props.plan ? replanSeconds(props.plan) : null;
+  const { plan, projected, baseline, state } = props;
   const minutes = (s?: number) => (s == null ? undefined : Math.round(s / 60));
+  // the plan ranks people, then the hospital, then sewage: once it trades the overflow away it says so in
+  // `unresolved`, and the tile keeps what EMBER kept out of the river before that call (read only while every
+  // fact is planned for, so a baseline that already saw the next report is never compared with the old plan)
+  const cost = plan?.unresolved.find((item) => "facility_id" in item.target);
+  const settled = !cost && !state.reports.some((report) => FACTS.has(report.kind) && !report.resolved);
+  const kept = useRef<number>();
+  if (settled && projected?.overflow_m3 != null && baseline?.overflow_m3 != null) kept.current = baseline.overflow_m3 - projected.overflow_m3;
+  const moved = cost ? plan?.assignments.find((item) => item.task === "protect" && item.status !== "cancelled") : undefined;
+  const tradeOff = moved && "facility_id" in moved.target
+    ? `${shortName(resourceById(state, moved.resource_id)?.name ?? moved.resource_id)} moved to ${shortName(facilityById(state, moved.target.facility_id)?.name ?? moved.target.facility_id)}: people first; ${formatNumber(projected?.overflow_m3)} m³ accepted, stated`
+    : undefined;
   return (
     <section className="scorecard" aria-label="Outcome of the current plan">
-      <header key={props.plan?.version}>
-        <strong>plan v{props.plan?.version ?? "—"}</strong>
-        {seconds != null ? <span>replanned in {seconds.toFixed(1)} s</span> : null}
+      <header key={plan?.version}>
+        <strong>plan v{plan?.version ?? "—"}</strong>
+        {plan ? <span>{planTiming(plan)}</span> : null}
       </header>
       <Score
         label="Reached before water"
         value={projected?.people_reached_before_deadline}
         baseline={baseline?.people_reached_before_deadline}
         better="higher"
-        sub={soFar.people_reached_before_deadline != null ? `${soFar.people_reached_before_deadline} so far` : undefined}
+        sub={state.metrics.people_reached_before_deadline != null ? `${state.metrics.people_reached_before_deadline} so far` : undefined}
       />
-      <Score label="Still waiting" value={props.waiting} baseline={props.waitingBaseline ?? undefined} better="lower" sub="people, right now" />
+      <Score label="People still at home now" value={waitingPeople(state)} better="lower" />
       <Score label="Hospital outage" value={minutes(projected?.hospital_outage_s)} baseline={minutes(baseline?.hospital_outage_s)} unit="min" better="lower" />
-      <Score
-        label="Sewage overflow"
-        value={projected?.overflow_m3}
-        baseline={baseline?.overflow_m3}
-        unit="m³"
-        better="lower"
-        sub={soFar.overflow_m3 != null ? `${formatNumber(soFar.overflow_m3)} m³ so far` : undefined}
-      />
+      {kept.current != null ? (
+        <Score
+          label="Kept out of the Charles"
+          value={kept.current}
+          unit="m³"
+          better="higher"
+          sub={tradeOff ?? `sewage overflow ${formatNumber(projected?.overflow_m3)} m³ · baseline ${formatNumber(baseline?.overflow_m3)} m³`}
+        />
+      ) : (
+        <Score label="Sewage overflow" value={projected?.overflow_m3} baseline={baseline?.overflow_m3} unit="m³" better="lower" sub={tradeOff} />
+      )}
       <p>Projected to the end of the flood · baseline: incident by incident</p>
+      <button className="chip" onClick={props.onSources}>Real streets · synthetic households, flood timing &amp; fleet</button>
     </section>
+  );
+}
+
+/** The newest change, pinned over the map: what came in, what the plan did, and how fast. */
+export function Latest(props: { plan?: PlanSnapshot; state: StateSnapshot }) {
+  const { plan, state } = props;
+  if (!plan) return null;
+  return (
+    <p className="latest" key={plan.version}>
+      {plan.version > 1 ? (
+        <>
+          <b>{planCause(plan, state)}</b> → {planDiff(plan, state) || "no assignment changed"} <span>· v{plan.version} {planTiming(plan)}</span>
+        </>
+      ) : (
+        <>
+          <b>Plan v1 from the forecast</b> <span>· every text from here on becomes a new plan</span>
+        </>
+      )}
+    </p>
   );
 }
 
@@ -118,27 +152,56 @@ function QrCode(props: { text: string }) {
   );
 }
 
-export function JoinCard(props: { number: string | null; phones: Phone[]; calls: Calls; state: StateSnapshot; max: number }) {
+type Joined = { player: number; assigned_number: string };
+
+/** Multiplayer (D89): a shared iMessage line only hears phones registered with it, so a player enters their number
+ * here first (POST /join), then texts JOIN EMBER to the line it returns; that first text places them. */
+export function JoinCard(props: { apiBase: string | null; phones: Phone[]; calls: Calls; state: StateSnapshot; max: number }) {
   const [open, setOpen] = useState(true);
+  const [handle, setHandle] = useState("");
+  const [joined, setJoined] = useState<Joined | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const players = props.phones.filter((phone) => phone.player != null).sort((a, b) => a.player! - b.player!);
   const onCall = new Set(props.calls.live.map((call) => call.handle));
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!props.apiBase || !handle.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setJoined((await postJson(`${props.apiBase}/join`, { handle: handle.trim() }, 15000)) as Joined);
+    } catch (err) {
+      const text = err instanceof Error ? err.message : "Join failed";
+      setError(text.startsWith("409") && text.includes("full") ? "The drill is full." : text.startsWith("422") ? "Enter a mobile number, e.g. +1 617 555 0123." : text);
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <section className={open ? "join open" : "join"}>
       <button className="join-head" onClick={() => setOpen(!open)} aria-expanded={open}>
-        <strong>Scan to join the flood drill</strong>
+        <strong>Join the flood drill</strong>
         <span>{players.length}/{props.max}</span>
       </button>
       {open ? (
         <div className="join-body">
-          {props.number ? (
+          {joined ? (
             <div className="join-qr">
-              <QrCode text={`sms:${props.number}&body=JOIN%20EMBER`} />
+              <QrCode text={`sms:${joined.assigned_number}?&body=JOIN%20EMBER`} />
               <p>
-                Or text <b>JOIN EMBER</b> to {props.number}. You get a real home in the flood zone, and the plan has to save you.
+                Player {joined.player}: text <b>JOIN EMBER</b> to {joined.assigned_number}. You get a real home in the flood zone, and the plan has to save you.
+                <button className="join-again" onClick={() => { setJoined(null); setHandle(""); }}>Another phone</button>
               </p>
             </div>
+          ) : props.apiBase ? (
+            <form className="join-form" onSubmit={submit}>
+              <input type="tel" inputMode="tel" autoComplete="tel" placeholder="Your mobile, e.g. +1 617 555 0123" value={handle} onChange={(event) => setHandle(event.target.value)} aria-label="Your mobile number" />
+              <button type="submit" disabled={busy || !handle.trim()}>{busy ? "…" : "Join"}</button>
+              {error ? <p className="join-error">{error}</p> : null}
+            </form>
           ) : (
-            <p className="muted">Text JOIN EMBER to the drill line to become a household in this flood.</p>
+            <p className="muted">Switch to Live to join the drill from your phone.</p>
           )}
           {players.length > 0 ? (
             <ol className="roster">
@@ -148,7 +211,7 @@ export function JoinCard(props: { number: string | null; phones: Phone[]; calls:
                   <li key={phone.handle}>
                     <b>Player {phone.player}</b>
                     <span>{maskHandle(phone.handle)}</span>
-                    {household ? <span className={`pill ${household.status}`}>{statusLabel(household.status)}</span> : <span className="muted">placing…</span>}
+                    {household ? <span className={`pill ${household.status}`}>{statusLabel(household.status)}</span> : <span className="muted">waiting for text</span>}
                     {onCall.has(phone.handle) ? <span className="pill call">on call</span> : null}
                   </li>
                 );
@@ -176,7 +239,7 @@ export function Sources(props: { synthetic: string[]; onClose: () => void }) {
           <li>Cottage Farm CSO (MWR201) released 21.33 million gallons ≈ 80,700 m³ of combined sewage into the Charles on 2024-01-10: MWRA, 2024 Annual CSO Discharge Report, Table 2-2.</li>
           <li>Allston and Brighton are among the Charles River neighbourhoods exposed if the river dam is overtopped: Climate Ready Boston (2016).</li>
         </ul>
-        <h3>Synthetic (labelled, rule 10)</h3>
+        <h3>Synthetic (labelled)</h3>
         <ul>
           {props.synthetic.map((line) => (
             <li key={line}>{line}</li>

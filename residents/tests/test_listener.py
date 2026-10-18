@@ -79,7 +79,6 @@ async def test_poll_once_hands_texts_over_and_advances(store):
 
 async def test_polling_only_while_socket_down(store):
     lst = PhotonListener(FakePhoton().client(), store, _no_sleep, poll_after_down_s=0.0)
-    loop = asyncio.get_running_loop()
     lst.subscribed, lst.down_since = True, None
     assert not lst._polling_active()
     lst._mark_down()

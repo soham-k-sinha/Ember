@@ -9,8 +9,8 @@ A phone registered with `locate` has no household. Its texts come here (Messenge
    if they already said, makes an offer. From then on the normal path (Intake) handles their texts.
 Nothing is guessed: no place, or a place outside the town → we ask again.
 
-A drill player (texted the join phrase, D78) isn't asked: we choose where they live, a free town building
-the forecast flood reaches, and a burst of joins shares one replan.
+A drill player (registered with POST /join, then texted the shared line, D89) isn't asked: we choose where
+they live, a free town building the forecast flood reaches, and a burst of joins shares one replan.
 """
 
 from __future__ import annotations
@@ -58,6 +58,7 @@ class Locator:
         self._lock = asyncio.Lock()  # one placement at a time: two phones must not take the same building
         self.replan_task: asyncio.Task | None = None  # the replan waiting for a burst of joins to end
         self._last_join = 0.0
+        self._joined: list[int] = []  # players placed since the last replan, for its feed line
 
     @property
     def places(self):
@@ -81,8 +82,8 @@ class Locator:
 
     async def on_plan(self, view: dict, raw: dict | None = None) -> None:
         if view.get("version") == 1:  # a fresh run (startup reseed / reset): players get a new building, others start over
-            for p in self.store.phones():
-                if player(self.store, p["handle"]):
+            for p in self.store.phones():  # players who have texted the line; the others are placed when they do
+                if player(self.store, p["handle"]) and self.store.kv_get(f"joined:{p['handle']}"):
                     await self.on_lobby(p, "")
             await self.welcome()
 
@@ -178,8 +179,9 @@ class Locator:
         lon, lat = next((x, y) for h, x, y, _ in self.places.households if h == hid)
         await self.place(phone, Place(lon, lat, self.places.corner_label(node), "player"), player(self.store, phone["handle"]))
 
-    def _replan_soon(self) -> None:
+    def _replan_soon(self, n: int) -> None:
         self._last_join = time.monotonic()
+        self._joined.append(n)
         if self.replan_task is None:
             self.replan_task = asyncio.create_task(self._replan_after_joins())
 
@@ -187,8 +189,9 @@ class Locator:
         while (wait := self._last_join + JOIN_DEBOUNCE_S - time.monotonic()) > 0:
             await asyncio.sleep(wait)
         self.replan_task = None  # a join from here on waits for the next replan
+        joined, self._joined = self._joined, []
         try:
-            await self.planner.replan(trigger="drill players joined")
+            await self.planner.replan(trigger=f"{'Players' if len(joined) > 1 else 'Player'} {', '.join(map(str, joined))} joined")
         except Exception:  # noqa: BLE001 - placed; the next replan picks them up
             log.exception("replan after players joined failed")
 
@@ -236,10 +239,10 @@ class Locator:
         elif needs:  # e.g. "my mom uses a wheelchair" but no head count: the plan's question completes it
             self.store.kv_set(f"pending:{thread_key(thread)}", json.dumps({"kind": "need", **needs}))
         if as_player:
-            self._replan_soon()
+            self._replan_soon(as_player)
             return thread
         try:
-            await self.planner.replan(trigger=f"household #{hid} texted their location ({where.label})")
+            await self.planner.replan(trigger=f"New resident texted in ({where.label})")
         except Exception:  # noqa: BLE001 - placed; the next text or replan picks it up
             log.exception("replan after placing %s failed", handle)
         return thread

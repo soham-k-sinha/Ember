@@ -18,16 +18,15 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
+from .config import Settings
 from .extract import anthropic_client
 
 log = logging.getLogger("residents.reply")
 
-MODEL = os.environ.get("REPLY_MODEL", "claude-haiku-5-5")
 TIMEOUT_S = 8.0
 
 SYSTEM = """You are EMBER, the voice of a flood-evacuation drill coordinator in Allston/Cambridge, talking with one resident (or a facility operator) by text message or on a phone call.
@@ -46,12 +45,12 @@ How to write it:
 Writer = Callable[[str, str], Awaitable[str | None]]  # (system, user) → reply text or None
 
 
-def make_writer(api_key: str, model: str = MODEL, timeout_s: float = TIMEOUT_S) -> Writer:
-    client, prefix = anthropic_client(api_key, timeout=timeout_s, max_retries=1)
+def make_writer(settings: Settings, timeout_s: float = TIMEOUT_S) -> Writer:
+    client, prefix = anthropic_client(settings, timeout=timeout_s, max_retries=1)
 
     async def write(system: str, user: str) -> str | None:
         resp = await client.messages.create(
-            model=prefix + model, max_tokens=600, output_config={"effort": "low"},
+            model=prefix + settings.reply_model, max_tokens=600, output_config={"effort": "low"},
             system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": user}],
         )

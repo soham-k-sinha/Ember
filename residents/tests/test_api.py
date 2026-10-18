@@ -34,16 +34,14 @@ def test_health(client, fixture_state):
     h = client.get("/health").json()
     assert h == {"ok": True, "scenario_id": fixture_state["scenario_id"], "plan_version": fixture_state["plan_version"],
                  "t_s": fixture_state["t_s"], "mode": "static", "extraction": "off", "photon": "disabled", "photon_listener": None,
-                 "join_number": None, "max_players": 30}
+                 "max_players": 25, "players": 0}
 
 
-def test_cors_allows_vite_dev_server(client):
-    r = client.get("/state", headers={"Origin": "http://localhost:5173"})
-    assert r.headers["access-control-allow-origin"] == "http://localhost:5173"
-    r = client.get("/state", headers={"Origin": "http://localhost:43123"})  # Arnav's web dev port
-    assert r.headers["access-control-allow-origin"] == "http://localhost:43123"
-    r = client.get("/state", headers={"Origin": "http://evil.example"})
-    assert "access-control-allow-origin" not in r.headers
+def test_cors_allows_the_web_on_any_local_or_lan_port(client):
+    for origin in ("http://localhost:5173", "http://127.0.0.1:43126", "http://192.168.1.20:43123", "http://10.0.0.5:5173"):
+        assert client.get("/state", headers={"Origin": origin}).headers["access-control-allow-origin"] == origin
+    for origin in ("http://evil.example", "http://localhost.evil.example", "http://192.168.1.20.evil.example"):
+        assert "access-control-allow-origin" not in client.get("/state", headers={"Origin": origin}).headers
 
 
 def test_ws_sends_state_on_connect(client, fixture_state):

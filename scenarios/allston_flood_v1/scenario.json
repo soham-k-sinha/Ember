@@ -542,7 +542,7 @@
   {
    "id": "truck-1",
    "kind": "truck",
-   "name": "Generator truck",
+   "name": "Utility truck",
    "at_facility": "ems14",
    "capacity_people": 2,
    "fuel_l": 150,

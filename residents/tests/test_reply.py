@@ -11,10 +11,10 @@ from fastapi.testclient import TestClient
 
 from residents.app import create_app
 from residents.reply import check
-from tests.test_drill import PUTNAM, R1, SCENARIO, SCRIPT, Tap, register, solo_bridge, text, thread_of  # noqa: F401
+from tests.test_drill import PUTNAM, R1, SCENARIO, SCRIPT, Tap, register, text, thread_of
 from tests.test_extract import FakeLLM, ex, fact
 
-NAMES = ["Van 1", "Van 2", "Accessible Van 3", "Generator truck", "David Rubenstein Treehouse (drill shelter)"]
+NAMES = ["Van 1", "Van 2", "Accessible Van 3", "Utility truck", "David Rubenstein Treehouse (drill shelter)"]
 OFFER = ("[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 min and take "
          "you to David Rubenstein Treehouse (drill shelter). Reply YES to confirm, or tell us what changed. (plan v3)")
 

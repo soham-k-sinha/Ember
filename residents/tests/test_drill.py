@@ -12,14 +12,13 @@ from fastapi.testclient import TestClient
 from ember_engine.state import validate_state
 from residents.app import create_app
 from residents.drill import Drill, SetupError, main as drill_main
-from residents.engine_bridge import EngineBridge
 from residents.extract import to_outcome
 from residents.guide import STEP_DONE
 from residents.locate import JOIN_LEAD_S
-from residents.messaging import FULL
+from residents.messaging import DEV_LINE
 from residents.photon import parse_inbound
 from residents.places import Place, parse_coords
-from tests.fake_photon import FakePhoton, received
+from tests.fake_photon import LINE, FakePhoton, received
 from tests.test_engine import SCENARIO, bridge  # noqa: F401
 from tests.test_extract import FakeLLM, ex, fact
 from tests.test_messaging import deliver
@@ -49,21 +48,9 @@ SCRIPT = {
 }
 
 
-@pytest.fixture(scope="session")
-def solo_bridge():
-    """Only the drill's people need rescue (no synthetic households): offers come fast and are predictable."""
-    return EngineBridge(SCENARIO, moves=10, solo=True)
-
-
 def make(settings, b, auto=True, **kw):
     s = replace(settings, scenario=SCENARIO, extract_enabled=True, auto_clock=auto, **kw)
     return TestClient(create_app(s, bridge=b, llm=FakeLLM(SCRIPT)))
-
-
-@pytest.fixture
-def drill(settings, solo_bridge):
-    with make(settings, solo_bridge) as c:
-        yield c
 
 
 class Tap:
@@ -372,6 +359,20 @@ def test_operator_gets_generator_steps(drill):
     assert tap.outs(OP)[-1].startswith("Mount Auburn Hospital is on Generator")
 
 
+def test_a_moved_pickup_says_why(drill):
+    tap = Tap(drill)
+    register(drill)
+    thread = place(drill, tap, R1, CALLENDER)
+    text(drill, R1, "just me")
+    text(drill, R1, "yes")
+    p = drill.app.state.planner
+    _, plan = drill.portal.call(p.close_road, p.bridge.resolve_road("Callender St", None, thread["household_id"]), "resident")
+    assert plan["trigger"] == "Resident (Callender Street): road blocked"
+    a = next(x for x in drill.app.state.store.current_plan()["assignments"] if x["target"] == thread and x["status"] == "confirmed")
+    update = drill.app.state.outbound.compose(a, thread, p.now(), plan["version"])
+    assert update.startswith("Update: Callender Street was reported blocked, so Van "), update
+
+
 # ---------- runs: reset and restart ----------
 def test_reset_starts_from_scratch(drill, solo_bridge):
     tap = Tap(drill)
@@ -660,7 +661,7 @@ def test_garbled_need_plans_what_is_clear_and_asks_about_the_rest(drill):
     assert outs[-1] == "Did you mean you need a wheelchair-accessible vehicle?"
 
 
-# ---------- multiplayer: strangers text JOIN EMBER (D78) ----------
+# ---------- multiplayer: register, then text the shared iMessage line (D89) ----------
 @pytest.fixture
 def lobby(settings, solo_bridge, monkeypatch):
     async def no_wait(*args):
@@ -678,8 +679,19 @@ def settle(c):
         c.portal.call(lambda: task)
 
 
+def register_players(c, *handles):
+    out = []
+    for h in handles:
+        r = c.post("/join", json={"handle": h})
+        assert r.status_code == 200, r.text
+        out.append(r.json())
+    return out
+
+
 def join(c, *handles):
-    """Each handle texts "Join Ember" at the same moment."""
+    """Each handle registers (POST /join), then all text "Join Ember" to the line at the same moment."""
+    register_players(c, *handles)
+
     async def burst():
         await asyncio.gather(*(c.app.state.messenger.handle_inbound(parse_inbound(received(f"j-{h}", h, "Join Ember please")))
                                for h in handles))
@@ -691,10 +703,26 @@ def players(c):
     return {p["handle"]: p for p in c.get("/phones").json() if p["player"] is not None}
 
 
-def test_three_phones_join_at_once(lobby, solo_bridge):
+def assignments(fp):
+    return [r for r in fp.requests if r.method == "POST" and r.url.path.endswith("/platforms/imessage/assignments")]
+
+
+def test_register_then_text_places_three_players(lobby, solo_bridge):
     c, fp = lobby
     phones = ["+16175550201", "+16175550202", "+16175550203"]
-    join(c, *phones)
+    regs = register_players(c, *phones)
+    assert [(r["player"], r["assigned_number"], r["household_id"], r["dev"]) for r in regs] == \
+        [(1, LINE, None, False), (2, LINE, None, False), (3, LINE, None, False)]
+    assert len(assignments(fp)) == 3 and fp.sends() == []          # a shared line can't text first
+    ps = players(c)
+    assert all(p["household_id"] is None and "JOIN EMBER" in p["action_needed"] for p in ps.values())
+    assert c.app.state.store.plan_versions() == [1]
+
+    async def burst():
+        await asyncio.gather(*(c.app.state.messenger.handle_inbound(parse_inbound(received(f"j-{h}", h, "JOIN EMBER")))
+                               for h in phones))
+    c.portal.call(burst)
+    settle(c)
     ps = players(c)
     assert sorted(p["player"] for p in ps.values()) == [1, 2, 3]
     hids = [ps[h]["household_id"] for h in phones]
@@ -704,41 +732,97 @@ def test_three_phones_join_at_once(lobby, solo_bridge):
     labels = {h["household_id"]: h["label"] for h in c.get("/state").json()["households"]}
     assert sorted(labels[h] for h in hids) == ["Player 1", "Player 2", "Player 3"]
     assert c.app.state.store.plan_versions() == [1, 2]                      # one replan for the burst
-    for h in phones:
+    assert c.app.state.store.plan(2)["trigger"] == "Players 1, 2, 3 joined"
+    for h in phones:  # every reply goes back over iMessage, on the space their text came from
         texts = [x["content"]["text"] for x in fp.sends() if x["spaceId"] == f"pho_spc_{h[-4:]}"]
         assert texts[0].startswith(f"[EMBER drill] Welcome to the EMBER flood drill. You're Player {ps[h]['player']}:")
         assert "How many people are with you" in texts[-1]                  # the plan asks its own question
 
 
-def test_the_31st_player_is_told_the_drill_is_full(lobby):
+def test_join_is_idempotent_per_phone(lobby):
     c, fp = lobby
-    phones = [f"+161755503{i:02d}" for i in range(31)]
-    join(c, *phones[:30])
-    join(c, phones[30])
-    assert len(players(c)) == 30 and phones[30] not in {p["handle"] for p in c.get("/phones").json()}
-    last = fp.sends()[-1]
-    assert last["spaceId"] == "pho_spc_0330" and last["content"]["text"] == f"[EMBER drill] {FULL}"
-    # a stranger's text without the join phrase is still ignored
-    assert c.portal.call(c.app.state.messenger.handle_inbound, parse_inbound(received("x-1", "+16175550999", "hi"))) is None
+    [first] = register_players(c, "+16175550201")
+    [again] = register_players(c, "(617) 555-0201")
+    assert again == first and len(assignments(fp)) == 1
+    join(c, "+16175550201")                                                 # texted: placed; /join still answers the same
+    [after] = register_players(c, "+16175550201")
+    assert after["player"] == 1 and after["household_id"] is not None and after["texted"]
+    assert len(players(c)) == 1 and len(assignments(fp)) == 1
+
+
+def test_join_over_the_cap_is_refused(lobby):
+    c, fp = lobby
+    c.app.state.messenger.max_players = 2
+    register_players(c, "+16175550201", "+16175550202")
+    r = c.post("/join", json={"handle": "+16175550203"})
+    assert r.status_code == 409 and r.json()["detail"] == "drill is full"
+    assert c.app.state.store.phone(handle="+16175550203") is None and len(assignments(fp)) == 2
+    assert c.post("/join", json={"handle": "+16175550201"}).status_code == 200  # a registered player still gets an answer
+    assert c.post("/join", json={"handle": "not a phone"}).status_code == 422
+    # a stranger who texts the line without registering is ignored (one join path)
+    assert c.portal.call(c.app.state.messenger.handle_inbound, parse_inbound(received("x-1", "+16175550999", "JOIN EMBER"))) is None
     assert c.app.state.store.phone(handle="+16175550999") is None
+    assert c.get("/health").json()["players"] == 2
 
 
-def test_reset_places_players_again(lobby):
+def test_a_team_phone_cannot_join(lobby):
+    c, _ = lobby
+    register(c, R1)
+    assert c.post("/join", json={"handle": R1}).status_code == 409
+
+
+def test_reset_places_players_who_texted(lobby):
     c, fp = lobby
     join(c, "+16175550201", "+16175550202")
+    register_players(c, "+16175550203")                                     # registered, never texted
     before = {h: p["household_id"] for h, p in players(c).items()}
     c.post("/dev/reset")
     settle(c)
     assert {h: p["household_id"] for h, p in players(c).items()} == before  # placed again (same choice on a fresh run)
+    assert before["+16175550203"] is None
     assert c.app.state.store.plan_versions() == [1, 2]
     texts = [x["content"]["text"] for x in fp.sends()]
     assert not any("Where are you right now?" in t for t in texts)          # never asked where they are
     assert sum("You're Player 1:" in t for t in texts) == 2
 
 
-def test_the_console_joins_an_unknown_phone(lobby):
-    c, _ = lobby
-    r = c.post("/dev/inbound", json={"role": "resident", "handle": "+16175550201", "text": "JOIN EMBER"})
-    settle(c)
-    assert r.json()["message"] is None and players(c)["+16175550201"]["household_id"] is not None
-    assert c.post("/dev/inbound", json={"role": "resident", "handle": "+16175550202", "text": "hi"}).status_code == 422
+def test_dev_join_without_photon(settings, solo_bridge):
+    with make(settings, solo_bridge, auto=False) as c:
+        r = c.post("/join", json={"handle": "+16175550201"})
+        assert r.status_code == 200 and r.json()["assigned_number"] == DEV_LINE and r.json()["dev"]
+        assert c.post("/dev/inbound", json={"role": "resident", "handle": "+16175550202", "text": "JOIN EMBER"}).status_code == 422
+        r = c.post("/dev/inbound", json={"role": "resident", "handle": "+16175550201", "text": "JOIN EMBER"})
+        settle(c)
+        assert r.json()["message"] is None and players(c)["+16175550201"]["household_id"] is not None
+        assert c.app.state.store.plan(2)["trigger"] == "Player 1 joined"
+
+
+def test_an_undelivered_text_becomes_a_call(lobby):
+    """D90: Photon refuses a text after its retries → the voice manager calls them with that instruction."""
+    import httpx
+    c, fp = lobby
+    v = c.app.state.voice
+    v.settings = replace(v.settings, photon_voice_number="+16175550199", elevenlabs_api_key="k",
+                         elevenlabs_agent_id="agent_1", elevenlabs_phone_number_id="phnum_1", voice_max_concurrent=1)
+    seen = []
+
+    def eleven(req):
+        seen.append(json.loads(req.content or b"null"))
+        return httpx.Response(200, json={"success": True, "conversation_id": "conv_9", "sip_call_id": "s"})
+    v.http = httpx.AsyncClient(transport=httpx.MockTransport(eleven))
+    h = "+16175550201"
+    join(c, h)
+    assert seen == []                                                       # delivered texts never call
+    hid = players(c)[h]["household_id"]
+    fp.reject_sends = True
+    r = c.post("/ask", json={"role": "resident", "household_id": hid, "question": "Is anyone with you on oxygen?"})
+    assert r.json()["delivery"] == "failed"
+    [body] = seen
+    assert body["to_number"] == h
+    first = body["conversation_initiation_client_data"]["conversation_config_override"]["agent"]["first_message"]
+    assert first == "Hi, it's EMBER from the flood drill, calling because our text to you didn't go through. " \
+                    "Is anyone with you on oxygen?", first
+    assert c.get("/calls").json()["live"][0]["reason"] == "undelivered"
+    c.portal.call(v.hang_up, h)                                             # nobody answered
+    c.post("/ask", json={"role": "resident", "household_id": hid, "question": "Are you still at home?"})
+    assert len(seen) == 1                                                   # one call per (phone, reason) per cooldown

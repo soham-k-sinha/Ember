@@ -483,7 +483,8 @@ class Store:
     def delete_phone(self, handle: str) -> None:
         with self._tx() as db:
             db.execute("DELETE FROM phones WHERE handle = ?", (handle,))
-            db.execute("DELETE FROM kv WHERE key IN (?, ?) OR key LIKE ?", (f"located:{handle}", f"player:{handle}", f"lobby:{handle}%"))
+            db.execute("DELETE FROM kv WHERE key IN (?, ?, ?) OR key LIKE ?",
+                       (f"located:{handle}", f"player:{handle}", f"joined:{handle}", f"lobby:{handle}%"))
 
     def unplace_phone(self, handle: str) -> None:
         """Back to waiting for a location (thread_key NULL, scenario kept so it isn't legacy-bound)."""

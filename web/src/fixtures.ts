@@ -23,5 +23,3 @@ export const fixturePlaybacks: { ember: Playback; baseline: Playback } = {
 };
 
 export const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
-/** The drill line players text "JOIN EMBER" to (the QR card). */
-export const JOIN_NUMBER = import.meta.env.VITE_JOIN_NUMBER ?? null;

@@ -9,6 +9,9 @@ from fastapi.testclient import TestClient
 
 from residents.app import create_app
 from residents.config import CONTRACTS, REPO_ROOT, Settings
+from residents.engine_bridge import EngineBridge
+from tests.test_drill import make
+from tests.test_engine import SCENARIO
 
 FIXTURE = CONTRACTS / "fixtures" / "state.fixture.json"
 
@@ -40,7 +43,20 @@ def settings(tmp_path: Path) -> Settings:
     return Settings(db_path=tmp_path / "ember.db", seed_state=FIXTURE, reset_on_start=False,
                     dev_endpoints=True, photon_enabled=False, scenario=None,
                     extract_enabled=False, anthropic_api_key="", retry_every_s=3600.0, geocode_enabled=False,
-                    join_number="", elevenlabs_api_key="")  # never dial: tests that call inject a fake ElevenLabs
+                    elevenlabs_api_key="")  # never dial: tests that call inject a fake ElevenLabs
+
+
+@pytest.fixture(scope="session")
+def solo_bridge():
+    """Only the drill's people need rescue (no synthetic households): offers come fast and are predictable."""
+    return EngineBridge(SCENARIO, moves=10, solo=True)
+
+
+@pytest.fixture
+def drill(settings, solo_bridge):
+    """The text-driven drill (test_drill.make): real allocator and simulator, a scripted model, the auto clock."""
+    with make(settings, solo_bridge) as c:
+        yield c
 
 
 @pytest.fixture
