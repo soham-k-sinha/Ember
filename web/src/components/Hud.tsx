@@ -1,11 +1,11 @@
 /** What floats over the stage: the score card, the latest change, toasts, the join card, and the sources drawer. */
 
-import { useCallback, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import qrcode from "qrcode-generator";
 import { scenario } from "../fixtures";
 import { postJson } from "../live";
 import { formatNumber, keptBeforeTradeoff, maskHandle, planDiff, planTiming, reporterJob, shortName, statusLabel, tradedFacility } from "../format";
-import { facilityById, peopleCount, resourceById } from "../model";
+import { facilityById, peopleCount, resourceById, streetAt } from "../model";
 import type { Calls, Phone, PlanMetrics, PlanSnapshot, StateSnapshot } from "../types";
 
 const WAITING = new Set(["needs", "unknown", "assigned", "confirmed"]);
@@ -152,7 +152,7 @@ function QrCode(props: { text: string }) {
   );
 }
 
-type Joined = { player: number; assigned_number: string };
+type Joined = { handle: string; player: number; assigned_number: string };
 
 /** Multiplayer (D89): a shared iMessage line only hears phones registered with it, so a player enters their number
  * here first (POST /join), then texts JOIN EMBER to the line it returns; that first text places them. */
@@ -164,6 +164,19 @@ export function JoinCard(props: { apiBase: string | null; phones: Phone[]; calls
   const [busy, setBusy] = useState(false);
   const players = props.phones.filter((phone) => phone.player != null).sort((a, b) => a.player! - b.player!);
   const onCall = new Set(props.calls.live.map((call) => call.handle));
+  const reset = () => {
+    setJoined(null);
+    setHandle("");
+  };
+  // their first text placed them: say where they live for 5 s, then the card is ready for the next phone
+  const placed = joined ? props.phones.find((phone) => phone.handle === joined.handle)?.household_id ?? null : null;
+  const home = props.state.households.find((item) => item.household_id === placed);
+  const street = home ? streetAt(home.node) : undefined;
+  useEffect(() => {
+    if (placed == null) return;
+    const timer = window.setTimeout(reset, 5000);
+    return () => window.clearTimeout(timer);
+  }, [placed]);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!props.apiBase || !handle.trim()) return;
@@ -186,18 +199,23 @@ export function JoinCard(props: { apiBase: string | null; phones: Phone[]; calls
       </button>
       {open ? (
         <div className="join-body">
-          {joined ? (
+          {joined && placed != null ? (
+            <p className="join-done">
+              Player {joined.player} joined: you're household #{placed}{street ? ` on ${street}` : ""}.
+            </p>
+          ) : joined ? (
             <div className="join-qr">
               <QrCode text={`sms:${joined.assigned_number}?&body=JOIN%20EMBER`} />
               <p>
-                Player {joined.player}: text <b>JOIN EMBER</b> to {joined.assigned_number}. You get a real home in the flood zone, and the plan has to save you.
-                <button className="join-again" onClick={() => { setJoined(null); setHandle(""); }}>Another phone</button>
+                Player {joined.player}: from your iPhone (iMessage), text <b>JOIN EMBER</b> to {joined.assigned_number}. You get a real home in the flood zone, and the plan has to save you.
+                <button className="join-again" onClick={reset}>Another phone</button>
               </p>
             </div>
           ) : props.apiBase ? (
             <form className="join-form" onSubmit={submit}>
               <input type="tel" inputMode="tel" autoComplete="tel" placeholder="Your mobile, e.g. +1 617 555 0123" value={handle} onChange={(event) => setHandle(event.target.value)} aria-label="Your mobile number" />
               <button type="submit" disabled={busy || !handle.trim()}>{busy ? "…" : "Join"}</button>
+              <p className="join-note">iPhone (iMessage) only</p>
               {error ? <p className="join-error">{error}</p> : null}
             </form>
           ) : (
