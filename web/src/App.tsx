@@ -47,7 +47,7 @@ type Model = {
   scatter: ScatterPoint[];
   scatterBatch: string | null;
   scatterTotal: number | null;
-  /** the last robust optimisation (GET /optimize), kept after later replans drop it from the plan */
+  /** the last robust optimisation (from the plan that carries it, or GET /optimize), kept after later replans drop it from the plan */
   robust: RobustSummary | null;
   plans: PlanSnapshot[];
   judge: JudgeClosure[];
@@ -144,11 +144,13 @@ function reducer(state: Model, action: Action): Model {
         snapshot: action.state,
         previous: action.state.t_s === state.snapshot.t_s ? state.previous : state.snapshot,
         plans: withPlan(state.plans, action.state.plan),
+        robust: robustOf(action.state.plan) ?? state.robust,
       };
     case "plan":
       return {
         ...state,
         plans: withPlan(state.plans, action.plan),
+        robust: robustOf(action.plan) ?? state.robust,
         snapshot: state.snapshot.plan_version === action.plan.version || state.snapshot.plan == null
           ? { ...state.snapshot, plan: action.plan, plan_version: action.plan.version }
           : state.snapshot,
@@ -743,7 +745,7 @@ export function App() {
           nominal={nominal}
           scatter={model.scatter}
           scatterTotal={model.scatterTotal}
-          robust={robustOf(model.snapshot.plan) ?? model.robust}
+          robust={model.robust}
           plans={plans}
           judge={model.judge}
           busy={model.busy}
