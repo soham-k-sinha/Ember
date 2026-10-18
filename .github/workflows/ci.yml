@@ -1,0 +1,35 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  engine:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: engine } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --extra dev
+      - run: uv run pytest -q
+
+  residents:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: residents } }
+    env: { EMBER_LOCAL_POOL: "1", GEOCODE: "0" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - run: uv run pytest -q
+
+  web:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: web } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: web/package-lock.json }
+      - run: npm ci
+      - run: npm run build  # tsc --noEmit, then vite build
