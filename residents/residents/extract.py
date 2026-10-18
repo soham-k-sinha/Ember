@@ -26,7 +26,8 @@ log = logging.getLogger("residents.extract")
 
 CONFIDENCE_MIN = 0.6
 
-Kind = Literal["need", "closure_report", "facility_status", "location", "done", "confirm", "reject", "question", "other"]
+Kind = Literal["need", "closure_report", "facility_status", "location", "done", "confirm", "reject", "question", "urgent",
+               "other"]
 
 
 class Fact(BaseModel):
@@ -73,6 +74,7 @@ Fact kinds:
 - done: they report finishing the step we last asked them to do ("done", "we're at the corner", "on the van", "we've arrived", "it's connected").
 - confirm: they accept the pickup or instruction we last sent ("yes", "ok, we'll be ready"). Only when we sent one and they say yes to it: describing themselves ("we're fine to walk to the van") is not a confirm.
 - reject: ONLY when they refuse the pickup or vehicle itself: they don't want to be picked up, don't want that vehicle, or will get out on their own ("no thanks, we'll drive ourselves", "we don't want the van"). A "no" that comes with a problem or a correction is NOT a reject: extract the problem instead. "No, I'm stuck in my house and can't get out", "no, I can't walk", "no, I broke my leg" = need (mobility true, medical true if injured); "no, it's 4 of us" = need (people 4); "no, I'm at Putnam Ave" = location. When unsure between reject and a correction, it's not a reject.
+- urgent: water is reaching or inside their home, they're trapped, or they ask for help or to hurry ("the water is at our door", "we're flooding inside", "please hurry"). Alongside any other fact in the message; not for a plain yes ("yes, please hurry" is a confirm).
 - question: they ask something; set question_topic (a vague "what's the plan?" / "what do I do?" / "what now?" is plan). For a question about a road or bridge, put its name in road_hint. other: anything else (greetings, thanks, chatter).
 
 Rules:
@@ -150,6 +152,7 @@ class Outcome:
     road: dict | None = None                           # {"road_hint", "cross_street"}: the road a `roads` question names
     follow_up: str | None = None                       # the model's own question next to a need ("Did you mean…?")
     step_done: bool = False                            # they finished the step we last asked for
+    urgent: bool = False                               # "the water is at our door", "trapped", "hurry" (D92)
 
 
 RoadResolver = Callable[[str, str | None, int | None], list[int]]  # (road_hint, cross_street, household_id) → edge ids
@@ -220,6 +223,9 @@ def to_outcome(ex: Extraction, *, role: str, thread: dict, text: str, pending: d
             out.location = {"address": f.address, "cross_street": f.cross_street}
         elif f.kind == "done":
             out.step_done = True
+        elif f.kind == "urgent":
+            out.urgent = True
+
         elif f.kind == "question":
             out.topics.append(f.question_topic or "other")
             if f.question_topic == "roads" and f.road_hint and out.road is None:

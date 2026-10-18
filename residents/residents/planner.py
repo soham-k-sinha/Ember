@@ -189,6 +189,8 @@ class Planner:
             return f"{who} ({', '.join(sorted({self.bridge.edge_name(e) for e in p['edge_ids']}))}): road blocked"
         if r["kind"] == "reject":
             return f"{who}: declined the pickup"
+        if r["kind"] == "urgent":
+            return f"{who}: urgent, asked us to hurry"
         if r["kind"] == "facility_status":
             s = p["set"]
             what = [{"backup": "on backup", "down": "no power", "ok": "power back"}.get(s.get("state")),

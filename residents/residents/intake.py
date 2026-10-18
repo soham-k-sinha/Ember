@@ -38,6 +38,8 @@ _outage = {"logged": 0.0}  # one console line per minute while the LLM is down, 
 PLANNER_DOWN = "Got your message. Our planner hit a problem; a coordinator is looking at it and will text you."
 ESCALATED = "Our plan doesn't cover that, so we've passed your question to a coordinator, who will reply here."
 NO_PLAN = "Got your question. We're still building the plan; we'll text you as soon as we have something for you."
+URGENT = ("We hear you, and we're on it. If water comes inside, go to a higher floor (not a closed attic) and stay there; "
+          "in a real emergency, call 911.")
 
 
 class Intake:
@@ -244,7 +246,16 @@ class Intake:
         answered = any(r["kind"] in ("confirm", "reject") for r in stored)  # ack / latest already texted
         texted = sum(1 for m in self.store.thread_messages(key) if m["direction"] == "out") > outs_before
         version = self.store.meta().get("plan_version")
+        if out.urgent:  # D92: a replan now (a vehicle that can come sooner does; the plan hook texts the new time), then a
+            # calm word, what to do meanwhile and where they stand with the current ETA; never "didn't catch that"
+            if not replanned:
+                await self.planner.replan(trigger=self.planner._trigger({"kind": "urgent", "source": role, **thread}))
+            await self.messenger.send_message(thread, f"{URGENT} {await self.outbound.situation(thread) or ''}".strip(),
+                                              self.store.meta().get("plan_version"))
+            if not out.question:
+                return out
         if out.question and out.question_is_missing_info:
+
             topics = [t for t in out.topics if t != "plan"]  # answer what they asked, then what we still need
             if topics:
                 await self._answer(thread, topics, out.road, question, situation=False)

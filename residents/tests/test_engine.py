@@ -14,6 +14,7 @@ from residents.app import create_app
 from residents.config import CONTRACTS, REPO_ROOT
 from residents.contracts import errors
 from residents.engine_bridge import EngineBridge
+from residents.intake import URGENT
 
 SCENARIO = REPO_ROOT / "scenarios" / "allston_flood_v1" / "scenario.json"
 JUDGE = 10296
@@ -155,6 +156,18 @@ def test_a_text_without_a_model_still_replans(ec):
     assert plan["version"] == 2 and plan["trigger"] == "Judge: 2 people, wheelchair; Judge (River Street): road blocked"
     [a] = [a for a in plan["assignments"] if a["target"] == {"household_id": JUDGE} and a["status"] not in ("cancelled", "rejected")]
     assert a["resource_id"] == "van-3"  # the accessible van
+
+
+def test_an_urgent_text_gets_a_replan_a_calm_word_and_the_eta(ec):
+    """D92, reproduced by the judges with extraction off: "the water is at our door, please hurry" got "Sorry, I didn't catch
+    that". Now: a replan (sooner if a vehicle can come sooner), then reassurance, what to do meanwhile and the current ETA."""
+    ec.post("/dev/inbound", json={"role": "resident", "text": "2 of us, one in a wheelchair"})
+    ec.post("/dev/inbound", json={"role": "resident", "text": "the water is at our door, please hurry"})
+    st = ec.get("/state").json()
+    assert st["plan"]["version"] == 3 and st["plan"]["trigger"] == "Judge: urgent, asked us to hurry"
+    last = st["messages"][-1]["text"]
+    assert last.startswith(f"[EMBER drill] {URGENT} ") and "Accessible Van 3" in last and "arriving in about" in last, last
+    assert not any("didn't catch" in m["text"] for m in st["messages"])
 
 
 def test_clock_moves_the_flood(ec, bridge):

@@ -41,6 +41,11 @@ def kinds(t, role="resident"):
     ("is River St open?", [("question", None, None, None, "roads", "river st")]),
     ("River St is flooded", [("closure_report", None, None, None, None, "river st")]),
     ("is it safe to drive?", [("question", None, None, None, "safety", None)]),
+    ("the water is at our door, please hurry", [("urgent", None, None, None, None, None)]),   # D92: was "didn't catch that"
+    ("We're flooding inside!", [("urgent", None, None, None, None, None)]),
+    ("we're trapped, 3 of us", [("need", 3, None, None, None, None), ("urgent", None, None, None, None, None)]),
+    ("help", [("urgent", None, None, None, None, None)]),
+    ("Yes. Yes, please hurry.", [("confirm", None, None, None, None, None)]),        # a yes, said urgently
     ("hello?", [("other", None, None, None, None, None)]),
     ("Please stay on the line.", []),
     ("asdf qwerty", []),
