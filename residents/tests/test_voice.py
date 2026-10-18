@@ -797,3 +797,9 @@ def test_a_casual_okay_closes_once_they_know_their_pickup(vd):
     say(vd, "We are four, and one needs a wheelchair.", conv="conv_9")
     assert spoken(say(vd, "Um, sounds good to me.", conv="conv_9")).endswith(BYE)
     assert not spoken(say(vd, "Okay, but where do we go?", conv="conv_9")).endswith(BYE)
+
+
+def test_words_over_our_opening_get_the_question_again(vd):
+    """Live 2026-10-18 05:50: "No." and "Yep." over the opening each got a bare "Okay."."""
+    join(vd, R1)
+    assert ASK_NEEDS in spoken(say(vd, "No.", conv="conv_9"))

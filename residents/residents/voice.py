@@ -397,6 +397,8 @@ class Voice:
                 s.calmed = True
         elif not s.outbox:  # the call started with no first words from them: say where things stand
             await self.say_situation(handle)
+        if text and not s.outbox and not self._settled(handle):  # "no" / "yep" over our opening: ask again, not "Okay."
+            await self.say_next(handle, s.reason)
         out, s.outbox = s.outbox, []
         s.last = time.monotonic()
         s.last_said = render_all(out) or s.last_said
