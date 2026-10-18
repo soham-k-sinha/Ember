@@ -10,9 +10,11 @@ Pure: no I/O beyond reading the town, no network, deterministic per (plan, seed)
 
 from __future__ import annotations
 
+import base64
 import json
 import random
 import time
+import zlib
 
 # perturbation factors (TECHNICAL.md §3.7; synthetic stress ranges, labeled)
 RANGES = {"travel_time_mult": (0.8, 1.6), "endurance_scale": (0.7, 1.3), "storage_scale": (0.7, 1.3), "inflow_scale": (0.85, 1.15)}
@@ -72,8 +74,12 @@ def worker_prelude(engine_dir: str = REMOTE_ENGINE_DIR, town_path: str = REMOTE_
 
 
 def batch_setup(batch_id: str, scn: dict, plans: dict, reports: list) -> str:
+    """Compressed (a 5-plan batch: ~60 KB of JSON → ~8 KB): sent to 90 sandboxes at once, the raw payload made
+    Daytona drop about a third of the connections; bytes on the uplink are what this step costs."""
     payload = json.dumps({"scenario": scn, "plans": plans, "reports": reports}, separators=(",", ":"))
-    return f"_EMBER_B[{batch_id!r}] = json.loads({payload!r})\nprint(json.dumps({{'ok': True, 'batch': {batch_id!r}}}))\n"
+    packed = base64.b64encode(zlib.compress(payload.encode(), 9)).decode()
+    return (f"import base64, zlib\n_EMBER_B[{batch_id!r}] = json.loads(zlib.decompress(base64.b64decode({packed!r})))\n"
+            f"print(json.dumps({{'ok': True, 'batch': {batch_id!r}}}))\n")
 
 
 def job_code(jobs: list[dict], worker: str) -> str:
