@@ -15,12 +15,12 @@
 import type { Shape } from "./atlas";
 import type { Agent } from "./crowd";
 import type { Projector } from "./project";
-import { curb, householdColor, peopleCount, type LegendMode } from "../layers";
 import { arrivedAtShelter, cluster, crowd, walkersAt, type WalkerPlan } from "../people";
 import { poseAt, type Playback, type Track } from "../playback";
 import type { Diorama } from "./data";
 import { FOOT, ROAD_W } from "./ground";
 import type { ScenarioKeyframe, StateHousehold, StateSnapshot } from "../types";
+import { curb, householdColor, peopleCount } from "../model";
 import { inCrowdView, MAX_STROLLERS, type CrowdView } from "./density";
 
 type Leg = { rid: string; arrive: number; pickup: number; dropoff: number | null };
@@ -266,9 +266,7 @@ export function buildAgents(args: {
   w: AgentWorld;
   state: StateSnapshot;
   t: number;
-  legend: LegendMode;
   walkers: WalkerPlan | null;
-  showWalkers: boolean;
   now: number; // wall seconds (decorative idle motion only)
   /** Stage-wide decorative population budget before flood and viewport filtering. */
   strollCount?: number;
@@ -276,7 +274,7 @@ export function buildAgents(args: {
   figureHeight?: number;
   figureHalfWidth?: number;
 }): Agent[] {
-  const { w, state, t, legend, now } = args;
+  const { w, state, t, now } = args;
   const { p } = w;
   const out: Agent[] = [];
   let alightingAtShelter = 0;
@@ -286,7 +284,7 @@ export function buildAgents(args: {
   for (const h of state.households) {
     if (!p.inside(h.lon, h.lat, 30)) continue;
     const n = Math.max(1, Math.min(6, peopleCount(h)));
-    const color = toHex(householdColor(h, legend, t));
+    const color = toHex(householdColor(h));
     const leg = w.legs.get(h.household_id);
     const spot = waitSpot(w, h);
     const slots = cluster(p.fromAB(...spot), n, h.household_id, 1.3).map(([lon, lat]) => p.toAB(lon, lat));
@@ -359,7 +357,7 @@ export function buildAgents(args: {
 
   // the shelter crowd, milling (illustrative): each person drifts between nearby spots, pauses, some sit
   if (shelter && p.inside(shelter.lon, shelter.lat)) {
-    const walkedIn = args.walkers && args.showWalkers ? arrivedAtShelter(args.walkers, t) : 0;
+    const walkedIn = args.walkers ? arrivedAtShelter(args.walkers, t) : 0;
     const n = Math.max(0, Math.min(140, (shelter.people_on_site ?? 0) + walkedIn - alightingAtShelter));
     const centre = facilitySpot(w, shelter.id, shelter.lon, shelter.lat);
     const slots = crowd(p.fromAB(...centre), n * 2, 1.9)
@@ -392,7 +390,7 @@ export function buildAgents(args: {
   }
 
   // passers-by (illustrative): real walking pace on wall time, fewer as the flood rises, never on water
-  if (args.showWalkers && w.strolls.length) {
+  if (w.strolls.length) {
     const count = Math.min(w.strollers.length, Math.round((args.strollCount ?? 700) * (1 - 0.75 * clamp01((t - 2400) / 7200))));
     for (let i = 0; i < count; i++) {
       const stroller = w.strollers[i];
@@ -423,7 +421,7 @@ export function buildAgents(args: {
   }
 
   // neighbours on foot (illustrative)
-  if (args.walkers && args.showWalkers) {
+  if (args.walkers) {
     let count = 0;
     for (const pose of walkersAt(args.walkers, t, null)) {
       if (count > 700) break;

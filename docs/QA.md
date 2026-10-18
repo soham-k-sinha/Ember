@@ -17,7 +17,7 @@ Roles: **A** = Aryaman (laptop), **S** = Soham (backend, operator phone), **J** 
 | 0.5 | S | start backend (DEMO.md § Before going on stage, step 3) | log shows plan v1, listener connected | | |
 | 0.6 | A | `curl localhost:8000/health` | `mode: engine`, `extraction: on`, `photon: enabled`, `photon_listener` connected | **blocker** for real phones → `/dev/inbound` | |
 | 0.7 | S | `curl localhost:8000/phones` | 2 phones, roles `resident` and `operator`, both opted in | not opted in → that phone texts its line first | |
-| 0.8 | A | web `npm run dev`, open `http://localhost:43123`, press **Live**, full-screen 1920×1080 | map on the Treehouse, status "live", state v1 · allston_flood_v1 | WS fails → reload; then Fixtures | |
+| 0.8 | A | web `npm run dev`, open `http://localhost:43123/?live` (or ⚙ → **Live**), full-screen 1920×1080 | map on the Treehouse, status "live", state v1 · allston_flood_v1 | WS fails → reload; then Fixtures | |
 | 0.9 | A | `POST /clock {"t_s":300}` | clock 5:00, paused | | |
 | 0.10 | J | look at the resident phone | EMBER's question for #10296 ("How many people are with you, and does anyone need a wheelchair-accessible vehicle?") | missing → `POST /replan` once | |
 
@@ -40,7 +40,7 @@ Roles: **A** = Aryaman (laptop), **S** = Soham (backend, operator phone), **J** 
 ## 3 · Comparison (1:20–1:50)
 | # | Who | Action | Expected | Blocker / fallback | ✓ |
 |---|---|---|---|---|---|
-| 3.1 | A | Comparison tab → **Run comparison** (~5 s) | live numbers (not the example fixture): overflow EMBER 0 vs baseline ≈ 5,244 m³; reached ≈ 89 vs 51.6; EMBER vehicle-km higher (≈ +33), said so | "Comparison failed" → `curl "$B/comparison?seeds=5"` on the second screen | |
+| 3.1 | A | Proof tab → **Run comparison** (~5 s) | live numbers (not the example fixture): overflow EMBER 0 vs baseline ≈ 5,244 m³; reached ≈ 89 vs 51.6; EMBER vehicle-km higher (≈ +33), said so | "Comparison failed" → `curl "$B/comparison?seeds=5"` on the second screen | |
 | 3.2 | A | the label says "spread, not confidence bounds" / 5 perturbed worlds | visible | | |
 
 ## 4 · Operator texts (1:50–2:30)
@@ -56,7 +56,7 @@ Roles: **A** = Aryaman (laptop), **S** = Soham (backend, operator phone), **J** 
 ## 5 · Daytona (2:30–3:10)
 | # | Who | Action | Expected | Blocker / fallback | ✓ |
 |---|---|---|---|---|---|
-| 5.1 | A | press **Optimize** (or Replay 5) | scatter fills with 100 points live | | |
+| 5.1 | A | press **Optimize** (or Replay 5) | scatter fills with 250 points live (50 seeds × 5 plans) | | |
 | 5.2 | A | wait | done in ~10 s (Tier 1, 8 sandboxes) or less on Tier 2; `GET /optimize` → `pool: daytona` | `local-fallback` → say "local pool" and move on | |
 | 5.3 | A | read the result | chosen c02 ≠ nominal best c00; worst-20% unreached 13.5 vs 14.5 (baseline 53.5); judge's van and hospital generator unchanged | | |
 
