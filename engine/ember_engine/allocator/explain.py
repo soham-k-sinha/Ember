@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from ..models.facilities import compatible
 from ..sim.plan_sim import simulate
-from .context import VEHICLES, Context
+from .context import AMBULANCE, VEHICLES, Context
 
 mins = lambda t: f"{t/60:.0f} min"  # noqa: E731
 DEAD = ("cancelled", "rejected")   # assignments that no longer run (history)
@@ -20,7 +20,7 @@ def explain(ctx: Context, carry, assignments: list, res, reports, version: int, 
     w, scn = ctx.world, ctx.scn
     out = {o["assignment_id"]: o for o in res.outcomes}
     res_name = {x["id"]: x["name"] for x in scn["resources"]}
-    accessible = [x["id"] for x in scn["resources"] if x.get("accessible") and x["kind"] in VEHICLES]
+    accessible = [x["id"] for x in scn["resources"] if x.get("accessible") and x["kind"] in VEHICLES and x["kind"] != AMBULANCE]
     final = []
     for a in assignments:
         o = out[a["id"]]
@@ -122,14 +122,23 @@ def _rescue_why(ctx, a, o, res_name, accessible, pol) -> str:
     need = ctx.needs[hid]
     mob = need.get("mobility") or need.get("accessible_vehicle")
     who = res_name[a["resource_id"]]
-    why = ("the only wheelchair-accessible vehicle" if mob and len(accessible) == 1 else
-           "an accessible vehicle (mobility need)" if mob else "earliest eligible arrival")
+    med = bool(need.get("medical"))
+    amb = [x for x in ctx.res.values() if x["kind"] == AMBULANCE]
+    if ctx.res[a["resource_id"]]["kind"] == AMBULANCE:
+        why = f"medical need → {who}" + (" (stretcher)" if mob else "")
+    else:
+        why = ("the only wheelchair-accessible vehicle" if mob and len(accessible) == 1 else
+               "an accessible vehicle (mobility need)" if mob else "earliest eligible arrival")
+        if med and amb:
+            why += ("; medical need, but " + ("no ambulance arrives before the deadline" if any(ctx.eligible(x, hid) for x in amb)
+                                              else f"more people than an ambulance carries ({max(x.get('capacity_people', 0) for x in amb)})"))
     d = ctx.deadline.get(hid)
     if o["pickup_t"] is not None:
         when = f"simulated pickup {mins(o['pickup_t'])}" + (f" vs deadline {mins(d)} (slack {mins(d - o['pickup_t'])})" if d is not None else "")
     else:
         when = f"simulated outcome: {o['status']} ({o['reason'] or 'not reached'})"
-    return f"{who} → household #{hid}: {need['people']} people{', wheelchair' if mob else ''}; {why}; {when}; plan rule: {pol.order}-first"
+    return (f"{who} → household #{hid}: {need['people']} people{', wheelchair' if mob else ''}{', medical' if med else ''}; {why}; {when}; "
+            f"plan rule: {pol.order}-first")
 
 
 def _protect_why(ctx, a, o, assignments, res, reports, res_name) -> str:

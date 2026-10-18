@@ -15,7 +15,8 @@ from ..models.facilities import FacilityModel
 from ..scenario import deadlines, flood_keyframes
 
 UNLOAD_S = 120.0
-VEHICLES = ("van", "accessible_van", "truck")
+VEHICLES = ("van", "accessible_van", "ambulance", "truck")
+AMBULANCE = "ambulance"   # carries medical cases only (with their stretcher / wheelchair); D114
 
 
 @dataclass
@@ -135,7 +136,15 @@ class Context:
             return False
         if (need.get("mobility") or need.get("accessible_vehicle")) and not spec.get("accessible"):
             return False
+        if spec["kind"] == AMBULANCE and not need.get("medical"):
+            return False
         return spec.get("capacity_people", 0) >= need["people"]
+
+    def off_ambulance(self, queues: dict) -> int:
+        """Medical households riding something else although an ambulance could carry them (D114)."""
+        amb = [x for x in self.res.values() if x["kind"] == AMBULANCE]
+        return sum(1 for rid, hids in queues.items() if self.res[rid]["kind"] != AMBULANCE for h in hids
+                   if self.needs[h] != "unknown" and self.needs[h].get("medical") and any(self.eligible(x, h) for x in amb))
 
     def dropoff_order(self, hid: int) -> list[str]:
         """Drop-off points by drive time from the household on today's open roads (unreachable ones last)."""
