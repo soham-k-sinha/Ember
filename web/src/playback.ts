@@ -4,6 +4,7 @@ import type {
   FacilityState,
   HouseholdStatus,
   LngLat,
+  Needs,
   PlanMetrics,
   PlanSnapshot,
   ResourceStatus,
@@ -72,7 +73,7 @@ export type Playback = {
   on_site?: Record<string, number[]>;
   closures: [number, number, number | null][];
   events: PlaybackEvent[];
-  reports?: Array<{ id?: string; t_s?: number; kind?: string; household_id?: number; facility_id?: string; note?: string; text?: string; source?: string }>;
+  reports?: Array<{ id?: string; t_s?: number; kind?: string; household_id?: number; facility_id?: string; note?: string; text?: string; source?: string; needs?: Needs }>;
   outcomes: Outcome[];
   plan: {
     version: number | null;
@@ -105,6 +106,7 @@ export function asPlayback(value: unknown): Playback | null {
   if (typeof value !== "object" || value === null) return null;
   const record = value as Record<string, unknown>;
   if (!Array.isArray(record.tracks) || !Array.isArray(record.t_s) || typeof record.plan !== "object") return null;
+  if (typeof record.scenario_id !== "string" || typeof record.metrics !== "object") return null;
   return value as Playback;
 }
 

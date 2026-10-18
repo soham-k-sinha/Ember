@@ -9,6 +9,8 @@ Shapes are from https://api.photon.codes/openapi.json and photon.codes/docs/beta
                     connect, then `delivery(event, {seq})`. Events can be redelivered → dedupe by message id.
                     Process serially; persist `seq` only after the handler succeeded.
 - Fallback:         GET messages?direction=received&createdSince=… every 2 s while the socket is down.
+- Join line (D78):  a shared iMessage line only delivers texts from handles assigned to it; the project's SMS
+                    number delivers `message.received` (platform sms) from any sender, so unknown phones join there.
 
 This module knows nothing about Ember state; `messaging.py` decides what an inbound message means.
 """
@@ -128,18 +130,16 @@ class PhotonClient:
         return await self._request("POST", "platforms/imessage/assignments", json={"handle": handle},
                                    idempotency_key=f"ember-assign-{handle}")
 
-    async def list_assignments(self) -> list[dict]:
-        return (await self._request("GET", "platforms/imessage/assignments"))["assignments"]
-
     async def send_text(self, space_id: str, sender_id: str, text: str, idempotency_key: str) -> dict:
         return await self._request("POST", "messages", idempotency_key=idempotency_key, json={
             "spaceId": space_id, "senderId": sender_id,
             "content": {"type": "text", "format": "plain", "text": text}})
 
     async def list_received(self, since: datetime) -> list[dict]:
-        """Received messages created at/after `since`, oldest first (first page only; we poll every 2 s)."""
+        """Received messages on every line (the SMS join line too) created at/after `since`, oldest first
+        (first page only; we poll every 2 s)."""
         res = await self._request("GET", "messages", params={
-            "direction": "received", "platform": "imessage", "orderBy": "created_at", "order": "asc",
+            "direction": "received", "orderBy": "created_at", "order": "asc",
             "pageSize": 100, "createdSince": since.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")})
         return res.get("items", [])
 

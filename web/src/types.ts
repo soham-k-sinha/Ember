@@ -294,11 +294,6 @@ export type StateSnapshot = {
   metrics: PlanMetrics;
 };
 
-export type Trajectories = {
-  version: string;
-  trips: { id: number; path: LngLat[]; t: number[]; final: number }[];
-};
-
 export type ComparisonMetric = {
   metric: string;
   label: string;
@@ -353,6 +348,7 @@ export type RobustSummary = {
   pool: string;
   workers?: number;
   fanout_wall_s?: number;
+  startup_s?: number;
   rule: string;
   chosen: string;
   nominal_best: string;
@@ -386,6 +382,17 @@ export type Selection =
   | { kind: "resource"; id: string }
   | { kind: "edge"; id: number }
   | { kind: "walker"; id: number };
+
+/** GET /phones row: a registered phone; drill players carry their 1-based join order. */
+export type Phone = { handle: string; player: number | null; household_id: number | null };
+
+export type CallReason = "no_reply" | "mobility" | "pickup_changed" | "console" | "inbound";
+
+/** GET /calls: voice calls in progress and recently ended. */
+export type Calls = {
+  live: Array<{ handle: string; household_id: number | null; reason: CallReason; started_t_s: number; turns: number }>;
+  recent: Array<{ handle: string; household_id: number | null; reason: CallReason; outcome: string; turns: number; ended_t_s: number }>;
+};
 
 export type JudgeClosure = {
   edge_id: number;

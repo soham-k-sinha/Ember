@@ -1,5 +1,5 @@
 {
- "_doc": "51 messages (#21 is DEMO.md beat 4, verbatim; #22-27 are the drill's location and DONE replies; #28-32 question topics, a decline with a question, a garbled need; #33-45 the D60 topics plan / flood / roads / safety / other, #33, #34 and #37 verbatim from the 2026-10-17 run; #46-51 the 2026-10-17 phone call, with the conversation as history: a 'no' that is a problem or a correction is not a decline) a resident or operator might text during the drill, with the expected extraction. `expect.kinds` = fact kinds in order; other keys are checked on the fact of that kind. `context` = what we last sent / what we're waiting on. Run: uv run python scripts/eval_extract.py",
+ "_doc": "51 messages (#21 is DEMO.md beat 4, verbatim; #22-27 are the drill's location and DONE replies; #28-32 question topics, a decline with a question, a garbled need; #33-45 the D60 topics plan / flood / roads / safety / other, #33, #34 and #37 verbatim from the 2026-10-17 run; #46-51 the 2026-10-17 phone call, with the conversation as history: a 'no' that is a problem or a correction is not a decline) a resident or operator might text during the drill, with the expected extraction. `expect.kinds` = fact kinds in order; other keys are checked on the fact of that kind. `context` = what we last sent / what we're waiting on. `gold` = what is true when it differs from the ideal extraction (#32: \"Welch's\" is a wheelchair; scripts/eval_sim.py simulates it). Run: uv run python scripts/eval_extract.py",
  "samples": [
   {
    "role": "resident",
@@ -392,7 +392,15 @@
     ],
     "people": 4,
     "question": true
-   }
+   },
+   "gold": [
+    {
+     "kind": "need",
+     "people": 4,
+     "mobility": true,
+     "accessible_vehicle": true
+    }
+   ]
   },
   {
    "role": "resident",

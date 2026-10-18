@@ -67,6 +67,12 @@ def unplaced(store: Store, phone: dict) -> bool:
             and phone.get("scenario_id") is not None and phone.get("scenario_id") == store.meta().get("scenario_id"))
 
 
+def player(store: Store, handle: str) -> int | None:
+    """1-based join order of a drill player (texted the join phrase, D78); None for team phones."""
+    n = store.kv_get(f"player:{handle}")
+    return int(n) if n else None
+
+
 def phone_for_thread(store: Store, thread: dict) -> dict | None:
     key = thread_key(thread)
     for phone in store.phones():

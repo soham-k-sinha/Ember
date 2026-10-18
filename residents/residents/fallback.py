@@ -16,14 +16,16 @@ from .extract import Extraction, Fact
 
 NUM = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
 _N = r"(\d+|" + "|".join(NUM) + r")"
-YES = re.compile(r"^(yes|yeah|yep|yup|sure|ok|okay|confirm(ed)?|sounds good|please do|y|correct|that works)\b(?!.*\bnot?\b)")
+YES = re.compile(r"^((oh|um+|uh+|well) )*(yes|yeah|yep|yup|sure|ok|okay|confirm(ed)?|sounds good|please do|y|correct|"
+                 r"that works)\b(?!.*\bnot?\b)")  # "oh, yes, yes please" (heard on calls)
+ACK = re.compile(r"^((oh|um+|uh+|well) )*(ok|okay)\b")  # "okay, what changed?": a nod, then the question
 NO = re.compile(r"^(no|nope|nah|cancel|decline|don'?t|do not)\b")
 DONE = re.compile(r"\b(done|ready|we'?re here|i'?m here|we are here|i am here|at the corner|on the (van|truck|bus)|"
                   r"aboard|on board|arrived|checked in|it'?s connected|connected)\b")
 COUNT = re.compile(r"\b" + _N + r"\s+(of us|people|persons|adults|in total|total)\b")
 ALONE = re.compile(r"\b(just me|only me|myself|i'?m alone|i am alone|just one)\b")
-PAIR = re.compile(r"\b(me and my|my \w+ and (i|me))\b")
-CHAIR = re.compile(r"\b(wheel ?chair|walker|can'?t walk|cannot walk|bed ?ridden|mobility|crutches)\b")
+PAIR = re.compile(r"\b(me and my|my (?!house|home|place|apartment|room)\w+ and (i|me))\b")
+CHAIR = re.compile(r"\b(wheel ?chair|walker|can'?t walk|cannot walk|bed ?ridden|mobility|crutches|accessible|stuck|can'?t get out)\b")
 MEDICAL = re.compile(r"\b(oxygen|dialysis|insulin|medical|injur\w*|medication)\b")
 STREET = re.compile(r"\b([a-z]+(?: [a-z]+)? (?:st|street|ave|avenue|rd|road|dr|drive|pl|place|sq|square|bridge))\b")
 BLOCKED = re.compile(r"\b(flooded|blocked|closed|under water|impassable)\b")
@@ -31,7 +33,8 @@ GREETING = re.compile(r"^(hi|hello|hey|hiya|good (morning|afternoon|evening))\b"
 _LEAD = {"is", "are", "the", "on", "at", "of", "a", "an", "near", "across", "get", "by", "to", "from", "via", "and"}
 QUESTION = re.compile(r"\?|^(what|when|where|how|is|are|can|could|will|would|should|who|why|do|does|did)\b")
 TOPICS = [  # first match wins
-    ("plan", r"\b(plan|what (do|should) (i|we) do|what now|what happens|what'?s going on|is anyone coming|status)\b"),
+    ("plan", r"\b(plan|what (do|should) (i|we) do|what now|what happens|what'?s going on|what changed|is anyone coming|"
+             r"status)\b"),
     ("safety", r"\b(safe|danger|dangerous|emergency|drown|water (is )?coming in)\b"),
     ("roads", r"\b(open|closed|blocked|passable|across|get through|cross)\b"),
     ("flood", r"\b(flood|water)\b"),
@@ -91,13 +94,13 @@ def parse(text: str, role: str = "resident") -> Extraction | None:
     people, chair, med = _people(t), bool(CHAIR.search(t)), bool(MEDICAL.search(t))
     if role != "operator" and (people or chair or med):
         facts.append(_fact("need", people=people, mobility=True if chair else None,
-                           accessible_vehicle=True if "wheel" in t else None, medical=True if med else None))
+                           accessible_vehicle=True if re.search("wheel|accessible", t) else None, medical=True if med else None))
     if (street := _street(t)) and BLOCKED.search(t) and not QUESTION.search(t):
         facts.append(_fact("closure_report", road_hint=street))
     if not facts:
         if NO.search(t):
             facts.append(_fact("reject"))
-        elif YES.search(t):
+        elif YES.search(t) and not (ACK.search(t) and QUESTION.search(t)):
             facts.append(_fact("confirm"))
         elif DONE.search(t) and not re.search(r"\b(not|n't|isn't|aren't|haven't)\b|n't\b", t):
             facts.append(_fact("done"))

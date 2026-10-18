@@ -289,7 +289,7 @@ def cmd_robust(a):
     r = plan["search"]["robust"]
     for line in getattr(pool, "log", [])[:5]:
         print(f"[robust] note: {line}")
-    print(f"[robust] {r['jobs']} runs in {r['fanout_wall_s']:.1f}s · rule: {r['rule']}")
+    print(f"[robust] {r['jobs']} runs in {r['fanout_wall_s']:.1f}s after {r['startup_s']:.1f}s of startup · rule: {r['rule']}")
     for row in r["ranking"]:
         mark = "→" if row["candidate"] == r["chosen"] else " "
         print(f"  {mark} {row['candidate']:>8}  worst-20% unreached {row['worst20_people_unreached']:>6}  overflow {row['worst20_overflow_m3']:>8,.0f} m³"
@@ -481,7 +481,7 @@ def main(argv=None):
     cp.add_argument("--seed", type=int, default=0); cp.add_argument("--out", default=None); cp.set_defaults(f=cmd_compare)
     rb = sp.add_parser("robust", help="robust plan: top candidates × perturbed worlds on Daytona or local processes")
     rb.add_argument("--scenario", required=True); rb.add_argument("--report", action="append")
-    rb.add_argument("--candidates", type=int, default=4); rb.add_argument("--seeds", type=int, default=20)
+    rb.add_argument("--candidates", type=int, default=4); rb.add_argument("--seeds", type=int, default=50)
     rb.add_argument("--pool", choices=["auto", "local", "daytona"], default="auto"); rb.add_argument("--workers", type=int, default=None)
     rb.add_argument("--out", default=None); rb.add_argument("--points-out", default=None, help="write scatter points as JSON lines")
     rb.set_defaults(f=cmd_robust)

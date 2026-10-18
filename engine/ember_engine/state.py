@@ -89,9 +89,9 @@ def validate_state(state: dict, scn: dict | None, town: dict) -> list[str]:
     if scn is not None:
         if state["scenario_id"] != scn["scenario_id"]:
             E(f"scenario_id {state['scenario_id']} != {scn['scenario_id']}")
-        want = {h["household_id"] for h in scn["households"]}
-        if assisted != want:
-            E(f"households: state has {len(assisted)}, scenario has {len(want)} (mismatch: {sorted(assisted ^ want)[:5]})")
+        missing = {h["household_id"] for h in scn["households"]} - assisted  # phones that texted in add households
+        if missing:
+            E(f"households: scenario households missing from the state (mismatch: {sorted(missing)[:5]})")
     return errs
 
 

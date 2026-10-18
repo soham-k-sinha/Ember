@@ -14,7 +14,7 @@
  */
 
 import { lineIntersectsGeometry } from "./geo";
-import { floorIndex, poseAt } from "./playback";
+import { poseAt } from "./playback";
 import type { FloodGeometry, LngLat, ScenarioKeyframe, TownEdge, TownNode } from "./types";
 
 export type BgHousehold = { id: number; lon: number; lat: number; node: number; size: number; vehicles?: number; flags?: Record<string, boolean> };
@@ -390,24 +390,4 @@ export function crowd(center: LngLat, n: number, spacing = 1.7): LngLat[] {
     out.push(offsetMetres(center, Math.cos(a) * r, Math.sin(a) * r));
   }
   return out;
-}
-
-export function countWalking(plan: WalkerPlan, t: number): { walking: number; turnedBack: number; sheltered: number; left: number } {
-  let walking = 0;
-  let turnedBack = 0;
-  let sheltered = 0;
-  let left = 0;
-  for (const walker of plan.walkers) {
-    if (t >= walker.start && t <= walker.end) {
-      walking++;
-      if (walker.turnedBack) {
-        const i = floorIndex(walker.times, t);
-        if (i >= walker.path.length / 2) turnedBack++;
-      }
-    } else if (t > walker.end) {
-      if (walker.dest === "shelter") sheltered++;
-      else if (walker.dest === "exit") left++;
-    }
-  }
-  return { walking, turnedBack, sheltered, left };
 }

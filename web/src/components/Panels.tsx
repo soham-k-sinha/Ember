@@ -1,13 +1,12 @@
-import { scenario } from "../fixtures";
 import {
   formatMinutes,
   formatNeeds,
   formatNumber,
   formatSim,
+  planDiff,
+  replanSeconds,
   statusLabel,
   targetLabel,
-  threadKey,
-  threadLabel,
 } from "../format";
 import {
   assignmentById,
@@ -16,11 +15,12 @@ import {
   edgeRecord,
   facilityById,
   householdById,
+  householdColor,
+  peopleCount,
   resourceById,
 } from "../model";
 import { town } from "../fixtures";
 import { robustOf } from "../live";
-import { householdColor, peopleCount } from "../layers";
 import { householdName, members, type WalkerPlan } from "../people";
 import { householdTimeline, resourceTimeline, type Playback, type TimelineItem } from "../playback";
 import type {
@@ -33,32 +33,16 @@ import type {
   ScatterPoint,
   Selection,
   StateSnapshot,
+  Target,
   Wastewater,
 } from "../types";
 
-const METRICS: Array<{ key: keyof PlanMetrics; label: string; digits: number; unit: string }> = [
-  { key: "people_reached_before_deadline", label: "People reached before deadline", digits: 0, unit: "" },
-  { key: "people_unreached", label: "People unreached", digits: 0, unit: "" },
-  { key: "unresolved_needs", label: "Unresolved needs", digits: 0, unit: "" },
-  { key: "hospital_outage_s", label: "Hospital outage", digits: 0, unit: "s" },
-  { key: "service_outage_s_total", label: "Service outage", digits: 0, unit: "s" },
-  { key: "overflow_m3", label: "Untreated overflow", digits: 1, unit: "m³" },
-  { key: "fuel_l", label: "Fuel", digits: 1, unit: "L" },
-  { key: "vehicle_km", label: "Vehicle distance", digits: 2, unit: "km" },
-  { key: "infeasible_assignments", label: "Infeasible assignments", digits: 0, unit: "" },
-  { key: "reserve_remaining", label: "Reserve remaining", digits: 0, unit: "" },
-];
-
-export type PanelId = "ledger" | "inspector" | "conversations" | "needs" | "compare" | "scatter" | "plans";
+export type PanelId = "feed" | "plan" | "proof";
 
 const TABS: Array<{ id: PanelId; label: string }> = [
-  { id: "ledger", label: "Ledger" },
-  { id: "inspector", label: "Inspector" },
-  { id: "conversations", label: "Conversations" },
-  { id: "needs", label: "Needs" },
-  { id: "compare", label: "Compare" },
-  { id: "scatter", label: "Scatter" },
-  { id: "plans", label: "Plans" },
+  { id: "feed", label: "Feed" },
+  { id: "plan", label: "Plan" },
+  { id: "proof", label: "Proof" },
 ];
 
 export function Panels(props: {
@@ -69,11 +53,11 @@ export function Panels(props: {
   closures: Closure[];
   selection: Selection | null;
   comparison: Comparison | null;
+  nominal: { ember?: PlanMetrics; baseline?: PlanMetrics };
   scatter: ScatterPoint[];
   scatterTotal: number | null;
   plans: PlanSnapshot[];
   judge: JudgeClosure[];
-  notice: string | null;
   busy: string | null;
   onCloseRoad: (edgeId: number) => void;
   onUndoClosure: (edgeId: number) => void;
@@ -101,53 +85,188 @@ export function Panels(props: {
           </button>
         ))}
       </div>
-      {props.notice ? <p className="notice">{props.notice}</p> : null}
       <div className="panel" role="tabpanel">
-        {props.tab === "ledger" ? <Ledger {...props} /> : null}
-        {props.tab === "inspector" ? <Inspector {...props} /> : null}
-        {props.tab === "conversations" ? <Conversations {...props} /> : null}
-        {props.tab === "needs" ? <Needs {...props} /> : null}
-        {props.tab === "compare" ? <Compare {...props} /> : null}
-        {props.tab === "scatter" ? <Scatter {...props} /> : null}
-        {props.tab === "plans" ? <Plans {...props} /> : null}
+        {props.tab === "feed" ? <Feed {...props} /> : null}
+        {props.tab === "plan" ? <PlanTab {...props} /> : null}
+        {props.tab === "proof" ? <Proof {...props} /> : null}
       </div>
+      {props.selection ? (
+        <div className="drawer">
+          <button className="close" onClick={() => props.onSelect(null)} aria-label="Close">×</button>
+          <Inspector {...props} selection={props.selection} />
+        </div>
+      ) : null}
     </aside>
   );
 }
 
-function Ledger(props: { state: StateSnapshot; onSelect: (selection: Selection | null) => void; onFollow: (selection: Selection | null) => void }) {
-  const resources = props.state.resources;
-  if (resources.length === 0) {
-    return <p className="empty">No resources in this state snapshot.</p>;
+function targetName(state: StateSnapshot, target: Target): string {
+  if ("household_id" in target) {
+    const label = householdById(state, target.household_id)?.label;
+    return label && !/^household/i.test(label) ? label : `#${target.household_id}`;
   }
+  return facilityById(state, target.facility_id)?.name ?? target.facility_id;
+}
+
+type FeedItem = { key: string; t_s: number; kind: "in" | "fact" | "plan" | "out"; title: string; text: string; quote?: string; target?: Target };
+
+/** The story in order: a text comes in → it becomes a fact → the plan changes → EMBER texts back. */
+const ORDER: Record<FeedItem["kind"], number> = { in: 0, fact: 1, plan: 2, out: 3 };
+const KIND_LABEL: Record<FeedItem["kind"], string> = { in: "Text in", fact: "Fact", plan: "New plan", out: "Text out" };
+
+function feedItems(state: StateSnapshot, plans: PlanSnapshot[], playback: Playback | null, t: number): FeedItem[] {
+  const items: FeedItem[] = [];
+  for (const message of state.messages) {
+    if (message.t_s > t) continue;
+    const who = targetName(state, message.thread);
+    items.push({ key: message.id, t_s: message.t_s, kind: message.direction, title: message.direction === "in" ? who : `EMBER → ${who}`, text: message.text, target: message.thread });
+  }
+  const seen = new Set<string>();
+  for (const report of state.reports) {
+    if (report.observed_at_t_s > t) continue;
+    seen.add(report.id);
+    const target: Target | undefined = report.household_id != null ? { household_id: report.household_id } : report.facility_id ? { facility_id: report.facility_id } : undefined;
+    const needs = report.kind === "need" ? report.payload : undefined;
+    items.push({ key: report.id, t_s: report.observed_at_t_s, kind: "fact", title: target ? targetName(state, target) : "Report", text: `${statusLabel(report.kind)}${needs ? ` · ${formatNeeds(needs)}` : ""}`, target });
+  }
+  for (const [index, report] of (playback?.reports ?? []).entries()) {
+    const key = report.id ?? `pb-${index}`;
+    if ((report.t_s ?? 0) > t || seen.has(key)) continue;
+    const target: Target | undefined = report.household_id != null ? { household_id: report.household_id } : report.facility_id ? { facility_id: report.facility_id } : undefined;
+    items.push({
+      key,
+      t_s: report.t_s ?? 0,
+      kind: "fact",
+      title: target ? targetName(state, target) : "Report",
+      text: `${statusLabel(report.kind ?? "report")}${report.needs ? ` · ${formatNeeds(report.needs)}` : ""}`,
+      quote: report.note ?? report.text,
+      target,
+    });
+  }
+  for (const plan of plans) {
+    if (plan.created_at_t_s > t) continue;
+    const seconds = replanSeconds(plan);
+    items.push({
+      key: `plan-${plan.version}`,
+      t_s: plan.created_at_t_s,
+      kind: "plan",
+      title: `v${plan.version}${seconds != null ? ` in ${seconds.toFixed(1)} s` : ""}`,
+      text: [plan.trigger, plan.version > 1 ? planDiff(plan, state) : ""].filter(Boolean).join(" · "),
+    });
+  }
+  // newest first; at the same moment, later in the story first, then later arrivals first
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => b.item.t_s - a.item.t_s || ORDER[b.item.kind] - ORDER[a.item.kind] || b.index - a.index)
+    .map(({ item }) => item);
+}
+
+function Feed(props: { state: StateSnapshot; plans: PlanSnapshot[]; playback: Playback | null; t: number; onSelect: (selection: Selection | null) => void }) {
+  const items = feedItems(props.state, props.plans, props.playback, props.t);
+  const unresolved = props.state.plan?.unresolved ?? [];
+  const questions = props.state.plan?.info_requests ?? [];
+  const open = unresolved.length + questions.length;
+  return (
+    <div className="stack">
+      {open > 0 ? (
+        <details className="open-needs">
+          <summary>{open} open {open === 1 ? "need" : "needs"} the plan cannot meet yet</summary>
+          <ul>
+            {questions.map((request) => (
+              <li key={request.id}>
+                <strong>{targetName(props.state, request.to)}</strong> {request.question}
+                <span>{request.why}</span>
+              </li>
+            ))}
+            {unresolved.map((item, index) => (
+              <li key={`${targetLabel(item.target)}-${index}`}>
+                <strong>{targetName(props.state, item.target)}</strong> {item.need}
+                <span>Blocked by {item.blocked_by}{item.would_unblock ? ` · would unblock: ${item.would_unblock}` : ""}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+      {items.length === 0 ? (
+        <p className="empty">Nothing yet. When someone texts the drill line, their words, the fact EMBER takes from them and the new plan appear here.</p>
+      ) : (
+        <ol className="feed">
+          {items.map((item) => (
+            <li key={item.key} className={item.kind}>
+              <button
+                disabled={!item.target}
+                onClick={() => item.target && props.onSelect("household_id" in item.target ? { kind: "household", id: item.target.household_id } : { kind: "facility", id: item.target.facility_id })}
+              >
+                <span>
+                  {KIND_LABEL[item.kind]} · {item.title}
+                  <time>{formatSim(item.t_s)}</time>
+                </span>
+                {item.quote ? <q>{item.quote}</q> : null}
+                <p>{item.text}</p>
+              </button>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+function PlanTab(props: { state: StateSnapshot; plans: PlanSnapshot[]; busy: string | null; onReplan: () => void; onSelect: (selection: Selection | null) => void; onFollow: (selection: Selection | null) => void }) {
+  return (
+    <div className="stack">
+      <button className="primary" disabled={props.busy != null} onClick={props.onReplan}>
+        {props.busy === "replan" ? "Replanning…" : "Replan now"}
+      </button>
+      <ol className="versions">
+        {[...props.plans].reverse().map((plan) => {
+          const seconds = replanSeconds(plan);
+          const diff = plan.version > 1 ? planDiff(plan, props.state) : "";
+          return (
+            <li key={plan.version}>
+              <header>
+                <strong>v{plan.version}</strong>
+                <span>{formatSim(plan.created_at_t_s)}</span>
+                {seconds != null ? <span className="pill">{seconds.toFixed(2)} s</span> : null}
+              </header>
+              {plan.trigger ? <p>{plan.trigger}</p> : null}
+              {diff ? <p className="meta">{diff}</p> : null}
+            </li>
+          );
+        })}
+      </ol>
+      <h3>Vehicles</h3>
+      <Ledger state={props.state} onSelect={props.onSelect} onFollow={props.onFollow} />
+    </div>
+  );
+}
+
+function Ledger(props: { state: StateSnapshot; onSelect: (selection: Selection | null) => void; onFollow: (selection: Selection | null) => void }) {
   return (
     <table className="grid">
       <thead>
         <tr>
-          <th>Kind</th>
+          <th>Vehicle</th>
           <th>Status</th>
-          <th>Assignment</th>
+          <th>Job</th>
           <th>ETA</th>
-          <th>On board</th>
         </tr>
       </thead>
       <tbody>
-        {resources.map((resource) => {
+        {props.state.resources.map((resource) => {
           const assignment = assignmentById(props.state, resource.assignment_id);
           return (
             <tr key={resource.id} className="clickable" onClick={() => props.onSelect({ kind: "resource", id: resource.id })}>
               <td>
                 <strong>{resource.name}</strong>
-                <span>{resource.kind.replaceAll("_", " ")}</span>
+                <span>{resource.people_on_board ? `${resource.people_on_board} aboard` : resource.kind.replaceAll("_", " ")}</span>
               </td>
               <td><span className={`pill ${resource.status}`}>{statusLabel(resource.status)}</span></td>
-              <td>{assignment ? targetLabel(assignment.target) : "—"}</td>
-              <td>{formatMinutes(resource.eta_s ?? assignment?.eta_s)}</td>
+              <td>{assignment ? targetName(props.state, assignment.target) : "—"}</td>
               <td>
-                {resource.people_on_board ? `${resource.people_on_board} aboard` : "—"}
+                {formatMinutes(resource.eta_s ?? assignment?.eta_s)}
                 <button
                   className="mini"
-                  title="Follow on the map"
                   onClick={(event) => {
                     event.stopPropagation();
                     props.onFollow({ kind: "resource", id: resource.id });
@@ -168,7 +287,7 @@ function Inspector(props: {
   state: StateSnapshot;
   t: number;
   closures: Closure[];
-  selection: Selection | null;
+  selection: Selection;
   judge: JudgeClosure[];
   busy: string | null;
   onCloseRoad: (edgeId: number) => void;
@@ -179,14 +298,6 @@ function Inspector(props: {
   onFollow: (selection: Selection | null) => void;
 }) {
   const selection = props.selection;
-  if (!selection) {
-    return (
-      <p className="empty">
-        Click a household, facility, resource, or road. The inspector shows status, needs,
-        dependencies, and the assignment rationale verbatim.
-      </p>
-    );
-  }
   const following = props.follow != null && props.follow.kind === selection.kind && props.follow.id === selection.id;
   const followButton = (
     <button className={following ? "ghost on" : "ghost"} onClick={() => props.onFollow(following ? null : selection)}>
@@ -267,7 +378,7 @@ function HouseholdInspector(props: { state: StateSnapshot; id: number; t: number
     needs !== "unknown" && Boolean(needs.mobility || needs.accessible_vehicle),
     needs !== "unknown" && Boolean(needs.medical),
   );
-  const color = householdColor(household, "status", props.t);
+  const color = householdColor(household);
   const outcome = props.playback?.outcomes.find((item) => item.assignment_id === assignment?.id);
   const timeline = props.playback ? householdTimeline(props.playback, household.household_id, props.t) : [];
   const fromMessages: TimelineItem[] = messages
@@ -553,381 +664,166 @@ function ThreadList(props: { title: string; messages: StateSnapshot["messages"] 
   );
 }
 
-function Conversations(props: { state: StateSnapshot; t: number }) {
-  const messages = props.state.messages.filter((message) => message.t_s <= props.t);
-  const groups = new Map<string, { label: string; messages: typeof messages }>();
-  for (const message of messages) {
-    const key = threadKey(message.thread);
-    const group = groups.get(key) ?? { label: threadLabel(message.thread), messages: [] };
-    group.messages.push(message);
-    groups.set(key, group);
-  }
-  const requests = props.state.plan?.info_requests ?? [];
-  if (groups.size === 0 && requests.length === 0) {
-    return <p className="empty">No resident or operator messages at this clock time.</p>;
-  }
-  return (
-    <div className="stack">
-      {[...groups.values()].map((group) => (
-        <section key={group.label}>
-          <h2>{group.label}</h2>
-          <ol className="thread">
-            {group.messages.map((message) => (
-              <li key={message.id} className={message.direction}>
-                <span>{message.direction === "out" ? "Out" : "In"} · plan v{message.plan_version ?? "—"} · {formatSim(message.t_s)}</span>
-                <p>{message.text}</p>
-              </li>
-            ))}
-          </ol>
-        </section>
-      ))}
-      {requests.length > 0 ? (
-        <section>
-          <h2>Questions the plan still needs</h2>
-          <ul className="needs">
-            {requests.map((request) => (
-              <li key={request.id}>
-                <strong>{threadLabel(request.to)}</strong>
-                <p>{request.question}</p>
-                <p className="meta">{request.why}</p>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-    </div>
-  );
-}
 
-function Needs(props: { state: StateSnapshot }) {
-  const unresolved = props.state.plan?.unresolved ?? [];
-  if (!props.state.plan) {
-    return <p className="empty">No plan is loaded, so there is no unresolved-need list yet.</p>;
-  }
-  if (unresolved.length === 0) {
-    return <p className="empty">This plan has no unresolved needs.</p>;
-  }
-  return (
-    <ul className="needs">
-      {unresolved.map((item, index) => (
-        <li key={`${targetLabel(item.target)}-${index}`}>
-          <strong>{targetLabel(item.target)}</strong>
-          <p>{item.need}</p>
-          <p>Blocked by {item.blocked_by}</p>
-          {item.would_unblock ? <p className="meta">Would unblock: {item.would_unblock}</p> : null}
-        </li>
-      ))}
-    </ul>
-  );
-}
+const PROOF_METRICS: Array<{ metric: "people_reached_before_deadline" | "people_unreached" | "hospital_outage_s" | "overflow_m3" | "vehicle_km"; label: string; unit: string }> = [
+  { metric: "people_reached_before_deadline", label: "Reached before the water", unit: "people" },
+  { metric: "people_unreached", label: "Not reached in time", unit: "people" },
+  { metric: "hospital_outage_s", label: "Hospital outage", unit: "min" },
+  { metric: "overflow_m3", label: "Sewage overflow to the Charles", unit: "m³" },
+  { metric: "vehicle_km", label: "Vehicle-km driven", unit: "km" },
+];
 
-function metricNumber(metrics: PlanMetrics, key: string): number | null {
-  const value = metrics[key as keyof PlanMetrics];
-  return typeof value === "number" ? value : null;
-}
-
-function digitsFor(value: number): number {
-  return Number.isInteger(value) ? 0 : 1;
-}
-
-function Compare(props: {
+function Proof(props: {
   state: StateSnapshot;
   comparison: Comparison | null;
-  busy: string | null;
-  onCompare: () => void;
-}) {
-  const comparison = props.comparison;
-  return (
-    <div className="stack">
-      <p className="meta">
-        B − A is EMBER minus baseline
-        {comparison ? ` · ${comparison.scenario_id}` : ""}.
-        {" "}The seed range is spread, not a confidence bound.
-      </p>
-      {comparison && comparison.scenario_id !== scenario.scenario_id ? (
-        <p className="meta">
-          This table is the published {comparison.scenario_id} comparison. The map is {scenario.scenario_id} until Live returns GET /comparison.
-        </p>
-      ) : null}
-      <button className="primary" disabled={props.busy != null} onClick={props.onCompare}>
-        {props.busy === "compare" ? "Running comparison…" : "Run comparison"}
-      </button>
-      {comparison ? (
-        <>
-          <ul className="needs">
-            {comparison.headline.map((line) => (
-              <li key={line}>{line}</li>
-            ))}
-          </ul>
-          <table className="grid">
-            <thead>
-              <tr>
-                <th>Metric</th>
-                <th>Baseline (A)</th>
-                <th>EMBER (B)</th>
-                <th>B − A</th>
-              </tr>
-            </thead>
-            <tbody>
-              {comparison.metrics.map((metric) => {
-                const baseline = metricNumber(comparison.nominal.baseline, metric.metric);
-                const ember = metricNumber(comparison.nominal.ember, metric.metric);
-                const delta = baseline != null && ember != null ? ember - baseline : metric.diff_mean;
-                const digits = digitsFor(delta ?? ember ?? baseline ?? 0);
-                return (
-                  <tr key={metric.metric}>
-                    <td>
-                      {metric.label}
-                      <span>
-                        spread {formatNumber(metric.diff_min, digitsFor(metric.diff_min))} to {formatNumber(metric.diff_max, digitsFor(metric.diff_max))} {metric.unit}, not a confidence bound
-                      </span>
-                    </td>
-                    <td>{baseline == null ? "—" : `${formatNumber(baseline, digits)} ${metric.unit}`}</td>
-                    <td>{ember == null ? "—" : `${formatNumber(ember, digits)} ${metric.unit}`}</td>
-                    <td>{delta == null ? "—" : `${formatNumber(delta, digits)} ${metric.unit}`}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {comparison.notes.map((note) => (
-            <p key={note} className="meta">{note}</p>
-          ))}
-        </>
-      ) : (
-        <p className="empty">No comparison is loaded. Nominal columns come from comparison.fixture.json.</p>
-      )}
-      <PlanMetricsBlock title="This snapshot" metrics={props.state.metrics} />
-    </div>
-  );
-}
-
-function PlanMetricsBlock(props: { title: string; metrics: PlanMetrics }) {
-  return (
-    <section>
-      <h2>{props.title}</h2>
-      <dl>
-        {METRICS.map((metric) => {
-          const value = props.metrics[metric.key];
-          return (
-            <span key={metric.key} className="metric-row">
-              <dt>{metric.label}</dt>
-              <dd>{typeof value === "number" ? `${formatNumber(value, metric.digits)} ${metric.unit}` : "—"}</dd>
-            </span>
-          );
-        })}
-      </dl>
-      <p className="meta">{props.metrics.projected ? "Projected for the rest of the horizon." : "Outcome so far, not a projection."}</p>
-    </section>
-  );
-}
-
-function Scatter(props: {
+  nominal: { ember?: PlanMetrics; baseline?: PlanMetrics };
   scatter: ScatterPoint[];
   scatterTotal: number | null;
-  state: StateSnapshot;
   busy: string | null;
+  onCompare: () => void;
   onOptimize: () => void;
 }) {
+  const comparison = props.comparison;
+  const rows = PROOF_METRICS.map(({ metric, label, unit }) => {
+    const row = comparison?.metrics.find((item) => item.metric === metric);
+    const scale = metric === "hospital_outage_s" ? 1 / 60 : 1;
+    return row
+      ? { metric, label, unit, baseline: row.baseline_mean * scale, ember: row.ember_mean * scale, spread: `EMBER − baseline: ${formatNumber(row.diff_min * scale)} to ${formatNumber(row.diff_max * scale)}` }
+      : { metric, label, unit, baseline: (props.nominal.baseline?.[metric] ?? 0) * scale, ember: (props.nominal.ember?.[metric] ?? 0) * scale, spread: "" };
+  });
   const points = props.scatter;
-  const batch = points[0]?.batchId;
   const robust = robustOf(props.state.plan);
-  const result = robust && (batch == null || robust.batch_id === batch) ? robust : null;
+  const result = robust && (points.length === 0 || robust.batch_id === points[0].batchId) ? robust : null;
   return (
     <div className="stack">
-      <button className="primary" disabled={props.busy != null} onClick={props.onOptimize}>
-        {props.busy === "optimize"
-          ? `Optimizing… ${points.length}${props.scatterTotal ? ` / ${props.scatterTotal}` : ""} runs`
-          : "Optimize (robust replan)"}
-      </button>
-      <p className="meta">
-        Top plan candidates and the baseline, each run in 20 perturbed worlds (travel times, flood timing, backup
-        endurance, a vehicle failing) on Daytona sandboxes or the local pool. EMBER keeps the candidate with the best
-        worst 20% of runs: people unreached, then overflow.
-      </p>
-      {points.length === 0 ? (
-        <p className="empty">No runs yet. Optimize fills this chart live, one dot per run.</p>
-      ) : (
-        <ScatterChart points={points} total={props.scatterTotal} chosen={result?.chosen ?? null} />
-      )}
-      {result?.ranking ? <Ranking robust={result} /> : null}
+      <section>
+        <header className="section-head">
+          <h3>EMBER vs baseline</h3>
+          <button className="ghost" disabled={props.busy != null} onClick={props.onCompare}>
+            {props.busy === "compare" ? "Running…" : "Run comparison"}
+          </button>
+        </header>
+        <table className="grid">
+          <thead>
+            <tr>
+              <th>Metric</th>
+              <th>Baseline</th>
+              <th>EMBER</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.metric}>
+                <td>
+                  {row.label}
+                  {row.spread ? <span>{row.spread}</span> : null}
+                </td>
+                <td>{formatNumber(row.baseline, 0)} {row.unit}</td>
+                <td><strong>{formatNumber(row.ember, 0)}</strong> {row.unit}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="meta">
+          {comparison
+            ? `Mean of ${comparison.seeds?.length ?? "?"} perturbed worlds; the spread is a range, not a confidence bound.`
+            : "The forecast world only. Run the comparison (Live) for perturbed worlds."}
+        </p>
+      </section>
+      <section>
+        <header className="section-head">
+          <h3>Stress test on Daytona</h3>
+          <button className="primary" disabled={props.busy != null} onClick={props.onOptimize}>
+            {props.busy === "optimize" ? "Running…" : "Optimize"}
+          </button>
+        </header>
+        <p className="throughput">
+          {props.busy === "optimize"
+            ? `${points.length}${props.scatterTotal ? ` / ${props.scatterTotal}` : ""} worlds back`
+            : result
+              ? throughput(result)
+              : "Top candidate plans and the baseline, each run in perturbed worlds: travel times, flood timing, backup endurance, a vehicle failing."}
+        </p>
+        {points.length > 0 ? <ScatterChart points={points} chosen={result?.chosen ?? null} /> : null}
+        {result?.ranking ? <Verdict robust={result} /> : null}
+      </section>
     </div>
   );
 }
 
-function candidateClass(candidate: string, chosen: string | null): string {
-  if (candidate === "baseline") return "baseline";
-  if (candidate === chosen || candidate === "ember") return "chosen";
-  return "candidate";
+function throughput(robust: RobustSummary): string {
+  const where = robust.pool === "daytona" ? `${robust.workers ?? "?"} Daytona sandboxes` : `${robust.pool} pool${robust.workers ? ` (${robust.workers} workers)` : ""}`;
+  const time = robust.fanout_wall_s != null ? ` · ${robust.fanout_wall_s.toFixed(1)} s` : "";
+  const startup = robust.startup_s ? ` (+${robust.startup_s.toFixed(1)} s startup)` : "";
+  return `${where} · ${robust.jobs} worlds${time}${startup}`;
 }
 
-function ScatterChart(props: { points: ScatterPoint[]; total: number | null; chosen: string | null }) {
-  const points = props.points;
-  const maxX = Math.max(...points.map((point) => point.peopleUnreached), 1);
-  const maxY = Math.max(...points.map((point) => point.overflowM3), 1);
-  const width = 300;
-  const height = 200;
+function Verdict(props: { robust: RobustSummary }) {
+  const r = props.robust;
+  const worst = (candidate: string) => r.ranking?.find((row) => row.candidate === candidate)?.worst20_people_unreached;
+  const rows: Array<{ label: string; value?: number; tone: string }> = [
+    { label: `Chosen · ${r.chosen}`, value: worst(r.chosen), tone: "chosen" },
+    ...(r.nominal_best !== r.chosen ? [{ label: `Best on the forecast · ${r.nominal_best}`, value: worst(r.nominal_best), tone: "candidate" }] : []),
+    { label: "Baseline", value: worst("baseline"), tone: "baseline" },
+  ];
+  return (
+    <>
+      <ul className="verdict">
+        {rows.map((row) => (
+          <li key={row.label} className={row.tone}>
+            <span>{row.label}</span>
+            <strong>{formatNumber(row.value, 1)}</strong>
+          </li>
+        ))}
+      </ul>
+      <p className="meta">People not reached in the worst 20% of {r.seeds} worlds. {r.nominal_best !== r.chosen ? "EMBER keeps the plan that holds up when things go wrong, not the one that looks best on the forecast." : "The best plan on the forecast is also the most robust."}</p>
+    </>
+  );
+}
+
+const CLASSES = ["candidate", "baseline", "chosen"] as const;
+
+/** One path per class, not one element per run, so 1,000 runs stay cheap to redraw as they stream in. */
+function ScatterChart(props: { points: ScatterPoint[]; chosen: string | null }) {
+  const width = 320;
+  const height = 190;
   const left = 34;
   const bottom = 26;
   const pad = 10;
-  const x = (v: number) => left + (v / maxX) * (width - left - pad);
-  const y = (v: number) => height - bottom - (v / maxY) * (height - bottom - pad);
-  // draw the chosen plan last so it sits on top
-  const order = [...points].sort(
-    (a, b) => Number(candidateClass(a.candidate, props.chosen) === "chosen") - Number(candidateClass(b.candidate, props.chosen) === "chosen"),
-  );
+  let maxX = 1;
+  let maxY = 1;
+  for (const point of props.points) {
+    maxX = Math.max(maxX, point.peopleUnreached);
+    maxY = Math.max(maxY, point.overflowM3);
+  }
+  const paths: Record<(typeof CLASSES)[number], string> = { candidate: "", baseline: "", chosen: "" };
+  for (const point of props.points) {
+    const kind = point.candidate === "baseline" ? "baseline" : point.candidate === props.chosen || point.candidate === "ember" ? "chosen" : "candidate";
+    const r = kind === "chosen" ? 3.5 : 2.8;
+    const cx = left + (point.peopleUnreached / maxX) * (width - left - pad);
+    const cy = height - bottom - (point.overflowM3 / maxY) * (height - bottom - pad);
+    paths[kind] += `M${(cx - r).toFixed(1)} ${cy.toFixed(1)}a${r} ${r} 0 1 0 ${2 * r} 0a${r} ${r} 0 1 0 ${-2 * r} 0`;
+  }
   return (
     <figure className="scatter">
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Robustness scatter">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Robustness scatter: one dot per simulated world">
         <line className="axis" x1={left} y1={height - bottom} x2={width - pad} y2={height - bottom} />
         <line className="axis" x1={left} y1={pad} x2={left} y2={height - bottom} />
         <text className="tick" x={left} y={height - bottom + 12}>0</text>
         <text className="tick end" x={width - pad} y={height - bottom + 12}>{Math.round(maxX)}</text>
         <text className="tick end" x={left - 4} y={pad + 4}>{Math.round(maxY).toLocaleString("en-US")}</text>
-        <text className="label" x={(left + width) / 2} y={height - 4}>people unreached →</text>
+        <text className="label" x={(left + width) / 2} y={height - 4}>people not reached →</text>
         <text className="label" transform={`translate(10 ${(height - bottom) / 2}) rotate(-90)`}>overflow m³ →</text>
-        {order.map((point) => {
-          const kind = candidateClass(point.candidate, props.chosen);
-          return (
-            <circle key={point.runId} cx={x(point.peopleUnreached)} cy={y(point.overflowM3)} r={kind === "chosen" ? 4.5 : 3.5} className={kind}>
-              <title>{point.candidate} · seed {point.seed} · {point.peopleUnreached} unreached · {Math.round(point.overflowM3).toLocaleString("en-US")} m³</title>
-            </circle>
-          );
-        })}
+        {CLASSES.map((kind) => (
+          <path key={kind} className={kind} d={paths[kind]} />
+        ))}
       </svg>
       <figcaption>
-        <span className="key"><i className="dot chosen" /> {props.chosen ? `chosen (${props.chosen})` : "chosen (when done)"}</span>
+        <span className="key"><i className="dot chosen" /> {props.chosen ? `chosen (${props.chosen})` : "chosen"}</span>
         <span className="key"><i className="dot candidate" /> other candidates</span>
         <span className="key"><i className="dot baseline" /> baseline</span>
-        <span>{points.length}{props.total ? ` / ${props.total}` : ""} runs in {points[0]?.batchId}. Spread, not confidence bounds.</span>
+        <span>{props.points.length} worlds</span>
       </figcaption>
     </figure>
   );
-}
-
-function Ranking(props: { robust: RobustSummary }) {
-  const r = props.robust;
-  return (
-    <section>
-      <h3>Ranking · {r.jobs} runs on {r.pool}{r.fanout_wall_s != null ? ` in ${r.fanout_wall_s.toFixed(1)} s` : ""}</h3>
-      <table className="grid">
-        <thead>
-          <tr><th>Plan</th><th>Worst 20%</th><th>Mean</th><th>Max</th><th>Overflow</th></tr>
-        </thead>
-        <tbody>
-          {(r.ranking ?? []).map((row) => (
-            <tr key={row.candidate} className={row.candidate === r.chosen ? "picked" : ""}>
-              <td>
-                {row.candidate}
-                {row.candidate === r.chosen ? <span>chosen</span> : null}
-                {row.candidate === r.nominal_best && row.candidate !== r.chosen ? <span>best on the forecast</span> : null}
-              </td>
-              <td>{row.worst20_people_unreached.toFixed(1)}</td>
-              <td>{row.mean_people_unreached.toFixed(1)}</td>
-              <td>{row.max_people_unreached}</td>
-              <td>{Math.round(row.mean_overflow_m3).toLocaleString("en-US")} m³</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <p className="meta">People unreached per run. Rule: {r.rule}.</p>
-    </section>
-  );
-}
-
-function Plans(props: {
-  plans: PlanSnapshot[];
-  comparison: Comparison | null;
-  onReplan: () => void;
-  busy: string | null;
-}) {
-  const fromCompare = props.comparison?.plans.ember.versions ?? [];
-  const snapshots = new Map(props.plans.map((plan) => [plan.version, plan]));
-  const rows = fromCompare.length > 0
-    ? fromCompare.map((version) => ({
-        version: version.version,
-        t_s: version.t_s,
-        trigger: version.trigger,
-        changeCount: version.changes,
-        wall_s: version.wall_s,
-        changes: snapshots.get(version.version)?.changes ?? [],
-        reserved: snapshots.get(version.version)?.reserved,
-      }))
-    : [...snapshots.values()].sort((a, b) => a.version - b.version).map((plan) => ({
-        version: plan.version,
-        t_s: plan.created_at_t_s,
-        trigger: plan.trigger ?? "",
-        changeCount: plan.changes?.length,
-        wall_s: undefined as number | undefined,
-        changes: plan.changes ?? [],
-        reserved: plan.reserved,
-      }));
-  const known = new Set(rows.map((row) => row.version));
-  for (const plan of snapshots.values()) {
-    if (known.has(plan.version)) continue;
-    rows.push({
-      version: plan.version,
-      t_s: plan.created_at_t_s,
-      trigger: plan.trigger ?? "",
-      changeCount: plan.changes?.length,
-      wall_s: undefined,
-      changes: plan.changes ?? [],
-      reserved: plan.reserved,
-    });
-  }
-  rows.sort((a, b) => a.version - b.version);
-
-  return (
-    <div className="stack">
-      {props.comparison && props.comparison.scenario_id !== scenario.scenario_id ? (
-        <p className="meta">
-          Versions are from the {props.comparison.scenario_id} comparison record, not the map scenario.
-        </p>
-      ) : null}
-      <button className="primary" disabled={props.busy != null} onClick={props.onReplan}>
-        {props.busy === "replan" ? "Replanning…" : "Replan"}
-      </button>
-      {rows.length === 0 ? <p className="empty">No plan versions yet.</p> : null}
-      <ol className="versions">
-        {rows.map((row, index) => (
-          <li key={row.version}>
-            <h2>{index === 0 ? `v${row.version}` : `v${rows[index - 1].version} → v${row.version}`}</h2>
-            <p className="meta">
-              {formatSim(row.t_s)}
-              {row.changeCount != null ? ` · ${row.changeCount} changes` : ""}
-              {row.wall_s != null ? ` · ${row.wall_s.toFixed(2)} s` : ""}
-            </p>
-            {row.trigger ? <p>{row.trigger}</p> : null}
-            {row.reserved && row.reserved.length > 0 ? <p className="meta">Reserved: {row.reserved.join(", ")}</p> : null}
-            {row.changes.length > 0 ? (
-              <ul>
-                {row.changes.map((change) => (
-                  <li key={`${row.version}-${change.assignment_id}-${change.change}`}>
-                    {change.change} {change.assignment_id}
-                    {change.note ? ` — ${change.note}` : ""}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="empty">No assignment diff was published for this version.</p>
-            )}
-          </li>
-        ))}
-      </ol>
-    </div>
-  );
-}
-
-export function snapshotNote(state: StateSnapshot): string {
-  const source = state.source === "scenario"
-    ? "Scenario picture"
-    : state.source === "engine-example"
-      ? "Engine example"
-      : state.source === "simulator"
-        ? "Simulator"
-        : state.source === "backend"
-          ? "Backend"
-          : "Snapshot";
-  const name = state.scenario_id === scenario.scenario_id ? scenario.name : state.scenario_id;
-  return `${source} at ${formatSim(state.t_s)} · ${name}`;
 }

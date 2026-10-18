@@ -143,6 +143,44 @@ def test_daytona_wire_protocol_with_retry(world, scn):
     assert any("boom" in line for line in pool.log)              # the failed job was retried elsewhere
 
 
+def test_warm_pool_runs_chunks_and_replaces_dead_sandboxes(world, scn):
+    plans = {"c00": {"assignments": []}}
+    pool = FakeDaytonaPool(2, local_fallback_world=world)
+    calls = lambda: sum(sb.code_interpreter.calls for sb in pool.sandboxes)  # noqa: E731
+    asyncio.run(pool.arun("v1", scn, plans, [], J.make_jobs("v1", ["c00"], [1, 2, 3, 4], scn, world.n_edges)))
+    first = list(pool.sandboxes)
+    assert calls() == 2 + 2 + 2                                  # preludes, batch setups, one call per 2-job chunk
+    asyncio.run(pool.arun("v2", scn, plans, [], J.make_jobs("v2", ["c00"], [1, 2, 3, 4], scn, world.n_edges)))
+    assert pool.sandboxes == first and calls() == 6 + 2 + 2      # warm: no new sandbox, no prelude
+
+    async def gone(code, timeout=None):
+        raise RuntimeError("sandbox not found")
+
+    async def delete(sb, timeout=None):
+        pass
+    for sb in first:
+        sb.code_interpreter.run_code = gone
+    pool.client = SimpleNamespace(delete=delete)
+    pts = asyncio.run(pool.arun("v3", scn, plans, [], J.make_jobs("v3", ["c00"], [1, 2], scn, world.n_edges)))
+    assert len(pts) == 2 and all(sb not in first for sb in pool.sandboxes) and not pool.fell_back
+    assert {p["worker"] for p in pts} <= {"fake-0", "fake-1"} and "dropped 2 of 2" in pool.log[0]
+
+
+def test_a_dropped_connection_during_batch_setup_keeps_the_sandbox(world, scn):
+    pool = FakeDaytonaPool(2, local_fallback_world=world)
+    asyncio.run(pool.astart())
+    first = list(pool.sandboxes)
+    ci = first[0].code_interpreter
+    real = ci.run_code
+
+    async def once(code, timeout=None):   # the batch setup's connection closes once (1006 under load)
+        ci.run_code = real
+        raise ConnectionError("WebSocket connection closed unexpectedly (close code 1006)")
+    ci.run_code = once
+    pts = asyncio.run(pool.arun("v1", scn, {"c00": {"assignments": []}}, [], J.make_jobs("v1", ["c00"], [1, 2], scn, world.n_edges)))
+    assert len(pts) == 2 and pool.sandboxes == first and not pool.log
+
+
 def test_get_pool_falls_back_to_local(monkeypatch):
     monkeypatch.delenv("DAYTONA_API_KEY", raising=False)
     monkeypatch.setattr("ember_engine.daytona.pool.load_env", lambda *a, **k: None)

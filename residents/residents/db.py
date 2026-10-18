@@ -271,9 +271,9 @@ class Store:
                 db.execute("UPDATE phones SET thread_key = NULL WHERE handle = ?", (handle,))
             db.execute("DELETE FROM kv WHERE key = 'extra_households'")
             # per-run conversation memory: half-answered questions, last instruction texted, questions asked,
-            # step-by-step directions, where located phones were placed, pre-placement chat
+            # step-by-step directions, where located phones were placed, pre-placement chat, when we last called
             for prefix in ("pending:", "instr:", "asked:", "rejected:", "guide:", "located:", "lobby:", "welcomed:", "keep:",
-                           "question:"):
+                           "question:", "call:"):
                 db.execute("DELETE FROM kv WHERE key LIKE ?", (prefix + "%",))
 
     def apply_snapshot(self, state: dict) -> None:
@@ -483,7 +483,7 @@ class Store:
     def delete_phone(self, handle: str) -> None:
         with self._tx() as db:
             db.execute("DELETE FROM phones WHERE handle = ?", (handle,))
-            db.execute("DELETE FROM kv WHERE key = ? OR key LIKE ?", (f"located:{handle}", f"lobby:{handle}%"))
+            db.execute("DELETE FROM kv WHERE key IN (?, ?) OR key LIKE ?", (f"located:{handle}", f"player:{handle}", f"lobby:{handle}%"))
 
     def unplace_phone(self, handle: str) -> None:
         """Back to waiting for a location (thread_key NULL, scenario kept so it isn't legacy-bound)."""

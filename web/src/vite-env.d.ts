@@ -2,7 +2,7 @@
 
 interface ImportMetaEnv {
   readonly VITE_API_BASE?: string;
-  readonly VITE_GOOGLE_MAPS_KEY?: string;
+  readonly VITE_JOIN_NUMBER?: string;
 }
 
 interface ImportMeta {

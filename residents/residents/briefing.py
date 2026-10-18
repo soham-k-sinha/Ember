@@ -31,8 +31,9 @@ OUTSIDE_M = 40.0        # pickup corner this close = "right outside"
 LIVE = ("proposed", "offered", "confirmed", "en_route", "working")
 SHARES = re.compile(r"shares the trip with household #(\d+)")  # the engine's rationale for a shared trip (D59)
 TOPICS = ("plan", "eta", "pickup_place", "destination", "others", "vehicles", "bring", "flood", "roads", "safety", "other")
-BRING = ("Bring medications (and prescriptions), ID, your phone and charger, glasses, and anything the person who "
-         "needs help uses (walker, oxygen). One small bag each; leave everything else.")
+BRING = ("Bring medications (and prescriptions), ID, your phone and charger, glasses, and anything someone with you "
+         "needs, like a walker or oxygen. Bring pets too, in a carrier or on a leash. One small bag each; leave "
+         "everything else.")
 # Fixed, vetted wording (Ready.gov flood guidance), never generated: the one answer that must be right every time.
 SAFETY = ("In a real emergency, call 911. Don't walk or drive through floodwater: 6 inches of moving water can knock "
           "you down and 1 foot can sweep a car away. If water comes inside, go to a higher floor (not a closed attic), "
@@ -341,6 +342,10 @@ class Briefing:
         a = self.mine(thread)
         res = self._resources()
         if a is None:
+            shelters = [f["name"] for f in self.store.facilities() if f["type"] == "shelter"]
+            if topic == "destination" and shelters and "household_id" in thread:  # then what we still need to know
+                q = next((x["question"] for x in self._view().get("info_requests", []) if x["to"] == thread), None)
+                return f"Everyone we pick up goes to {' or '.join(shelters)}." + (f" {q}" if q else "")
             return None  # nothing scheduled: the status text says why
         who = res.get(a["resource_id"], {}).get("name", a["resource_id"])
         now = self._now()

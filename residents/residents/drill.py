@@ -193,16 +193,11 @@ class Drill:
             print(f"usage: call r1  (participants: {', '.join(self.names.values())})")
             return
         if self.args.dry:
-            st.voice.open(handle)
-            if not st.voice.sessions[handle].outbox:
-                await st.voice.say_situation(handle)
-            from .speech import render_all
-            from .voice import OPENER
-            print(f"\n[pretend call to {name}] EMBER: {OPENER} {render_all(st.voice.sessions[handle].outbox)}")
+            print(f"\n[pretend call to {name}] EMBER: {await st.voice.opening(handle, 'console')}")
             st.voice.sessions[handle].outbox.clear()
             return
         try:
-            rec = await st.voice.call(handle, reason="drill")
+            rec = await st.voice.call(handle, reason="console")
             print(f"calling {name} … (conversation {rec.get('conversation_id')})")
         except (RuntimeError, ValueError) as e:
             print(f"call to {name} failed: {e}")
@@ -423,12 +418,12 @@ class Drill:
             elif line.startswith("call "):
                 await self.call(line[5:].strip())
             elif line == "calls":
-                v = st.voice
-                for c in v.calls:
-                    print(f"  {self.names.get(c['handle'], c['handle'])}: {c['reason']} · conversation {c['conversation_id']}")
-                for h, x in v.sessions.items():
-                    print(f"  live: {self.names.get(h, h)} · {x.turns} turn(s) · {len(x.outbox)} unsaid")
-                if not v.calls and not v.sessions:
+                calls = st.voice.calls_view()
+                for c in calls["live"]:
+                    print(f"  live: {self.names.get(c['handle'], c['handle'])} ({c['reason']}) · {c['turns']} turn(s)")
+                for c in calls["recent"]:
+                    print(f"  {self.names.get(c['handle'], c['handle'])} ({c['reason']}): {c['outcome']} · {c['turns']} turn(s)")
+                if not calls["live"] and not calls["recent"]:
                     print("  no calls yet")
             elif line in ("questions", "qs"):
                 await self.questions()

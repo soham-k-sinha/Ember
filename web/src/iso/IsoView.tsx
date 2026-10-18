@@ -11,10 +11,10 @@ import { agentWorld, buildAgents, setScene, waitLonLat, type AgentWorld } from "
 import { Crowd } from "./crowd";
 import { FloodWater } from "./water";
 import { TrafficCars } from "./traffic";
-import { clockLabel, lightAt, tint } from "./lighting";
+import { lightAt, tint } from "./lighting";
 import { SKY_BG } from "./palette";
 import { fixturePlaybacks, scenario, town } from "../fixtures";
-import { householdColor, peopleCount, type LegendMode } from "../layers";
+import { householdColor, peopleCount } from "../model";
 import type { WalkerPlan } from "../people";
 import { pathAhead, type Playback } from "../playback";
 import type { Closure, Selection, StateFacility, StateResource, StateSnapshot } from "../types";
@@ -22,14 +22,16 @@ import { edgePoint, KZ, projector, type Projector } from "./project";
 import { buildStatic, type StaticScene } from "./scene";
 import { CrowdBudget, figureScale, populationAtZoom } from "./density";
 
+/** A drill player's household: always pinned, ringing while EMBER has them on a call. */
+export type PlayerPin = { label: string; onCall: boolean };
+
 export type IsoProps = {
   state: StateSnapshot;
   t: number;
   closures: Closure[];
   playback: Playback | null;
   walkers: WalkerPlan | null;
-  showWalkers: boolean;
-  legend: LegendMode;
+  players: Map<number, PlayerPin>;
   selection: Selection | null;
   follow: Selection | null;
   onSelect: (selection: Selection | null) => void;
@@ -450,7 +452,7 @@ function drawPeople(ctx: Ctx, props: IsoProps, t: number, now: number) {
   const requested = populationAtZoom(cam.s);
   const strollCount = ctx.crowdBudget.sample((now - ctx.lastNow) * 1000, requested);
   const figureK = figureScale(ctx.scene.atlas.figureM * KZ, cam.s);
-  const agents = buildAgents({ w: ctx.aw, state: props.state, t, legend: props.legend, walkers: props.walkers, showWalkers: props.showWalkers, now, strollCount, view, figureHeight: ctx.scene.atlas.figureM * KZ * figureK * 1.1, figureHalfWidth: 0.5 * figureK });
+  const agents = buildAgents({ w: ctx.aw, state: props.state, t, walkers: props.walkers, now, strollCount, view, figureHeight: ctx.scene.atlas.figureM * KZ * figureK * 1.1, figureHalfWidth: 0.5 * figureK });
   ctx.crowd.update(agents, dtS, cam.s, view, tint(lightAt(t).people));
   ctx.decals.clear();
   ctx.top.clear();
@@ -505,13 +507,10 @@ function vehicle(g: Graphics, p: Projector, r: StateResource, now: number, selec
     g.circle(...iso(on ? la : ra, on ? lb : rb, H + 0.5), 2.2).fill({ color: on ? 0xff3030 : 0x3a7dff, alpha: 0.28 * glowAlpha });
   }
   if (lights > 0.05 && r.status !== "available") {
-    const [ha, hb] = corner(L / 2 + 6, 0);
     const [l1a, l1b] = corner(L / 2, -W / 2 + 0.3);
     const [l2a, l2b] = corner(L / 2, W / 2 - 0.3);
     const [s1a, s1b] = corner(L / 2 + 7, -2.6);
     const [s2a, s2b] = corner(L / 2 + 7, 2.6);
-    void ha;
-    void hb;
     g.poly([...iso(l1a, l1b, 0.7), ...iso(s1a, s1b, 0), ...iso(s2a, s2b, 0), ...iso(l2a, l2b, 0.7)]).fill({ color: 0xfff1c8, alpha: 0.22 * lights });
   }
 }
@@ -578,20 +577,19 @@ function pill(ctx: Ctx, key: string, text: string, x: number, y: number, style: 
 }
 
 function hit(ctx: Ctx, key: string, x: number, y: number, r: number, select: Selection) {
-  const props = { ...select };
   let target = ctx.hits.getChildByLabel(key) as Graphics | null;
   if (!target) {
-    target = new Graphics().circle(0, 0, 1).fill({ color: 0xffffff, alpha: 0.001 });
-    target.label = key;
-    target.eventMode = "static";
-    target.cursor = "pointer";
-    ctx.hits.addChild(target);
+    const hitTarget = new Graphics().circle(0, 0, 1).fill({ color: 0xffffff, alpha: 0.001 });
+    hitTarget.label = key;
+    hitTarget.eventMode = "static";
+    hitTarget.cursor = "pointer";
+    hitTarget.on("pointertap", (e: FederatedPointerEvent) => {
+      e.stopPropagation();
+      if (!ctx.drag.moved) currentSelect?.({ ...select });
+    });
+    ctx.hits.addChild(hitTarget);
+    target = hitTarget;
   }
-  target.removeAllListeners("pointertap");
-  target.on("pointertap", (e: FederatedPointerEvent) => {
-    e.stopPropagation();
-    if (!ctx.drag.moved) currentSelect?.(props);
-  });
   target.position.set(x, y);
   target.scale.set(r);
   target.visible = true;
@@ -608,37 +606,20 @@ function drawOverlay(ctx: Ctx, props: IsoProps, _now: number, pulse: number) {
   const { p } = ctx;
   const zoomed = ctx.cam.s > 1.6;
 
-  // landmarks (real buildings) and the illustrative clock
+  // landmarks (real buildings)
   if (ctx.cam.s > 0.75) {
     for (const lm of ctx.scene.labels) {
       const [x, y] = toScreen(ctx, ...p.iso(lm.at[0], lm.at[1], lm.at[2] + 4));
       pill(ctx, `lm:${lm.text}`, lm.text, x, y, { bg: 0x1b1f27, fg: 0xe9e3d6, size: 10 });
     }
   }
-  pill(ctx, "clock", `${clockLabel(props.t)} · illustrative clock`, 92, ctx.app.screen.height - 14, { bg: 0x161a22, fg: 0xd9d3c6, size: 11 });
 
   // facilities: on stage → a base marker; off stage → an edge tile pointing to where it is
-  const offStageCount = new Map<string, number>();
   const offStage: Array<{ facility: StateFacility; at: [number, number] }> = [];
   for (const facility of props.state.facilities) {
     if (p.inside(facility.lon, facility.lat)) continue;
     const [a, b] = p.toAB(facility.lon, facility.lat);
     offStage.push({ facility, at: edgePoint(p, a, b, 14) });
-  }
-  for (const r of props.state.resources) {
-    if (p.inside(r.lon, r.lat) || offStage.length === 0) continue;
-    const [a, b] = p.toAB(r.lon, r.lat);
-    let best = offStage[0];
-    let d = Infinity;
-    for (const item of offStage) {
-      const [fa, fb] = p.toAB(item.facility.lon, item.facility.lat);
-      const dd = Math.hypot(a - fa, b - fb);
-      if (dd < d) {
-        d = dd;
-        best = item;
-      }
-    }
-    offStageCount.set(best.facility.id, (offStageCount.get(best.facility.id) ?? 0) + 1);
   }
 
   for (const facility of props.state.facilities) {
@@ -666,38 +647,44 @@ function drawOverlay(ctx: Ctx, props: IsoProps, _now: number, pulse: number) {
     g.roundRect(x - 13, y - 13, 26, 26, 7).fill(meta.color).stroke({ width: 2.4, color: ring });
     pill(ctx, `glyph:${facility.id}`, meta.glyph, x, y + 7, { bg: meta.color, size: meta.glyph.length > 1 ? 9 : 12 });
     if (onStage) g.moveTo(x, y + 13).lineTo(x, y + 13 + 22 * ctx.cam.s * 0.5).stroke({ width: 1.5, color: meta.color, alpha: 0.8 });
-    const waiting = offStageCount.get(facility.id);
-    const state = facility.state === "ok" ? "" : facility.state === "backup" ? ` · on backup${facility.endurance_left_s != null ? ` ${Math.round(facility.endurance_left_s / 60)} min` : ""}` : " · DOWN";
-    pill(ctx, `fac:${facility.id}`, `${facility.name.toUpperCase()}${sub}${state}${waiting ? ` · ${waiting} vehicle${waiting > 1 ? "s" : ""}` : ""}`, x, y - 17, {
-      bg: 0x161a22,
-      border: alarm ? ring : undefined,
-    });
+    pill(ctx, `fac:${facility.id}`, `${facility.name}${sub}`, x, y - 17, { bg: 0x161a22, border: alarm ? ring : undefined });
     hit(ctx, `hit:fac:${facility.id}`, x, y, 16, { kind: "facility", id: facility.id });
   }
 
-  // incidents: households still waiting
+  // you are here: the venue the judges are standing in, above its shelter marker
+  {
+    const [x, y] = toScreen(ctx, ...p.lonlat(town.venue.lon, town.venue.lat, 22));
+    pill(ctx, "venue", "YOU ARE HERE", x, y - 38, { bg: 0xffc542, fg: 0x1a1406, size: 10 });
+  }
+
+  // incidents: households still waiting, and every drill player's home
   for (const household of props.state.households) {
     if (!p.inside(household.lon, household.lat)) continue;
     const waiting = household.status === "needs" || household.status === "unknown" || household.status === "assigned" || household.status === "confirmed";
     const lost = household.status === "unreached";
-    if (!waiting && !lost && !(props.selection?.kind === "household" && props.selection.id === household.household_id)) continue;
-    const color = toHex(householdColor(household, props.legend, props.t));
+    const player = props.players.get(household.household_id);
+    const selected = props.selection?.kind === "household" && props.selection.id === household.household_id;
+    if (!waiting && !lost && !player && !selected) continue;
+    const gold = household.judge || player != null;
+    const color = toHex(householdColor(household));
     const [gx, gy] = toScreen(ctx, ...p.lonlat(...waitLonLat(ctx.aw, household)));
     const urgent = household.status === "needs" || household.status === "unknown";
     if (urgent) g.ellipse(gx, gy, (14 + 10 * pulse) * Math.min(1.6, Math.max(0.6, ctx.cam.s * 0.5)), (7 + 5 * pulse) * Math.min(1.6, Math.max(0.6, ctx.cam.s * 0.5))).stroke({ width: 2, color, alpha: 0.85 - 0.5 * pulse });
     const py = gy - 30;
     g.moveTo(gx, gy - 4).lineTo(gx, py + 9).stroke({ width: 1.5, color, alpha: 0.9 });
-    g.circle(gx, py, 10).fill(household.judge ? 0xffc542 : color).stroke({ width: 2, color: 0xffffff });
+    if (player?.onCall) g.circle(gx, py, 16 + 10 * pulse).stroke({ width: 3, color: 0xffc542, alpha: 1 - 0.7 * pulse });
+    g.circle(gx, py, 10).fill(gold ? 0xffc542 : color).stroke({ width: 2, color: 0xffffff });
     // deadline ring: the share of the time left before the water reaches them
     if (household.deadline_s && waiting) {
       const left = Math.max(0, Math.min(1, (household.deadline_s - props.t) / household.deadline_s));
       g.moveTo(gx, py - 13).arc(gx, py, 13, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * left).stroke({ width: 2.5, color: left < 0.25 ? 0xe5484d : 0xffffff, alpha: 0.95 });
     }
-    pill(ctx, `n:${household.household_id}`, String(peopleCount(household, 1)), gx, py + 7, { bg: household.judge ? 0xffc542 : color, fg: household.judge ? 0x1a1406 : 0xffffff, size: 11 });
-    if (household.judge || (props.selection?.kind === "household" && props.selection.id === household.household_id)) {
+    pill(ctx, `n:${household.household_id}`, String(peopleCount(household, 1)), gx, py + 7, { bg: gold ? 0xffc542 : color, fg: gold ? 0x1a1406 : 0xffffff, size: 11 });
+    if (gold || selected) {
       const needs = household.needs;
       const extra = needs !== "unknown" && (needs.mobility || needs.accessible_vehicle) ? " · wheelchair" : needs !== "unknown" && needs.medical ? " · medical" : needs === "unknown" ? " · needs unknown" : "";
-      pill(ctx, `hh:${household.household_id}`, `${household.judge ? "JUDGE · " : ""}${household.label ?? `#${household.household_id}`}${extra}`, gx, py - 13, { bg: 0x161a22, border: household.judge ? 0xffc542 : undefined, size: 10 });
+      const name = player ? `${player.label}${player.onCall ? " · ON CALL" : ""}` : `${household.judge ? "JUDGE · " : ""}${household.label ?? `#${household.household_id}`}`;
+      pill(ctx, `hh:${household.household_id}`, `${name}${extra}`, gx, py - 13, { bg: 0x161a22, border: gold ? 0xffc542 : undefined, size: 10 });
     }
     hit(ctx, `hit:hh:${household.household_id}`, gx, py, 14, { kind: "household", id: household.household_id });
   }

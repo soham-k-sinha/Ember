@@ -190,7 +190,7 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         photon = photon_client
         if photon is None and settings.photon_enabled:
             photon = PhotonClient(settings.photon_api_key, settings.photon_project_id)
-        app.state.messenger = Messenger(app.state.store, app.state.hub, photon)
+        app.state.messenger = Messenger(app.state.store, app.state.hub, photon, settings.max_players)
         app.state.outbound = app.state.guide = app.state.locator = None
         if app.state.planner is not None:
             app.state.outbound = Outbound(app.state.store, app.state.messenger, app.state.planner.bridge)
@@ -215,6 +215,9 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
             app.state.planner.plan_hooks.append(app.state.locator.on_plan)
         from .voice import Voice
         app.state.voice = Voice(app.state.store, app.state.messenger, app.state.outbound, settings)
+        if app.state.planner is not None:  # last: a call opens with what the other hooks just decided (D80)
+            app.state.planner.plan_hooks.append(app.state.voice.check)
+            app.state.planner.clock_hooks.append(app.state.voice.check)
         if app.state.planner is not None and settings.reply_enabled and (writer is not None or (
                 settings.anthropic_api_key and settings.extract_enabled)):
             from .reply import make_writer
@@ -237,6 +240,13 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
                     except Exception:  # noqa: BLE001 - keep retrying
                         log.exception("retry loop")
             retry_task = asyncio.create_task(retry_loop())
+        if app.state.planner is not None:
+            async def warm_pool() -> None:  # sandboxes up before the first /optimize (D82)
+                try:
+                    await run_in_threadpool(app.state.planner.bridge.warm_pool)
+                except Exception:  # noqa: BLE001 - /optimize starts them again, or runs locally
+                    log.exception("warming the robustness pool failed")
+            app.state.warm_task = asyncio.create_task(warm_pool())
         try:
             yield
         finally:
@@ -246,6 +256,8 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
                 await app.state.listener.stop()
             if photon is not None:
                 await photon.aclose()
+            if app.state.planner is not None:
+                await run_in_threadpool(app.state.planner.bridge.close_pool)
             app.state.store.close()
 
     app = FastAPI(title="Ember backend", version="0.1.0", lifespan=lifespan)
@@ -270,7 +282,8 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         return {"ok": True, "scenario_id": meta.get("scenario_id"), "plan_version": meta.get("plan_version"),
                 "t_s": meta.get("t_s"), "mode": "engine" if app.state.planner is not None else "static",
                 "extraction": "on" if app.state.intake is not None else "off", "photon": "enabled" if messenger().photon is not None else "disabled",
-                "photon_listener": listener.status() if listener is not None else None}
+                "photon_listener": listener.status() if listener is not None else None, "join_number": settings.join_number or None,
+                "max_players": settings.max_players}
 
     @app.get("/state")
     def get_state() -> dict:
@@ -369,12 +382,12 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
                 **messenger().delivery_details(thread, delivery)}
 
     @app.post("/optimize", status_code=202)
-    async def post_optimize(seeds: int = 20, k: int = 4) -> dict:
+    async def post_optimize(seeds: int = 50, k: int = 4) -> dict:
         """Start the robust fan-out in the background; watch WS `scatter_point` events, then `plan`.
         GET /optimize for the outcome. 409 while one is running."""
         p = planner()
-        if not (1 <= seeds <= 50 and 1 <= k <= 8):
-            raise HTTPException(422, "seeds must be 1..50 and k 1..8")
+        if not (1 <= seeds <= 200 and 1 <= k <= 8):
+            raise HTTPException(422, "seeds must be 1..200 and k 1..8")
         if p.optimizing:
             raise HTTPException(409, "an optimization is already running")
 
@@ -408,6 +421,11 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         if not 1 <= seeds <= 20:
             raise HTTPException(422, "seeds must be 1..20")
         return await planner().comparison(seeds)
+
+    @app.get("/playback")
+    async def get_playback(which: Literal["ember", "baseline"] = "ember") -> dict:
+        """The map's replay of the current plan or the baseline (contracts/playback.schema.json)."""
+        return await planner().playback(which)
 
     @app.get("/phones")
     def get_phones() -> list[dict]:
@@ -461,15 +479,14 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
 
     @app.get("/calls")
     def get_calls() -> dict:
-        v = app.state.voice
-        return {"calls": v.calls, "live": [{"handle": h, "conversation_id": x.conversation_id, "turns": x.turns,
-                                            "unsaid": len(x.outbox)} for h, x in v.sessions.items()]}
+        """Calls in progress and finished ones (D80): who, why, how many turns, and what each changed."""
+        return app.state.voice.calls_view()
 
     @app.post("/calls")
     async def post_call(body: CallIn) -> dict:
-        """Call a registered phone now (D74). The call opens with what the thread would say right now."""
+        """Call a registered phone now (D74). The call opens with what the thread most needs from them."""
         try:
-            return await app.state.voice.call(body.handle, reason="api")
+            return await app.state.voice.call(body.handle, reason="console")
         except ValueError as e:
             raise HTTPException(404, str(e)) from e
         except RuntimeError as e:
