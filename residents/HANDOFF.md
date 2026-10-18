@@ -9,7 +9,7 @@ FastAPI + SQLite. The DB is the source of truth; the engine session is resumed f
 People take part by text (Photon 2.0) and by phone call (ElevenLabs on the Photon SMS number, EMBER as its Custom
 LLM, D74). One LLM call turns a message into structured facts; the deterministic planner replans; each person gets
 one reply per turn, worded by a second model from the computed messages and checked by a guard (D76). When the model
-is unavailable a keyword parser returns the same `Extraction` (D75). Strangers join by texting "JOIN EMBER" to the SMS
+is unavailable or not configured, a keyword parser returns the same `Extraction` (D75, D85). Strangers join by texting "JOIN EMBER" to the SMS
 number (D78).
 
 ```

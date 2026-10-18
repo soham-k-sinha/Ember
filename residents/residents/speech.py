@@ -3,8 +3,10 @@ exactly what the thread would text, minus what only makes sense on a screen.
 
 - the "[EMBER drill]" prefix, "Welcome to the EMBER flood drill." and "(plan vN)" tags (the call opens by saying who
   is calling, once);
-- what a call has no time for (D80): examples in parentheses ("(e.g. 125 Western Ave)"), and an offer's out-by time
-  and the plan's reasons behind it ("It picks up 8 other households first; you share the trip with ...");
+- what a call has no time for (D80): examples in parentheses ("(e.g. 125 Western Ave)"), an offer's out-by time
+  and the plan's reasons behind it ("It picks up 8 other households first; you share the trip with ..."), the
+  "Step 1 of 4" labels and packing lists (the follow-up text has them), a pickup's destination, an ETA said twice, and
+  asides like "or tell us what changed" (a turn is said as one: "tell me if you change your mind" before a new offer);
 - "Reply YES / NO / DONE" → "Say yes / no / done", "reply with / send your" → "tell me", "we'll text you" →
   "we'll let you know", "text us" → "tell us";
 - street suffixes ("Western Ave" → "Western Avenue", "N Harvard St" → "North Harvard Street");
@@ -33,7 +35,18 @@ _RULES: list[tuple[re.Pattern, object]] = [
     (re.compile(r";\s*(?:it picks up|you share the trip)\b[^.]*"), ""),
     (re.compile(r"\s*Plan to be out within about \d+ min, before the water reaches your street\."), ""),
     (re.compile(r"\s*\(plan v\d+\)"), ""),
+    (re.compile(r"\bStep \d+ of \d+: "), ""),
+    (re.compile(r"Pack medications, ID, your phone and charger, then (\w)"), lambda m: m[1].upper()),
+    (re.compile(r"\s*Get medications, ID, [^.]*\."), ""),
+    (re.compile(r"Bring medications \(and prescriptions\), [^.]*\."), "Bring medications, ID and your phone."),
+    (re.compile(r"Confirmed: (.+?) is coming to you\. (?=.*\b\1 gets there)"), "Confirmed. "),
+    (re.compile(r"(\b([A-Z][\w ]*?) is arriving (in about \d+ min)\b.*?)\s*\2 gets there \3\."), r"\1"),
+    (re.compile(r" and take you to [^.]+(?=\.)"), ""),
+    (re.compile(r"; we need a few details to send the right vehicle|Please tell us: |, or tell us what changed"), ""),
+    (re.compile(r": 6 inches of moving water [^.]*\."), "."),
+    (re.compile(r"\s*Reply here if you change your mind\.(?=.*\bReply YES\b)"), ""),
     (re.compile(r"\b([Rr])eply (YES|NO|DONE)\b"), lambda m: _case("say", m[1]) + " " + m[2].lower()),
+    (re.compile(r"\b(YES|NO|DONE)\b"), lambda m: m[1].lower()),
     (re.compile(r"\b([Rr])eply (?:with|here)\b"), lambda m: _case("tell me", m[1])),
     (re.compile(r"\b([Ss])end (your|a|an|the two) (street address|address|intersection|nearest|cross streets)"),
      lambda m: _case("tell me", m[1]) + f" {m[2]} {m[3]}"),
@@ -62,4 +75,5 @@ def render(text: str) -> str:
 
 
 def render_all(texts: list[str]) -> str:
-    return " ".join(t for t in (render(x) for x in texts) if t)
+    """One turn's texts, said as one."""
+    return render(" ".join(texts))

@@ -1,7 +1,5 @@
 """Task 4: after a replan, each opted-in phone gets a text only when ITS instruction materially changed;
 plan info_requests are asked once. Plus POST /optimize streaming scatter points (local pool)."""
-import asyncio
-import copy
 import json
 import time
 from dataclasses import replace

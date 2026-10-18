@@ -62,18 +62,12 @@ PEOPLE = [
 FLOODED = "Callender St"  # a neighbour reports it flooded at 0:05: Sam's van has to go around
 HEADER = """# EMBER on the phone: simulated calls
 
-Written by `residents/scripts/sim_calls.py` (D80). One run of the Allston flood drill: the real planner and its
-40 scenario households, six residents who text in, the sim clock moved 5 minutes at a time. EMBER decides on its own
-whom to call and why (no reply while the water is close, a wheelchair or medical need not yet confirmed, a pickup
-that changed), most at-risk first, at most two calls at once. Every caller turn goes through the same endpoint
-ElevenLabs uses; every instruction EMBER says is the one its texts would say, rendered for speech. **Synthetic:** the six
-people and their words, the flood timing, the fleet. The keyword parser stands in for the LLM, so no model is in these
-calls. Times: EMBER speaks at 150 words a minute; "ms" is how long EMBER took to answer (a replan when needs change).
+Written by `residents/scripts/sim_calls.py` (D80, D85): the real planner on the Allston drill (40 scenario households
+plus six people who text in), the clock moved 5 min at a time; EMBER decides whom to call and why. Each turn goes through
+ElevenLabs' endpoint and says what the thread would text, shortened for speech (lists and steps follow by text).
+**Synthetic:** the people, their words, the flood timing, the fleet. No model: the keyword parser reads every reply.
+Speech at 150 words a minute; "ms" is EMBER's reply time (a replan when needs change).
 """
-
-
-async def no_llm(system, user):
-    raise RuntimeError("no LLM in this simulation: the keyword parser reads every reply")
 
 
 def secs(text: str) -> float:
@@ -86,11 +80,11 @@ def clock(t_s: float) -> str:
 
 class Sim:
     def __init__(self, bridge: EngineBridge, db: Path):
-        settings = replace(Settings(), db_path=db, reset_on_start=True, photon_enabled=False, extract_enabled=True,
+        settings = replace(Settings(), db_path=db, reset_on_start=True, photon_enabled=False, extract_enabled=False,
                            reply_enabled=False, geocode_enabled=False, auto_clock=False, start_t_s=0.0,
                            photon_voice_number=OURS, elevenlabs_api_key="sim", elevenlabs_agent_id="agent",
                            elevenlabs_phone_number_id="phone", voice_max_concurrent=2)
-        self.app = create_app(settings, bridge=bridge, llm=no_llm)
+        self.app = create_app(settings, bridge=bridge)  # no model: the keyword parser
         self.vapp = create_voice_app(lambda: self.app.state.voice, TOKEN)
         self.dials: list[dict] = []
         self.status: dict[str, str] = {}  # conversation id → what the fake ElevenLabs reports
@@ -209,7 +203,7 @@ async def main() -> None:
     bridge = EngineBridge(Settings().scenario)
     with tempfile.TemporaryDirectory() as tmp:
         sim = Sim(bridge, Path(tmp) / "sim.db")
-        logging.disable(logging.ERROR)  # the keyword parser stands in for the LLM: no outage errors
+        logging.disable(logging.ERROR)  # the transcript only
         async with sim.app.router.lifespan_context(sim.app):
             await sim.run()
     if args.out:

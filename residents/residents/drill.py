@@ -137,7 +137,7 @@ class Drill:
                 raise SetupError(f"voice app didn't start (is port {s.voice_port} in use? set VOICE_PORT)")
             await asyncio.sleep(0.1)
         if self.args.dry:
-            print(f"\nvoice: pretend calls (--dry). `call r1` starts one; type what they say with @r1 …")
+            print("\nvoice: pretend calls (--dry). `call r1` starts one; type what they say with @r1 …")
             return
         self.tunnel, public = await start_tunnel(s.voice_port)
         server_url = f"{public}/{token}/v1"

@@ -11,9 +11,9 @@ import pytest
 from residents import voice as voice_mod
 from residents.drill import Drill
 from residents.speech import render, render_all
-from residents.voice import INBOUND, OPENER, PROMISE, SYSTEM_PROMPT, configure_agent, create_voice_app
-from tests.test_drill import (GREEN, PUTNAM, R1, R2, Tap, drill, make, register, solo_bridge,  # noqa: F401
-                              text, thread_of)
+from residents.voice import (CALM, INBOUND, OPENER, PROMISE, SYSTEM_PROMPT, WHERE, WHO_WE_ARE, configure_agent,
+                             create_voice_app)
+from tests.test_drill import GREEN, PUTNAM, R1, R2, Tap, make, register, text, thread_of
 from tests.test_extract import ex, fact
 
 OURS = "+16175550199"           # the Photon voice number (placeholder)
@@ -63,7 +63,7 @@ def spoken(r) -> str:
 # ---------- speech ----------
 @pytest.mark.parametrize("text,want", [
     ("[EMBER drill] Van 2 will pick you up in about 12 min. Reply YES to confirm, or tell us what changed. (plan v3)",
-     "Van 2 will pick you up in about 12 minutes. Say yes to confirm, or tell us what changed."),
+     "Van 2 will pick you up in about 12 minutes. Say yes to confirm."),
     ("Walk to the corner of Putnam Ave and N Harvard St, about 120 m north of you (about 1 min on foot). Reply DONE when you're there.",
      "Walk to the corner of Putnam Avenue and North Harvard Street, about 120 meters north of you (about 1 minute on foot). Say done when you're there."),
     ("Welcome to the EMBER flood drill. Where are you right now? Reply with your street address (e.g. 125 Western Ave) "
@@ -71,8 +71,17 @@ def spoken(r) -> str:
     ("Van 2 will pick you up at the corner of Memorial Drive and River St in about 64 min and take you to the Treehouse. "
      "Plan to be out within about 110 min, before the water reaches your street. It picks up 8 other households first; "
      "you share the trip with 1 other household: it collects you both before the drop-off. Reply YES to confirm. (plan v4)",
-     "Van 2 will pick you up at the corner of Memorial Drive and River Street in about 64 minutes and take you to the "
-     "Treehouse. Say yes to confirm."),
+     "Van 2 will pick you up at the corner of Memorial Drive and River Street in about 64 minutes. Say yes to confirm."),
+    # lists, step labels and an ETA said twice: the follow-up text has them
+    ("Confirmed: Van 2 is coming to you. Step 1 of 4: Pack medications, ID, your phone and charger, then go out to "
+     "Flagg Street. Van 2 gets there in about 9 min. Reply DONE when you're there.",
+     "Confirmed. Go out to Flagg Street. Van 2 gets there in about 9 minutes. Say done when you're there."),
+    ("Your pickup is confirmed: Van 2 is arriving in about 9 min. Right now: Step 1 of 4: Walk to Flagg Street. "
+     "Van 2 gets there in about 9 min. Reply DONE when you're there.",
+     "Your pickup is confirmed: Van 2 is arriving in about 9 minutes. Right now: Walk to Flagg Street. Say done when you're there."),
+    ("Understood, we won't send Van 1. Reply here if you change your mind. Van 2 will pick you up in about 5 min. "
+     "Reply YES to confirm.", "Understood, we won't send Van 1. Van 2 will pick you up in about 5 minutes. Say yes to confirm."),
+    ("Reply YES to keep it, or NO to decline anyway.", "Say yes to keep it, or no to decline anyway."),
     ("Accessible Van 3 is the only wheelchair-accessible vehicle that fits 1 person; it picks up 2 other households first.",
      "Accessible Van 3 is the only wheelchair-accessible vehicle that fits 1 person."),
     ("Bring ID (and prescriptions), e.g. a charger.", "Bring ID (and prescriptions), for example, a charger."),
@@ -128,7 +137,7 @@ def test_a_call_says_what_the_thread_would_text(settings, solo_bridge, tmp_path)
         assert any(m["direction"] == "in" and m["text"] == "2 of us" for m in rows)  # the call is in the thread
     assert [w.replace(f" {PROMISE}", "") for w in by_call] == by_text, list(zip(FLOW, by_text, by_call))
     assert by_call[0].startswith("Got it: we have you at Putnam Avenue and Western Avenue.")
-    assert "Say yes to confirm" in by_call[1] and "Step 1 of 4" in by_call[3] and by_call[3].endswith(PROMISE)
+    assert "Say yes to confirm" in by_call[1] and by_call[3].startswith("Confirmed. ") and by_call[3].endswith(PROMISE)
 
 
 def test_after_the_call_it_texts_again(vd):
@@ -372,9 +381,37 @@ def test_call_words_that_are_not_for_the_thread(vd):
     key = f"household:{thread_of(c, R1)['household_id']}"
     before = len(c.app.state.store.thread_messages(key))
     turn = lambda w: spoken(say(c, w, caller=OURS, called=R1, conv="conv_9"))  # noqa: E731
-    assert turn("Hello?") == first
-    assert turn("Sorry, what?") == first
+    hello = turn("Hello?")
+    assert hello == f"{OPENER}. {first.split('. ', 1)[1]}" != first     # a short hello, never the whole opener again
+    assert turn("Sorry, what?") == hello
     who = turn("Who is this?")
-    assert who.startswith("This is EMBER, the HackHarvard flood drill") and who.endswith("wheelchair-accessible vehicle?")
+    assert who.startswith(WHO_WE_ARE) and who.endswith("wheelchair-accessible vehicle?")
     assert turn("Thank you, dear.") == "You're welcome. I'm texting you all of this now. Take care."
     assert not [m for m in c.app.state.store.thread_messages(key)[before:] if m["direction"] == "in"]
+
+
+def test_call_screening_gets_who_and_why_and_changes_nothing(vd):
+    register(vd, R1)
+    who = f"{WHO_WE_ARE} {WHERE}"  # who and why, then the one thing we need from them
+    assert spoken(say(vd, "Hi, if you record your name and reason for calling, I'll see if this person is available.")) == who
+    assert spoken(say(vd, "Please stay on the line.")) == who
+    assert vd.app.state.store.phone(handle=R1)["thread_key"] is None   # the screening didn't place anyone
+    assert {m["direction"] for m in vd.app.state.messenger.lobby_log(R1)} == {"out"}  # not stored as the resident's words
+
+
+def test_our_own_echo_is_ignored_but_the_caller_never_is(vd):
+    c = vd
+    c.app.state.intake.llm = c.app.state.locator.llm = None  # no model: the keyword parser
+    register(c, R1)
+    first = spoken(say(c, PUTNAM))
+    assert first.startswith("Got it: we have you at Putnam Avenue and Western Avenue.")
+    assert spoken(say(c, first)) == ""                                   # our words coming back: silence
+    offer = spoken(say(c, "Got it, you have me at Putnam Avenue and Western Avenue. 2 of us"))  # an answer in it
+    assert " will pick you up at " in offer, offer
+
+
+def test_a_frightened_caller_hears_a_calm_word_first(vd):
+    register(vd, R1)
+    text(vd, R1, PUTNAM)
+    vd.app.state.intake.llm = None  # the keyword parser
+    assert spoken(say(vd, "Oh my god, is the water coming? What do I do?")).startswith(f"{CALM} In this drill's flood forecast")
