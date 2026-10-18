@@ -271,9 +271,9 @@ class Store:
                 db.execute("UPDATE phones SET thread_key = NULL WHERE handle = ?", (handle,))
             db.execute("DELETE FROM kv WHERE key = 'extra_households'")
             # per-run conversation memory: half-answered questions, last instruction texted, questions asked,
-            # step-by-step directions, where located phones were placed, pre-placement chat
+            # step-by-step directions, where located phones were placed, pre-placement chat, when we last called
             for prefix in ("pending:", "instr:", "asked:", "rejected:", "guide:", "located:", "lobby:", "welcomed:", "keep:",
-                           "question:"):
+                           "question:", "call:"):
                 db.execute("DELETE FROM kv WHERE key LIKE ?", (prefix + "%",))
 
     def apply_snapshot(self, state: dict) -> None:

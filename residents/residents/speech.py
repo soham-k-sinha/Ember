@@ -1,7 +1,10 @@
 """A text message → the same words, said on a phone call (D74). Deterministic rewrites only: the call says
 exactly what the thread would text, minus what only makes sense on a screen.
 
-- the "[EMBER drill]" prefix and "(plan vN)" tags (the call opens by saying it's a drill, once);
+- the "[EMBER drill]" prefix, "Welcome to the EMBER flood drill." and "(plan vN)" tags (the call opens by saying who
+  is calling, once);
+- what a call has no time for (D80): examples in parentheses ("(e.g. 125 Western Ave)"), and an offer's out-by time
+  and the plan's reasons behind it ("It picks up 8 other households first; you share the trip with ...");
 - "Reply YES / NO / DONE" → "Say yes / no / done", "reply with / send your" → "tell me", "we'll text you" →
   "we'll let you know", "text us" → "tell us";
 - street suffixes ("Western Ave" → "Western Avenue", "N Harvard St" → "North Harvard Street");
@@ -24,6 +27,11 @@ def _case(word: str, like: str) -> str:
 
 _RULES: list[tuple[re.Pattern, object]] = [
     (re.compile(r"\[EMBER drill\]\s*"), ""),
+    (re.compile(r"Welcome to the EMBER flood drill\.\s*"), ""),
+    (re.compile(r"\s*\(e\.g\.[^)]*\)"), ""),
+    (re.compile(r"\s*\b(?:It picks up|You share the trip)\b[^.]*\."), ""),
+    (re.compile(r";\s*(?:it picks up|you share the trip)\b[^.]*"), ""),
+    (re.compile(r"\s*Plan to be out within about \d+ min, before the water reaches your street\."), ""),
     (re.compile(r"\s*\(plan v\d+\)"), ""),
     (re.compile(r"\b([Rr])eply (YES|NO|DONE)\b"), lambda m: _case("say", m[1]) + " " + m[2].lower()),
     (re.compile(r"\b([Rr])eply (?:with|here)\b"), lambda m: _case("tell me", m[1])),

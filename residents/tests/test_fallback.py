@@ -5,7 +5,7 @@ import pytest
 from residents import fallback
 from tests.test_drill import PUTNAM, R1, Tap, drill, register, solo_bridge, text, thread_of  # noqa: F401
 from tests.test_voice import OURS, say, spoken, vd  # noqa: F401
-from residents.voice import WHO_WE_ARE
+from residents.voice import WHERE, WHO_WE_ARE
 
 
 class Down:
@@ -24,6 +24,8 @@ def kinds(t, role="resident"):
 @pytest.mark.parametrize("t,want", [
     ("yes", [("confirm", None, None, None, None, None)]),
     ("Yeah sure", [("confirm", None, None, None, None, None)]),
+    ("Oh. Yes, yes please.", [("confirm", None, None, None, None, None)]),           # heard on calls (D80)
+    ("Oh, okay. What changed?", [("question", None, None, None, "plan", None)]),     # a nod, then a question
     ("no thanks", [("reject", None, None, None, None, None)]),
     ("done", [("done", None, None, None, None, None)]),
     ("I'm not ready", []),
@@ -84,10 +86,11 @@ def test_unreadable_before_details_repeats_the_plans_question(drill):
 
 def test_call_screening_gets_who_and_why_and_changes_nothing(vd):
     register(vd, R1)
-    assert spoken(say(vd, "Hi, if you record your name and reason for calling, I'll see if this person is available.")) == WHO_WE_ARE
-    assert spoken(say(vd, "Please stay on the line.")) == WHO_WE_ARE
-    assert vd.app.state.store.phone(handle=R1)["thread_key"] is None   # the screening didn't place or tell anyone anything
-    assert vd.app.state.messenger.lobby_log(R1) == []                   # not stored as something the resident said
+    who = f"{WHO_WE_ARE} {WHERE}"  # who and why, then the one thing we need from them
+    assert spoken(say(vd, "Hi, if you record your name and reason for calling, I'll see if this person is available.")) == who
+    assert spoken(say(vd, "Please stay on the line.")) == who
+    assert vd.app.state.store.phone(handle=R1)["thread_key"] is None   # the screening didn't place anyone
+    assert {m["direction"] for m in vd.app.state.messenger.lobby_log(R1)} == {"out"}  # not stored as the resident's words
 
 
 def test_our_own_echo_is_ignored_but_the_caller_never_is(vd):

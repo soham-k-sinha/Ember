@@ -86,6 +86,16 @@ public, behind a random path), and points the ElevenLabs agent at it (Custom LLM
 the caller). It prints what to paste if it can't. Give the new tunnel about a minute before the first call.
 Console: `call r1`, `calls`. API: `POST /calls {handle}`, `GET /calls`.
 
+**EMBER calls first (D80).** On every new plan and clock move EMBER calls the most at-risk residents itself (they
+wrote to us, a real number, no call on), earliest deadline first, at most `VOICE_MAX_CONCURRENT` (2; 0 = never) at
+once: no reply for 3 sim-min to an open offer, step or question while their deadline is within 45 min; a wheelchair or
+medical need not yet confirmed; a pickup that changed since they last wrote. One call per wait and per change, and a
+15 sim-min cooldown per (phone, reason). A call opens with who and why in one sentence, then the one thing they need
+to hear; when ElevenLabs reports it over, the plan follows by text. `GET /calls` →
+`{live: [{handle, household_id, reason, started_t_s, turns}], recent: [{handle, household_id, reason, outcome, turns,
+ended_t_s}]}`. Six calls end to end without ElevenLabs or an LLM: `uv run python scripts/sim_calls.py`
+(`--out ../docs/voice_transcripts.md`).
+
 ## API (so far)
 | | |
 |---|---|

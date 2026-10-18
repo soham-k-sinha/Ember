@@ -41,7 +41,8 @@ NOT_FOUND = ("We couldn't find \"{q}\" in the drill area ({area}). Send a street
              "cross streets there.")
 OUTSIDE = "That spot is outside the drill area ({area}). Send an address or intersection inside it."
 NO_BUILDING = "We couldn't match that spot to a building on our map. Send your street address, please."
-PLACED = "Got it: we have you at {label}. Your nearest pickup point is {corner}."
+PLACED = "Got it: we have you at {label}."
+PICKUP = " Your nearest pickup point is {corner}."
 ASK_FIRST = "We can tell you exactly what to do once we know where you are. "  # a question before a place (D60)
 JOINED = "Welcome to the EMBER flood drill. You're Player {n}: for this drill you live by {corner}, your pickup point."
 JOIN_LEAD_S = 1200.0    # a player's building floods at least this long after they join, so they can still be saved
@@ -217,7 +218,8 @@ class Locator:
             flood = f" Water is forecast to reach your street in about {m} min."
         else:
             flood = " Your street is flooding now."
-        intro = JOINED.format(n=as_player, corner=corner) if as_player else PLACED.format(label=where.label, corner=corner)
+        pickup = "" if corner.endswith(where.label) else PICKUP.format(corner=corner)  # they named that corner
+        intro = JOINED.format(n=as_player, corner=corner) if as_player else PLACED.format(label=where.label) + pickup
         await self.messenger.send_to_phone(handle, intro + flood)
         thread = {"household_id": hid}
         self.store.kv_set(f"located:{handle}", json.dumps({"household_id": hid, "lon": where.lon, "lat": where.lat,

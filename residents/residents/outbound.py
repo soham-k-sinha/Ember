@@ -3,7 +3,7 @@ instruction materially changed, and ask the plan's info_requests for phone threa
 
 The plan's `changes` list is per assignment and mostly ETA noise; what a person cares about is "who is
 coming and roughly when". So per phone thread we compare the instruction in the new plan with the last
-one we actually texted (kv `instr:<thread>`), and send when:
+one we actually texted (kv `instr:<thread>`, with when it last changed: D80 calls about it), and send when:
 - a vehicle is newly assigned, or a different vehicle/assignment replaces the one we told them about;
 - their pickup / generator is no longer coming (cancelled);
 - the ETA moved by ≥ MATERIAL_ETA_S.
@@ -143,7 +143,8 @@ class Outbound:
                 return msg  # not opted in / no phone: the instruction has not been offered
             self.store.kv_set(f"instr:{key}", json.dumps({"assignment_id": a["id"], "resource_id": a["resource_id"],
                                                            "eta_s": a["eta_s"], "plan_version": view["version"],
-                                                           "message_id": msg["id"]}))
+                                                           "message_id": msg["id"],
+                                                           "changed_t_s": now if last is not None and not force else None}))
             if delivery in ("sent", "dev") and self.store.mark_offered(view["version"], a["id"]):
                 await self.messenger.hub.broadcast("assignment", {
                     "plan_version": view["version"], "change": "status_changed", "assignment_id": a["id"],
@@ -159,7 +160,8 @@ class Outbound:
                     f"as soon as we have a new instruction. (plan v{view['version']})")
             msg, delivery = await self.messenger.send_message(thread, text, view["version"], last["assignment_id"])
             if delivery in ("sent", "dev", "failed"):
-                self.store.kv_set(f"instr:{key}", json.dumps({"assignment_id": None, "plan_version": view["version"]}))
+                self.store.kv_set(f"instr:{key}", json.dumps({"assignment_id": None, "plan_version": view["version"],
+                                                               "changed_t_s": now}))
             return msg
         return None
 
@@ -269,41 +271,49 @@ class Outbound:
                 + (f"; our plan has {f.get('name', 'your site')} {power}" if power else "")
                 + f". Text us if that changes, e.g. 'on backup, about 40 minutes of fuel left'. (plan v{v})")
 
-    async def situation(self, thread: dict) -> str | None:
+    async def situation(self, thread: dict, brief: bool = False) -> str | None:
         """Everything the plan says about this person right now, in one text (D60): where they stand, the
         step they're on, and what we still need from them. It answers "what's the plan?" / "what do I do?"
         and any question the plan has nothing more specific for, so no question is left without an answer.
+        `brief` (a call's opening, D80): only the most pressing of those, since a call says one thing at a time.
         Computed fields only; None only before there is a plan."""
         view = self.store.plan_view()
         if not view:
             return None
-        parts = []
         status = self.status_text(view, thread)
-        if status is not None:
-            parts.append(VERSION_TAG.sub("", status))
-        elif "household_id" in thread:  # placed, details not known yet: say what the flood means for them
-            h = next((x for x in self.store.households() if x["household_id"] == thread["household_id"]), {})
-            now = float(self.store.meta().get("t_s", 0.0))
-            if h.get("deadline_s") is None:
-                parts.append("Your street is outside this drill's forecast flood area, so no pickup is planned: stay "
-                             "where you are, above the ground floor if you can.")
-            elif (water := h["deadline_s"] + (self.bridge.margin_s if self.bridge else 0)) > now:
-                parts.append(f"In this drill's flood forecast, water reaches your street in about "
-                             f"{round((water - now) / 60)} min, so we're planning to pick you up; we need a few "
-                             f"details to send the right vehicle.")
-            else:
-                parts.append("Your street is flooding now; we need a few details to send the right vehicle.")
-        if self.guide is not None:
-            step = await self.guide.current_text(thread)
-            if step:
-                parts.append(f"Right now: {step}")
+        stand = VERSION_TAG.sub("", status) if status is not None else self.flood_text(thread)
+        step = await self.guide.current_text(thread) if self.guide is not None else None
         q = next((x for x in view.get("info_requests", []) if x["to"] == thread), None)
+        if brief and (step or status is not None):
+            parts, q = [step or stand], None
+        elif brief and q is not None:
+            parts = [q["question"]]
+        else:
+            parts = [stand, step and f"Right now: {step}", q and f"Please tell us: {q['question']}"]
         if q is not None:
-            parts.append(f"Please tell us: {q['question']}")
             self.store.kv_set(f"asked:{q['id']}", str(view["version"]))
+        parts = [p for p in parts if p]
         if not parts:
             return None
         return " ".join(parts) + f" (plan v{view['version']})"
+
+    def water_s(self, thread: dict) -> float | None:
+        """When the forecast flood reaches this household's street (None: it never does)."""
+        h = next((x for x in self.store.households() if x["household_id"] == thread.get("household_id")), {})
+        return None if h.get("deadline_s") is None else h["deadline_s"] + (self.bridge.margin_s if self.bridge else 0)
+
+    def flood_text(self, thread: dict) -> str | None:
+        """What the forecast flood means for a household whose details we don't know yet."""
+        if "household_id" not in thread:
+            return None
+        now = float(self.store.meta().get("t_s", 0.0))
+        if (water := self.water_s(thread)) is None:
+            return ("Your street is outside this drill's forecast flood area, so no pickup is planned: stay where you "
+                    "are, above the ground floor if you can.")
+        if water > now:
+            return (f"In this drill's flood forecast, water reaches your street in about {round((water - now) / 60)} "
+                    f"min, so we're planning to pick you up; we need a few details to send the right vehicle.")
+        return "Your street is flooding now; we need a few details to send the right vehicle."
 
     def next_info_request(self, view: dict, thread: dict) -> dict | None:
         return next((q for q in view.get("info_requests", []) if q["to"] == thread and not self.store.kv_get(f"asked:{q['id']}")), None)
@@ -326,7 +336,10 @@ class Outbound:
             text = (f"Confirmed: {who} is coming to you, arriving {_mins(a['eta_s'], now)}. "
                     f"Reply here if anything changes. (plan v{v})")
         else:
-            text = (f"Understood, we won't send {who}. We're re-planning; reply here if you need help later. (plan v{v})")
+            water = self.water_s(thread)
+            stay = (f" The water reaches your street in about {round((water - now) / 60)} min; if you stay, go to the "
+                    f"highest floor and keep your phone with you." if water is not None and water > now else "")
+            text = f"Understood, we won't send {who}.{stay} Reply here if you change your mind. (plan v{v})"
         msg, _ = await self.messenger.send_message(thread, text, self.store.meta().get("plan_version"), a["id"])
         return msg
 

@@ -38,9 +38,9 @@ log = logging.getLogger("residents.guide")
 
 
 STEP_DONE = re.compile(
-    r"^\s*(?:ok(?:ay)?[,!. ]*)?(?:done|ready|here|i'?m here|we'?re here|i am here|we are here|aboard|on board|"
-    r"in the (?:van|truck|vehicle)|on the (?:van|truck|bus)|arrived|we'?ve arrived|i'?ve arrived|at the corner|"
-    r"connected|it'?s connected|checked in|yes|yep|yeah|y|ok|okay|k|👍)\s*[.!]*\s*$", re.I)
+    r"^\s*(?:ok(?:ay)?[,!. ]*)?(?:done|ready|i'?m ready|we'?re ready|here|i'?m here|we'?re here|i am here|we are here|"
+    r"aboard|on board|in the (?:van|truck|vehicle)|on the (?:van|truck|bus)|arrived|we'?ve arrived|i'?ve arrived|"
+    r"at the corner|connected|it'?s connected|checked in|yes|yep|yeah|y|ok|okay|k|👍)\s*[.!]*\s*$", re.I)
 
 
 @dataclass(frozen=True)
@@ -156,9 +156,10 @@ class Guide:
         home = self._home(thread)
         here = home[2] if home else "your address"
         if door:
+            uses = "you use" if people == 1 else "the person who needs help uses"
             first = (f"Confirmed: {who} is coming to your door. Step 1 of 4: Stay inside at {here}. Get medications, "
-                     f"ID, your phone and charger ready, plus anything the person who needs help uses (walker, "
-                     f"oxygen). The crew arrives {_mins(arrive - now)}. Reply DONE when you're ready.")
+                     f"ID, your phone and charger ready, plus anything {uses}, like a walker or oxygen. The crew "
+                     f"arrives {_mins(arrive - now)}. Reply DONE when you're ready.")
             board = (f"Step 2 of 4: {who} is outside {here} now and the crew is coming to your door. "
                      f"Reply DONE once everyone is aboard.")
         else:

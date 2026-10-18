@@ -170,7 +170,7 @@ def test_resident_is_placed_where_they_text(drill, solo_bridge, town):
     t = thread_of(drill, R1)
     hid = t["household_id"]
     outs = tap.outs(R1)
-    assert outs[-2].startswith("Got it: we have you at Green Street and Sellers Street. Your nearest pickup point is")
+    assert outs[-2].startswith("Got it: we have you at Green Street and Sellers Street. Your street")  # their corner
     assert "Your street is outside the forecast flood area. (Drill tip: to test an evacuation, start over from a spot the water reaches, e.g. " in outs[-2]
     assert outs[-1] == "How many people are with you, and does anyone need a wheelchair-accessible vehicle?"
     st = drill.get("/state").json()
