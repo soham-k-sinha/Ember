@@ -20,7 +20,7 @@ How one call works:
 
 When EMBER calls (D100, replacing D80's "no reply" calls; never a call just to get a yes):
 - first contact: a player who joins is called with the simulation notice, where they live and when the water comes,
-  then the one combined question (how many people; anyone hurt, in a wheelchair, needing oxygen or medication);
+  then the one combined question (how many people; anyone needing a wheelchair or medical help);
 - the pickup instruction, a pickup that changed, and "the vehicle is 2 minutes away, come to the door now".
 Each of those `ring`s the phone: the call is queued and what the thread says meanwhile waits in its outbox. `check`
 (every plan, clock move and VOICE_POLL_S) dials queued calls earliest deadline first, at most VOICE_MAX_CONCURRENT at
@@ -47,6 +47,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from .briefing import ASK_NEEDS
 from .db import PhoneConflict
+from .fallback import NUM
 from .messaging import DrillFull
 from .photon import PhotonError
 from .speech import render, render_all
@@ -65,9 +66,17 @@ GREETING = re.compile(r"^(\W*(hello|hi|hey)( there)?)+\W*$", re.I)
 # "sorry, what?" later on: the last thing we said, again
 AGAIN = re.compile(r"^\W*(sorry|pardon|huh|excuse me|what)\W*(what|was that|did you say)?\W*\?", re.I)
 # "thank you, dear" / "okay, got it" / "bye": the call is winding down
-CLOSING = re.compile(r"^(?=.*\b(thank|bye|got it|will do|take care))(\W*(ok(ay)?|great|alright|all right|perfect|"
+CLOSING = re.compile(r"^(?=.*\b(thank|bye|got it|will do|take care))(\W*(oh|ok(ay)?|great|alright|all right|perfect|"
                      r"thanks?|thank you|so much|very much|dear|bye|good ?bye|got it|will do|take care|you too))+\W*$", re.I)
+# "okay" / "sounds good" once they know their pickup: the instruction landed, so we close after answering it
+ACK = re.compile(r"^(\W*(oh|ok(ay)?|sounds good|got it|alright|all right|perfect|great|cool|understood|will do|"
+                 r"thanks?|thank you|yes|yeah|sure|(i'?m )?done))+\W*$", re.I)
 BYE = "I'll text you all of this now. Take care."
+STILL_THERE = "Are you still there?"
+# asking us to send help that a simulation can't send: say so first, every time
+EMERGENCY = re.compile(r"\b(police|cops?|911|ambulance|paramedics?|fire ?(fighters?|department|truck)|"
+                       r"send (someone|somebody|help)|real emergency)\b", re.I)
+NOT_REAL = "This is a simulation, so I can't send anyone. If anyone is in real danger, hang up and call 911."
 FOLLOW_UP = "From our call:"
 MISSED = "We just tried to call you."
 WHERE = "Where are you right now? Tell me your street address or the nearest intersection."
@@ -82,6 +91,12 @@ SESSION_IDLE_S = 300.0           # a call with no turn for this long is over (it
 SCREENING = re.compile(r"\b(stay on the line|record (your|it)\b|recorded\b|reason for (your )?call|screening service|"
                        r"see if (this person|they)( is| are|'re)? (is )?available|i'll see if|who('s| is) (calling|this)|state your name|"
                        r"leave (a|your) (message|name))", re.I)
+VOICEMAIL = re.compile(r"\b(?:voice ?mail(?:box)? (?:that )?(?:has not|hasn['’]t|is not|isn['’]t) (?:been )?set up|"
+                       r"(?:voice ?mail(?:box)?|mailbox) (?:is |is currently )?full|"
+                       r"leave (?:a |your )?message.{0,60}after (?:the |a )?(?:beep|tone)|"
+                       r"(?:at|after) (?:the |a )?(?:beep|tone).{0,45}(?:leave|record) (?:a |your )?message|"
+                       r"when you have finished recording.{0,35}hang up|"
+                       r"your call has been forwarded to.{0,30}voice ?mail)\b", re.I)
 WHO_WE_ARE = f"{DISCLOSURE} It's not a real emergency."
 # someone frightened gets a calm word before the plan (once a call)
 PANIC = re.compile(r"\b(oh my god|omg|scared|terrified|panick?ing|hurry|help me|what do i do)\b", re.I)
@@ -91,6 +106,8 @@ RETRY_WALL_S = 60.0              # … or this many wall-s, whichever comes firs
 NO_RETRY = ("soon", "undelivered", "console", "inbound")  # unanswered: by text at once ("2 minutes away" can't wait)
 REPEAT_S = 20.0                  # the same words again this soon: ElevenLabs re-sent the turn (D100)
 REVISE_S = 10.0                  # words that extend / mostly repeat the last turn this soon: speech-to-text revised it
+COUNT_SETTLE_S = 0.35            # bare counts are easy STT partials: let a replacement cancel them before dispatch
+BARE_COUNT = re.compile(r"^\W*(?:(?:um+|uh+|erm|er)\W+)?(?:\d+|" + "|".join(NUM) + r")\W*$", re.I)
 COOLDOWN_S = 15 * 60.0           # D90: one call-back for an undelivered text per phone per this many sim-s
 REAP_EVERY_S = 5.0               # ask ElevenLabs which calls are over at most this often (wall-s)
 ECHO_SIMILAR = 0.7               # this close to what we just said, and no answer in it: our own voice coming back
@@ -119,7 +136,10 @@ class Session:
     turns: int = 0
     last_said: str = ""          # what this call said last (to tell our own echo from the caller)
     screened: int = 0            # times we said again who we are (call screening, "who is this?", "hello?")
+    voicemail: bool = False      # a mailbox greeting is not an answered resident conversation
     calmed: bool = False         # said CALM
+    silent: int = 0              # ElevenLabs' "..." turns in a row (no answer before its turn timeout)
+    closing: bool = False        # we said goodbye: end the call on this reply
     dialed: bool = False         # ElevenLabs dialed it, or they called us; until then it's queued for a free line
     deadline: float = math.inf   # queue order: their household's flood deadline
     plan_version: int = 0        # the plan when the call was queued; refresh the opening if it changed while waiting
@@ -199,13 +219,13 @@ class Voice:
         s = self.sessions.pop(handle, None)
         if s is None:
             return None
-        if s.outbox and s.turns:
+        if s.outbox and s.turns and not s.voicemail:
             log.warning("call with %s ended (%s) with %d unsaid message(s); they stay in the thread", handle, reason,
                         len(s.outbox))
         if s.turns or s.reason != "inbound":  # not the drill console's capture while it decides whether to call
             hid = self._household_id(handle)
             kinds = {r["kind"] for r in self.store.reports()[s.reports_at:] if hid is not None and r.get("household_id") == hid}
-            outcome = ("failed" if reason == "dial failed" else "no_answer" if not s.turns else
+            outcome = ("failed" if reason == "dial failed" else "no_answer" if not s.turns or s.voicemail else
                        "confirmed" if "confirm" in kinds else "declined" if "reject" in kinds else
                        "updated" if "need" in kinds else "talked")
             self.recent.append({"handle": handle, "household_id": hid, "reason": s.reason, "outcome": outcome,
@@ -218,7 +238,7 @@ class Voice:
         s = self.end(handle, reason="hung up")
         if s is None:
             return
-        if s.turns:
+        if s.turns and not s.voicemail:
             await self.say_situation(handle, lead=FOLLOW_UP)
         elif s.attempt == 1 and s.reason not in NO_RETRY:
             self.store.kv_set(f"retry:{handle}", json.dumps({"reason": s.reason, "t_s": self._t_s(), "wall": time.time()}))
@@ -228,6 +248,11 @@ class Voice:
     def _household_id(self, handle: str) -> int | None:
         phone = self.store.phone(handle=handle)
         return (phone_thread(self.store, phone) or {}).get("household_id") if phone else None
+
+    def _settled(self, handle: str) -> bool:
+        """We know their needs, so they've heard their pickup: an "okay" now closes the call."""
+        hid = self._household_id(handle)
+        return any(h["household_id"] == hid and isinstance(h.get("needs"), dict) for h in self.store.households())
 
     # ---------- one turn of a call ----------
     def identify(self, system_text: str) -> tuple[str | None, str | None]:
@@ -250,6 +275,15 @@ class Voice:
         s.arrived = max(s.arrived, arrived)
         async with s.lock:  # ElevenLabs may post a revised turn before we've answered the last one
             text = (text or "").strip()
+            if text and not _words(text):  # "...": no answer before ElevenLabs' turn timeout
+                return await self._silence(s, handle)
+            if re.fullmatch(r"(?:um+|uh+|erm|er)[\W_]*", text, re.I):
+                return None  # hesitation is not a request to repeat the onboarding question
+            s.silent = 0
+            if BARE_COUNT.fullmatch(text):
+                await asyncio.sleep(COUNT_SETTLE_S)
+                if s.arrived > arrived:
+                    return None  # a newer transcript replaced this short fragment before it became a fact
             kind, prev = self._boundary(s, _words(text), arrived)
             if kind == "repeat":
                 log.info("call %s: %r again; same reply, not processed again", handle, text[:60])
@@ -257,6 +291,19 @@ class Voice:
             out = await self._turn(s, handle, text, revision=kind == "revision")
             s.heard = (s.heard + [Heard(_words(text), arrived, out)])[-8:]
             return out
+
+    async def _silence(self, s: Session, handle: str) -> list[str] | None:
+        """ElevenLabs' "..." after its turn timeout: ask once whether they're still there, then close."""
+        s.silent += 1
+        if s.voicemail:
+            return None
+        if s.silent > 1:
+            s.closing = True
+            return [BYE]
+        await self.say_situation(handle, brief=True)
+        out, s.outbox = [STILL_THERE, *s.outbox], []
+        s.last_said = render_all(out)
+        return out
 
     @staticmethod
     def _boundary(s: Session, words: list[str], arrived: float) -> tuple[str | None, Heard | None]:
@@ -276,6 +323,9 @@ class Voice:
 
     async def _turn(self, s: Session, handle: str, text: str, revision: bool) -> list[str] | None:
         s.turns += 1
+        if s.voicemail or (s.reason != "inbound" and s.turns <= 2 and VOICEMAIL.search(text)):
+            s.voicemail = True
+            return None  # a mailbox cannot provide needs; use the normal missed-call retry/text path
         joined = False
         if self.store.phone(handle=handle) is None:  # someone called the number: they join by voice (D100)
             if not self.settings.voice_admit_callers or self.locator is None:
@@ -309,6 +359,7 @@ class Voice:
         elif text and AGAIN.match(text) and s.last_said:
             s.outbox.insert(0, s.last_said)
         elif text and CLOSING.match(text):
+            s.closing = True
             goodbye = BYE
             phone = self.store.phone(handle=handle)
             if self.messenger.photon is not None and (phone is None or not self.messenger.opted_in(phone)):
@@ -316,6 +367,9 @@ class Voice:
                 if phone and phone.get("assigned_number"):
                     goodbye += f" For a written copy, send JOIN EMBER by iMessage to {phone['assigned_number']}."
             s.outbox.append(("You're welcome. " if "thank" in text.lower() else "Great. ") + goodbye)
+        elif text and EMERGENCY.search(text) and not _answers(text):
+            await self.say_situation(handle, brief=True)
+            s.outbox.insert(0, NOT_REAL)
         elif text:
             if revision:
                 self.messenger.revising.add(handle)
@@ -323,6 +377,11 @@ class Voice:
                 await self.messenger.phone_inbound(handle, text)
             finally:
                 self.messenger.revising.discard(handle)
+            if EMERGENCY.search(text) and not any("911" in t for t in s.outbox):
+                s.outbox.insert(0, NOT_REAL)
+            if ACK.match(text) and self._settled(handle):  # "okay" once they know their pickup: the call is done
+                s.outbox.append(BYE)
+                s.closing = True
             if joined:
                 hid = self._household_id(handle)
                 household = next((h for h in self.store.households() if h["household_id"] == hid), {})
@@ -578,6 +637,14 @@ def create_voice_app(get_voice, token: str) -> FastAPI:
     """`get_voice()` → the running backend's Voice (shared state, same process). `token`: the secret path."""
     app = FastAPI(title="EMBER voice", docs_url=None, redoc_url=None, openapi_url=None)
 
+    @app.get("/{secret}/health")
+    async def health(secret: str):
+        if not secrets.compare_digest(secret, token):
+            raise HTTPException(404)
+        if get_voice() is None:
+            raise HTTPException(503, "EMBER backend not ready")
+        return {"ok": True}
+
     @app.post("/{secret}/v1/chat/completions")
     async def completions(secret: str, request: Request):
         if not secrets.compare_digest(secret, token):
@@ -606,11 +673,26 @@ def create_voice_app(get_voice, token: str) -> FastAPI:
             got = await task
             return "" if got is None else (render_all(got) or "Okay.")
 
+        def end_call(text: str) -> dict | None:
+            session = voice.live(handle)
+            goodbye = CLOSING.match(said) and re.search(r"\b(?:bye|goodbye|take care)\b", said, re.I)
+            offered = any(isinstance(tool, dict) and (tool.get("function") or {}).get("name") == "end_call"
+                          for tool in body.get("tools") or [])
+            if session is None or not (session.voicemail or session.closing or goodbye) or not offered:
+                return None
+            args = {"reason": "Voicemail answered" if session.voicemail else "Call finished"}
+            if text and not session.voicemail:
+                args["message"] = text
+            return {"id": f"call_{secrets.token_hex(6)}", "type": "function",
+                    "function": {"name": "end_call", "arguments": json.dumps(args)}}
+
         if not body.get("stream"):
             text = await answer()
+            tool = end_call(text)
             return JSONResponse({"id": cid, "object": "chat.completion", "created": int(time.time()), "model": "ember",
-                                 "choices": [{"index": 0, "message": {"role": "assistant", "content": text},
-                                              "finish_reason": "stop"}]})
+                                 "choices": [{"index": 0, "message": {"role": "assistant", "content": None if tool else text,
+                                              **({"tool_calls": [tool]} if tool else {})},
+                                              "finish_reason": "tool_calls" if tool else "stop"}]})
 
         async def stream():
             yield _chunk(cid, {"role": "assistant"})
@@ -622,9 +704,12 @@ def create_voice_app(get_voice, token: str) -> FastAPI:
             texts = await task if task is not None else None
             text = ("" if texts is None else (render_all(texts) or "Okay.")) if task is not None else reply_now
             try:
-                if text:
+                tool = end_call(text)
+                if tool:
+                    yield _chunk(cid, {"tool_calls": [{"index": 0, **tool}]})
+                elif text:
                     yield _chunk(cid, {"content": text})
-                yield _chunk(cid, {}, "stop")
+                yield _chunk(cid, {}, "tool_calls" if tool else "stop")
                 yield "data: [DONE]\n\n"
             except (asyncio.CancelledError, GeneratorExit):
                 if texts and handle:  # they talked over us: say it on the next turn (unless a newer turn answers it)
@@ -640,6 +725,25 @@ __all__ = ["Voice", "create_voice_app", "render", "SYSTEM_PROMPT", "DISCLOSURE",
 
 
 # ---------- ElevenLabs agent settings (the tunnel URL changes every run) ----------
+async def wait_for_voice(url: str, http: httpx.AsyncClient | None = None, timeout_s: float = 30.0, poll_s: float = 1.0) -> bool:
+    """Wait for the protected callback's health check: quick-tunnel DNS is not immediately ready."""
+    client = http or httpx.AsyncClient(timeout=3.0)
+    deadline = time.monotonic() + timeout_s
+    try:
+        while time.monotonic() < deadline:
+            try:
+                r = await client.get(url)
+                if r.status_code == 200 and r.json().get("ok") is True:
+                    return True
+            except (httpx.HTTPError, ValueError):
+                pass
+            await asyncio.sleep(poll_s)
+        return False
+    finally:
+        if http is None:
+            await client.aclose()
+
+
 async def configure_agent(settings, server_url: str, http: httpx.AsyncClient | None = None) -> tuple[bool, str]:
     """Point the ElevenLabs agent's Custom LLM at `server_url`, set the system prompt that carries the caller id
     and the first message of a call in (who we are). Read-modify-write: keeps whatever else the custom_llm block holds (model id, secret); verified by a
@@ -655,8 +759,12 @@ async def configure_agent(settings, server_url: str, http: httpx.AsyncClient | N
         custom = dict(prompt.get("custom_llm") or {})
         custom["url"] = server_url
         custom.setdefault("model_id", "ember")
+        tools = dict(prompt.get("built_in_tools") or {})
+        if not tools.get("end_call"):
+            tools["end_call"] = {"type": "system", "name": "end_call", "description": "",
+                                 "params": {"system_tool_type": "end_call"}}
         body = {"conversation_config": {"agent": {"first_message": INBOUND, "prompt": {
-            "llm": "custom-llm", "custom_llm": custom, "prompt": SYSTEM_PROMPT}}}}
+            "llm": "custom-llm", "custom_llm": custom, "prompt": SYSTEM_PROMPT, "built_in_tools": tools}}}}
         r = await client.patch(url, headers=h, json=body)
         if r.status_code >= 400:
             return False, f"updating the agent failed ({r.status_code}): {r.text[:400]}"

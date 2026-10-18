@@ -1,6 +1,6 @@
 # HANDOFF — read this first in a fresh session
 
-Calls-first continuation (D100): see `docs/CALLS_FIRST_HANDOFF.md`. That branch adds proactive calls and clock-driven steps without required YES/DONE; the round-3 measurements below are the earlier main-branch integration.
+**Current continuation:** see [CALLS_FIRST_HANDOFF.md](CALLS_FIRST_HANDOFF.md) and [POLISH_QA.md](POLISH_QA.md) on `codex/call-first-takeover`. They include calls-first, delivery and live-call fixes, optimization/reset guards, and current validation. Main and original worktrees remain untouched. The round-3 measurements, snapshot and open-issue list below describe the earlier main-branch integration; some defects are now fixed in the continuation.
 
 Last updated: **Sun 2026-10-18, round 3** (backend D92, web D93 and the second hazard D94 merged and checked together on `aryaman/round3`, D95). Submission: **Sunday 8:00 AM** on Devpost.
 Then read: `README.md` (judge landing page), `CLAUDE.md`, `docs/DECISIONS.md`, all of `docs/log/*.md`, `docs/TECHNICAL.md` (the plan), `residents/README.md` (backend, API, drill, calls).

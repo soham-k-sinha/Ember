@@ -41,7 +41,7 @@ SAFETY = ("In a real emergency, call 911. Don't walk or drive through floodwater
 
 
 # the one question first contact asks (D100): the planner asks a household for its needs; this is how we word it
-ASK_NEEDS = "How many people are with you, and is anyone hurt, in a wheelchair, or in need of oxygen or medication?"
+ASK_NEEDS = "How many people are with you, and does anyone need a wheelchair or medical help?"
 
 
 def ask(q: dict) -> str:

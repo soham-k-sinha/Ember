@@ -3,7 +3,8 @@
 Drives a live backend over HTTP and WS the way the website and the phones do, and checks every step against the
 contracts and the demo story. No real phones, LLM or calls: texts go through /reports, /disruption and /dev/inbound,
 and the empty keys below beat residents/.env. Use a fresh DB: players (D89) survive resets, and MAX_PLAYERS=3 makes the
-cap check run. Daytona is real when engine/.env has its key; --big also runs /optimize on 10,000 worlds (seeds 2000).
+cap check run. Daytona is real when engine/.env has its key; --big also runs 2,000 paired worlds per plan.
+Use --allow-local against an explicitly keyless local backend to exercise the full optimization path without Daytona.
 
     cd residents && DB_PATH=/tmp/e2e.db RESET_ON_START=1 PHOTON_ENABLED=0 EXTRACT_ENABLED=0 MAX_PLAYERS=3 \
         ANTHROPIC_API_KEY= ELEVENLABS_API_KEY= ELEVENLABS_AGENT_ID= ELEVENLABS_PHONE_NUMBER_ID= \
@@ -93,7 +94,7 @@ async def run_optimize(get, post, seeds: int | None) -> tuple[dict, float]:
     return rob, time.time() - t0
 
 
-async def main(base: str, skip_optimize: bool, big: bool = False) -> int:
+async def main(base: str, skip_optimize: bool, big: bool = False, allow_local: bool = False) -> int:
     from ember_engine.scenario import load_scenario, validate
     from ember_engine.state import validate_state
     from residents.contracts import errors
@@ -246,21 +247,25 @@ async def main(base: str, skip_optimize: bool, big: bool = False) -> int:
         rob, _ = await run_optimize(get, post, None)
         await asyncio.sleep(0.5)
         pts = ev.since(n, "scatter_point")
-        check(rob.get("pool") == "daytona" and rob.get("startup_s") is not None, "the runs go to the Daytona pool, startup reported",
+        pools = {"daytona", "local", "local-fallback"} if allow_local else {"daytona"}
+        check(rob.get("pool") in pools and rob.get("startup_s") is not None, "the runs use the requested pool, startup reported",
               f"pool={rob.get('pool')} startup_s={rob.get('startup_s')}")
-        check(len(pts) == rob.get("jobs") == 250, "250 runs (50 seeds by default) stream as scatter_points", f"{len(pts)}/{rob.get('jobs')}")
+        expected = 50 * len(rob.get("candidates", []))
+        check(expected > 0 and len(pts) == rob.get("jobs") == expected,
+              "every plan × 50 paired worlds streams as scatter_points", f"{len(pts)}/{rob.get('jobs')} expected={expected}")
         st = await state("after optimize")
         check(st["plan_version"] == v_before + 1 and (st["plan"].get("search") or {}).get("robust"),
               "optimize publishes a new plan version with the robustness ranking", f"v{st['plan_version']}")
         check(all(p_["data"]["batch_id"] == rob.get("batch_id") for p_ in pts), "points carry the published batch id")
-        if big:  # the scale where Daytona clearly beats the laptop (D86): 2000 seeds × (4 candidates + baseline)
+        if big:  # D86's larger batch: 2,000 paired worlds per distinct plan
             n = len(ev.items)
             rob, _ = await run_optimize(get, post, 2000)
             await asyncio.sleep(2)
             pts = ev.since(n, "scatter_point")
-            check(rob.get("pool") == "daytona" and rob.get("jobs") == 10000, "10,000 worlds run on the Daytona pool",
+            expected = 2000 * len(rob.get("candidates", []))
+            check(rob.get("pool") in pools and expected > 0 and rob.get("jobs") == expected, "large batch uses the requested pool",
                   f"pool={rob.get('pool')} jobs={rob.get('jobs')} fan-out={rob.get('fanout_wall_s')}s")
-            check(len(pts) == 10000, "all 10,000 runs stream as scatter_points", f"{len(pts)}")
+            check(len(pts) == expected, "all large-batch runs stream as scatter_points", f"{len(pts)}/{expected}")
 
     print("\n[7] texting endpoints (no real phones)")
     try:
@@ -350,6 +355,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://127.0.0.1:8000")
     ap.add_argument("--skip-optimize", action="store_true")
-    ap.add_argument("--big", action="store_true", help="also /optimize on 10,000 worlds (seeds 2000)")
+    ap.add_argument("--big", action="store_true", help="also /optimize on 2,000 paired worlds per plan")
+    ap.add_argument("--allow-local", action="store_true", help="accept the local pool for keyless end-to-end verification")
     a = ap.parse_args()
-    sys.exit(asyncio.run(main(a.base, a.skip_optimize, a.big)))
+    sys.exit(asyncio.run(main(a.base, a.skip_optimize, a.big, a.allow_local)))

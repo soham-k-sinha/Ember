@@ -294,13 +294,14 @@ class Search:
 
 
 def search(world, scn: dict, reports=(), t_now: float = 0.0, prev: dict | None = None, prev_reports=None,
-           seed: int = 0, moves: int | None = None, policies=None) -> Search:
+           seed: int = 0, moves: int | None = None, policies=None, version: int | None = None) -> Search:
     """Candidates from priority rules + local search on the best; every plan scored by the simulator."""
     t0 = time.time()
     reports = list(reports)
     ctx = Context(world, scn, reports, t_now)
     carry = carry_over(ctx, prev, prev_reports if prev_reports is not None else reports)
-    version = (prev.get("version", 0) + 1) if prev else 1
+    if version is None:
+        version = (prev.get("version", 0) + 1) if prev else 1
     moves = moves if moves is not None else (REPLAN_MOVES if prev else INITIAL_MOVES)
     pols = list(policies or POLICIES)
     if carry.movable:   # every rescue rule also gets a variant that may re-target generators already committed

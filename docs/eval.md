@@ -105,3 +105,9 @@ deadlines and scenario timing are synthetic drill data (`scenarios/allston_flood
 ## Expanded fallback check — 2026-10-18 (D102)
 
 The sample set now has 56 messages, adding urgency and scoped negative-needs cases. The grader also requires urgency to match and no longer labels a harmful partial report as a safe clarification. `scripts/eval_sim.py --extractor fallback --moves 10`: **50 pass, 6 clarification, 0 fail; 56/56 urgency matches**. Unknown assistance is clarified before publishing a pickup. This local development run used ten allocator moves. The paid-model numbers above used the original 51-message set and previous scoring; they have not been rerun or revalidated under these checks.
+
+### Spoken-count regressions (2026-10-18)
+
+The authorized iPhone rehearsal exposed “we are four” and “uh, four” being missed by the keyless parser. Three
+spoken-count examples bring the set to **59**. The same ten-move fallback eval now reports **53 pass, 6 clarification,
+0 fail; 59/59 urgency matches**. This is a local development result; the paid-model result above remains historical.

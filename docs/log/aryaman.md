@@ -413,3 +413,14 @@ Next: docs/CALLS_FIRST_HANDOFF.md lists the precise real-phone/provider checks; 
 ### 2026-10-18 — Codex product polish (D102–D103)
 
 Scoped negative needs, explicit corrections, urgency and unknown-assistance clarification in the fallback; expanded the simulator eval to 56 messages with explicit urgency checks and honest clarification scoring. Fixed the voice-only goodbye, rejected clock-stale optimization results, paused the UI for stress tests and retried transient status failures. Added district loading/error/retry/flat-map recovery, retryable asset caching, phone layouts, bounded map labels, and web behavior checks in CI. Browser exercised the local 250-world batch and both district recovery paths; the expanded fallback eval reports 50 pass, 6 clarification, 0 fail and 56/56 urgency matches. Full verification and live limitations are in `docs/POLISH_QA.md`.
+
+### 2026-10-18 — Codex optimization, reset and live preflight (D104–D106)
+
+Fixed fresh-optimization assignment versions and restored the delayed-generator comparison online. Large stress-test labels and e2e counts now follow paired worlds × actual plans; historical timing claims are kept separate. Guarded confirmations against stale optimization, and state/WS reads against reset’s empty interval. Added explicit local-pool e2e mode: the full large replay passed 82/82 checks (cap skipped at MAX_PLAYERS=25), with 10,000 local runs streamed; engine suite 107 passed. Photon live preflight reproduced ASSIGNMENT_EXISTS for previously registered phones; registration now recovers their live assignments with paginated lookup and leaves unrelated seats untouched. Private live-call data stays outside the repo.
+
+### 2026-10-18 04:40 · Calls that end, short and safe (D107)
+What: took over Codex's calls-first branch (D100–D106) as `aryaman/calls-first`; replayed the 4 real ElevenLabs calls from 03:26–03:45 and fixed what they showed: okay/silence/voicemail end the call, the police/911 line, a one-line off-topic answer, a shorter opening question.
+Interfaces: needs question text changed in engine explain, seed state and contract fixtures (same schema).
+Status: residents 359+ pass, engine 107, web build + checks, ruff clean; sim_calls re-run (docs/voice_transcripts.md).
+Next: Daytona snapshot, e2e --big, merge, live call test.
+

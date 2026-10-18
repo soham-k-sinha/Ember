@@ -30,6 +30,7 @@ STAY = re.compile(r"\b(stay(ing)? (put|here|home)|(we|i)'?re staying|(we|i)'?ll 
 DONE = re.compile(r"\b(done|ready|(we'?re|i'?m|we are|i am) (here|outside)|at the corner|on the (van|truck|bus)|"
                   r"aboard|on board|arrived|checked in|it'?s connected|connected)\b")
 COUNT = re.compile(r"\b" + _N + r"\s+(of us|people|persons|adults|in total|total)\b")
+SPOKEN_COUNT = re.compile(r"\b(?:we are|we're)\s+" + _N + r"\b(?!\s+(?:minutes?|mins?|hours?|years?|blocks?|miles?|km|meters?))")
 ALONE = re.compile(r"\b(just me|only me|myself|i'?m alone|i am alone|just one)\b")
 PAIR = re.compile(r"\b(me and my|my (?!house|home|place|apartment|room)\w+ and (i|me))\b")
 CHAIR = re.compile(r"\b(wheel ?chair|walker|can'?t walk|cannot walk|bed ?ridden|mobility|help walking|crutches|accessible|stuck|can'?t get out)\b")
@@ -88,6 +89,9 @@ def _people(t: str) -> int | None:
     if (m := COUNT.search(t)):
         v = m[1]
         return int(v) if v.isdigit() else NUM[v]
+    if (m := SPOKEN_COUNT.search(t)):
+        v = m[1]
+        return int(v) if v.isdigit() else NUM[v]
     if ALONE.search(t):
         return 1
     if PAIR.search(t):
@@ -100,6 +104,7 @@ def _people(t: str) -> int | None:
 def parse(text: str, role: str = "resident") -> Extraction | None:
     t = re.sub(r"[^\w' ?]+", " ", text.lower().replace("’", "'")).strip()
     t = re.sub(r"\s+", " ", t)
+    t = re.sub(r"^(?:(?:um+|uh+|erm|er)\b\s*)+", "", t).strip()
     if not t:
         return None
     facts: list[Fact] = []

@@ -19104,7 +19104,7 @@
     "to": {
      "household_id": 492
     },
-    "question": "How many people are with you, and is anyone hurt, in a wheelchair, or in need of oxygen or medication?",
+    "question": "How many people are with you, and does anyone need a wheelchair or medical help?",
     "why": "the accessible van is the scarce resource; your answer decides its next trip"
    },
    {
@@ -19112,7 +19112,7 @@
     "to": {
      "household_id": 5016
     },
-    "question": "How many people are with you, and is anyone hurt, in a wheelchair, or in need of oxygen or medication?",
+    "question": "How many people are with you, and does anyone need a wheelchair or medical help?",
     "why": "needed to schedule a pickup before the water reaches your street"
    }
   ],
@@ -19173,7 +19173,7 @@
    "plan_version": 3,
    "assignment_id": null,
    "report_id": null,
-   "text": "EMBER flood simulation, live demo, not a real emergency. Flood warning for your street. How many people are with you, and is anyone hurt, in a wheelchair, or in need of oxygen or medication?"
+   "text": "EMBER flood simulation, live demo, not a real emergency. Flood warning for your street. How many people are with you, and does anyone need a wheelchair or medical help?"
   },
   {
    "id": "m-2",

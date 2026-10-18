@@ -126,7 +126,7 @@ class Drill:
 
         import uvicorn
 
-        from .voice import configure_agent, create_voice_app, start_tunnel
+        from .voice import configure_agent, create_voice_app, start_tunnel, wait_for_voice
         s = self.app.state.settings
         self._voice_token = token = secrets.token_urlsafe(24)
         vapp = create_voice_app(lambda: self.app.state.voice, token)
@@ -141,6 +141,8 @@ class Drill:
             print("\nvoice: pretend calls (--dry). `call r1` starts one; type what they say with @r1 …")
             return
         self.tunnel, public = await start_tunnel(s.voice_port)
+        if not await wait_for_voice(f"{public}/{token}/health"):
+            raise SetupError("The public voice callback isn't reachable yet; no calls were placed. Try starting the voice session again.")
         server_url = f"{public}/{token}/v1"
         ok, detail = await configure_agent(s, server_url)
         print(f"\nvoice: tunnel {public} → :{s.voice_port} (only the voice endpoint is exposed)")

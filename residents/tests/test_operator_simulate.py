@@ -1,6 +1,7 @@
 """Task 6 (scripted operator prompts), Task 7 (POST /simulate), and /optimize not blocking the rest."""
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 
 import pytest
@@ -118,3 +119,53 @@ def test_report_during_optimize_supersedes_it(oc):
         assert st["plan_version"] == 2 and st["plan"]["trigger"] == "Judge: 2 people, wheelchair"  # the newer facts win
     finally:
         oc.app.state.planner.bridge.optimize = real
+
+
+def test_a_confirmation_during_optimize_is_not_overwritten(oc):
+    real, started = _slow_optimize(oc, 2.0)
+    try:
+        before = oc.get("/state").json()
+        assignment = next(a for a in before["plan"]["assignments"] if a["status"] in ("proposed", "offered"))
+        oc.post("/optimize?seeds=2&k=2")
+        assert started.wait(5)
+        result = oc.portal.call(oc.app.state.planner.respond, assignment["id"], "confirm")
+        assert result["applied"]
+        last = _wait_done(oc)
+        assert last["plan_version"] is None and "assignments changed" in last["error"]
+        state = oc.get("/state").json()
+        assert state["plan_version"] == before["plan_version"]
+        assert next(a for a in state["plan"]["assignments"] if a["id"] == assignment["id"])["status"] == "confirmed"
+    finally:
+        oc.app.state.planner.bridge.optimize = real
+
+
+@pytest.mark.parametrize("transport", ["http", "ws"])
+def test_a_snapshot_waits_for_a_reset_to_finish(oc, transport):
+    bridge = oc.app.state.planner.bridge
+    real = bridge.plan
+    started, release = threading.Event(), threading.Event()
+
+    def slow(*args, **kwargs):
+        started.set()
+        assert release.wait(10)
+        return real(*args, **kwargs)
+
+    bridge.plan = slow
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        resetting = pool.submit(oc.post, "/dev/reset")
+        try:
+            assert started.wait(5)
+            timer = threading.Timer(0.2, release.set)
+            timer.start()
+            if transport == "http":
+                state = oc.get("/state").json()
+            else:
+                with oc.websocket_connect("/ws") as ws:
+                    event = ws.receive_json()
+                    assert event["type"] == "state"
+                    state = event["data"]
+            assert state["plan_version"] == 1 and state["t_s"] == 0
+            assert resetting.result(timeout=10).status_code == 200
+        finally:
+            release.set()
+            bridge.plan = real

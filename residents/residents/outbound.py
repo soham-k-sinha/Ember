@@ -360,7 +360,7 @@ class Outbound:
         words = self._water_words(thread)
         if home is None or home[2] == "your address":
             return f"{words[0].upper()}{words[1:]}."
-        said = words.replace("your street", home[2], 1)  # "the river reaches the corner of A and B in about 90 min"
+        said = words.replace("your street", home[2].removeprefix("the corner of "), 1)  # "the river reaches A and B in about 90 min"
         return f"{said[0].upper()}{said[1:]}."
 
     def next_info_request(self, view: dict, thread: dict) -> dict | None:

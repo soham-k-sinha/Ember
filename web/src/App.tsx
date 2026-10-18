@@ -560,7 +560,7 @@ export function App() {
     }
   }
 
-  /** 50 seeds × 5 plans = 250 worlds by default; the stress test sends 2000 seeds = 10,000 worlds. */
+  /** Paired worlds per plan: 50 by default, 2000 for the large test; distinct plans determine total runs. */
   async function optimize(seeds?: number) {
     dispatch({ type: "tab", tab: "proof" });
     if (!live) {

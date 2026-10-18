@@ -301,8 +301,11 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
                 "max_players": settings.max_players, "players": len(store().kv_prefix("player:"))}
 
     @app.get("/state")
-    def get_state() -> dict:
-        return store().snapshot()
+    async def get_state() -> dict:
+        if app.state.planner is not None:
+            async with app.state.planner.lock:
+                return await run_in_threadpool(store().snapshot)
+        return await run_in_threadpool(store().snapshot)
 
     @app.get("/plan/current")
     def plan_current() -> dict:
@@ -401,7 +404,7 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         """Start the robust fan-out in the background; watch WS `scatter_point` events, then `plan`.
         GET /optimize for the outcome. 409 while one is running."""
         p = planner()
-        if not (1 <= seeds <= 2000 and 1 <= k <= 8):  # 2000 seeds × 5 plans = the 10,000-world Daytona demo
+        if not (1 <= seeds <= 2000 and 1 <= k <= 8):  # paired worlds per plan; distinct candidates determine total runs
             raise HTTPException(422, "seeds must be 1..2000 and k 1..8")
         if p.optimizing:
             raise HTTPException(409, "an optimization is already running")
@@ -528,7 +531,11 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
     @app.websocket("/ws")
     async def ws(websocket: WebSocket) -> None:
         hub: Hub = app.state.hub
-        await hub.connect(websocket, await run_in_threadpool(store().snapshot))
+        if app.state.planner is not None:
+            async with app.state.planner.lock:
+                await hub.connect(websocket, await run_in_threadpool(store().snapshot))
+        else:
+            await hub.connect(websocket, await run_in_threadpool(store().snapshot))
         try:
             while True:  # clients don't send anything we act on; this just notices the disconnect
                 await websocket.receive_text()

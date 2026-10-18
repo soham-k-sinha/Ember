@@ -32,6 +32,8 @@ def _case(word: str, like: str) -> str:
 
 _RULES: list[tuple[re.Pattern, object]] = [
     (re.compile(re.escape(DISCLOSURE) + r"\s*"), ""),
+    (re.compile(r"Our plan doesn't cover that, [^.]*\.(?: Meanwhile, here's where you stand:)?"),
+     "I can only help with your evacuation."),
     (re.compile(r"\s*\(e\.g\.[^)]*\)"), ""),
     (re.compile(r"\s*\b[A-Z][\w ]*? is the only [\w-]+ ?vehicle that fits [^.;]*[.;]"), ""),
     (re.compile(r"\s*\b(?:It picks up|it picks up|You share the trip|you share the trip)\b[^.]*\."), ""),
@@ -43,6 +45,7 @@ _RULES: list[tuple[re.Pattern, object]] = [
     (re.compile(r": 6 inches of moving water [^.]*\."), "."),
     (re.compile(r"\b([Rr])eply (YES|NO|DONE)\b"), lambda m: _case("say", m[1]) + " " + m[2].lower()),
     (re.compile(r"\b(YES|NO|DONE)\b"), lambda m: m[1].lower()),
+    (re.compile(r"who will reply here\b"), "who will get back to you"),
     (re.compile(r"\b([Rr])eply (?:with|here)\b"), lambda m: _case("tell me", m[1])),
     (re.compile(r"\b([Ss])end (your|a|an|the two) (street address|address|intersection|nearest|cross streets)"),
      lambda m: _case("tell me", m[1]) + f" {m[2]} {m[3]}"),

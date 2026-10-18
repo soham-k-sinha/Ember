@@ -17,8 +17,8 @@ from residents.messaging import DISCLOSURE as TEXT_NOTICE
 from residents.messaging import plain
 from residents.outbound import ASK_NEEDS
 from residents.speech import render, render_all
-from residents.voice import (CALM, CLOSED, DISCLOSURE, FULL_CALL, HI, INBOUND, MISSED, SYSTEM_PROMPT, WHERE, WHO_WE_ARE,
-                             configure_agent, create_voice_app)
+from residents.voice import (BYE, CALM, CLOSED, DISCLOSURE, FULL_CALL, HI, INBOUND, MISSED, SYSTEM_PROMPT, WHERE, WHO_WE_ARE,
+                             configure_agent, create_voice_app, wait_for_voice)
 from tests.helpers import CALLENDER, GREEN, PUTNAM, R1, R2, Tap, ex, fact, make, register, text, thread_of
 
 OURS = "+16175550199"           # the Photon voice number (placeholder)
@@ -47,17 +47,19 @@ def vd(drill):
     return drill
 
 
-def say(c, words, caller=R1, called=OURS, stream=False, token=TOKEN, conv="conv_1"):
+def say(c, words, caller=R1, called=OURS, stream=False, token=TOKEN, conv="conv_1", tools=None):
     """One caller turn through the voice app, in the backend's event loop. Returns the HTTP response."""
-    return c.portal.call(post, c, words, caller, called, stream, token, conv)
+    return c.portal.call(post, c, words, caller, called, stream, token, conv, tools)
 
 
-async def post(c, words, caller=R1, called=OURS, stream=False, token=TOKEN, conv="conv_1"):
+async def post(c, words, caller=R1, called=OURS, stream=False, token=TOKEN, conv="conv_1", tools=None):
     vapp = create_voice_app(lambda: c.app.state.voice, TOKEN)
     body = {"model": "ember", "stream": stream,
             "messages": [{"role": "system", "content": sys_prompt(caller, called, conv)},
                          {"role": "assistant", "content": "Hi, this is EMBER"},
                          {"role": "user", "content": words}]}
+    if tools is not None:
+        body["tools"] = tools
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=vapp), base_url="http://v") as cl:
         return await cl.post(f"/{token}/v1/chat/completions", json=body)
 
@@ -93,6 +95,8 @@ def spoken(r) -> str:
      "The utility truck is outside now. Understood, we won't send the utility truck."),
     ("Bring ID (and prescriptions), e.g. a charger.", "Bring ID (and prescriptions), for example, a charger."),
     ("In a real emergency, call 911.", "In a real emergency, call 9 1 1."),
+    ("We've passed your question to a coordinator, who will reply here.",
+     "We've passed your question to a coordinator, who will get back to you."),
     ("household #10296; overflow 9,600 m³. We'll text you if that changes. Text us if anything changes.",
      "household number 10296; overflow 9,600 cubic meters. We'll let you know if that changes. Tell us if anything changes."),
     ("Send your street address or the nearest intersection.", "Tell me your street address or the nearest intersection."),
@@ -140,6 +144,7 @@ def test_a_call_says_what_the_thread_would_text(settings, solo_bridge, tmp_path)
         assert all(e["delivery"] == "voice" for e in tap.events if e["direction"] == "out"), tap.events
         rows = c.app.state.store.thread_messages(f"household:{thread_of(c, R1)['household_id']}")
         assert any(m["direction"] == "in" and m["text"] == "2 of us" for m in rows)  # the call is in the thread
+    by_call = [c.removesuffix(" " + BYE) for c in by_call]  # an "okay" once they know their pickup also closes the call
     assert by_call == by_text, list(zip(FLOW, by_text, by_call))
     assert by_call[0].startswith("Got it: we have you at Putnam Avenue and Western Avenue.")
     assert " picks you up in about " in by_call[1] and "yes" not in by_call[1].lower()  # the instruction, no ask
@@ -171,6 +176,23 @@ def test_wrong_token_and_unknown_call(vd):
     assert say(vd, "hi", token="nope").status_code == 404
     r = say(vd, "hi", caller="{{system__caller_id}}", called="{{system__called_number}}")
     assert spoken(r).startswith("Sorry, I can't tell which phone this is.")
+
+
+async def test_voice_health_is_protected_and_checks_backend_readiness():
+    for backend, status in ((None, 503), (object(), 200)):
+        app = create_voice_app(lambda backend=backend: backend, TOKEN)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://voice") as client:
+            assert (await client.get(f"/{TOKEN}/health")).status_code == status
+            assert (await client.get("/wrong/health")).status_code == 404
+
+
+async def test_the_voice_callback_must_be_ready_before_dialing():
+    responses = [httpx.Response(503), httpx.Response(200, json={"ok": True})]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: responses.pop(0))) as client:
+        assert await wait_for_voice("https://callback.test/token/health", client, poll_s=0)
+        assert responses == []
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(503))) as client:
+        assert not await wait_for_voice("https://callback.test/token/health", client, timeout_s=0)
 
 
 # ---------- anyone can call the number and join by voice (D100) ----------
@@ -425,6 +447,7 @@ def test_configure_agent_keeps_the_secret_and_verifies(vd):
     patch = next(b for m, b in seen if m == "PATCH")["conversation_config"]["agent"]["prompt"]
     assert patch["custom_llm"] == {"url": "https://new.trycloudflare.com/x/v1", "model_id": "m", "api_key": {"secret_id": "sec_1"}}
     assert patch["prompt"] == SYSTEM_PROMPT and patch["llm"] == "custom-llm"
+    assert patch["built_in_tools"]["end_call"]["params"]["system_tool_type"] == "end_call"
     assert next(b for m, b in seen if m == "PATCH")["conversation_config"]["agent"]["first_message"] == INBOUND
     bad = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"conversation_config": {}})))
     ok, detail = vd.portal.call(configure_agent, s, "https://x/v1", bad)
@@ -455,6 +478,91 @@ def test_call_screening_gets_who_and_why_and_changes_nothing(vd):
     assert spoken(say(vd, "Please stay on the line.")) == who
     assert vd.app.state.store.phone(handle=R1)["thread_key"] is None   # the screening didn't place anyone
     assert {m["direction"] for m in vd.app.state.messenger.lobby_log(R1)} == {"out"}  # not stored as the resident's words
+
+
+@pytest.mark.parametrize("greeting", [
+    "The person you called has a voice mailbox that hasn't been set up yet. Goodbye.",
+    "The mailbox is full.",
+    "Please leave a message after the tone.",
+    "The person you're trying to reach is not available. At the tone, please record your message.",
+])
+def test_a_mailbox_greeting_uses_the_unanswered_call_path(vd, greeting):
+    c = vd
+    join(c, R1)
+    before = len(c.app.state.store.reports())
+    assert spoken(say(c, greeting, conv="conv_9")) == ""
+    c.portal.call(c.app.state.voice.hang_up, R1)
+    assert c.app.state.voice.calls_view()["recent"][0]["outcome"] == "no_answer"
+    assert c.app.state.store.kv_get(f"retry:{R1}") is not None
+    assert len(c.app.state.store.reports()) == before
+
+
+@pytest.mark.parametrize("silence", ["...", "…"])
+def test_silence_asks_once_then_closes_and_hesitation_says_nothing(vd, silence):
+    join(vd, R1)
+    before = len(vd.app.state.store.reports())
+    assert spoken(say(vd, "Um-", conv="conv_9")) == ""
+    assert spoken(say(vd, silence, conv="conv_9")).startswith("Are you still there? ")
+    assert spoken(say(vd, silence, conv="conv_9")) == BYE
+    assert len(vd.app.state.store.reports()) == before
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("words", ["Thanks, bye.", "Please leave a message after the tone."])
+def test_a_goodbye_or_mailbox_ends_the_call_when_the_provider_offers_the_tool(vd, stream, words):
+    join(vd, R1)
+    response = say(vd, words, conv="conv_9", stream=stream,
+                   tools=[{"type": "function", "function": {"name": "end_call"}}])
+    if stream:
+        chunks = [json.loads(line[6:])["choices"][0] for line in response.text.split("\n\n") if line.startswith("data: {")]
+        call = next(c["delta"]["tool_calls"][0] for c in chunks if c["delta"].get("tool_calls"))
+        assert chunks[-1]["finish_reason"] == "tool_calls" and response.text.rstrip().endswith("data: [DONE]")
+    else:
+        choice = response.json()["choices"][0]
+        assert choice["finish_reason"] == "tool_calls" and choice["message"]["content"] is None
+        call = choice["message"]["tool_calls"][0]
+    assert call["function"]["name"] == "end_call"
+    arguments = json.loads(call["function"]["arguments"])
+    assert ("message" in arguments) == ("bye" in words)
+
+
+def test_a_needs_answer_does_not_end_a_call_even_when_the_tool_is_available(vd):
+    join(vd, R1)
+    reply = say(vd, "4 of us, one wheelchair", conv="conv_9",
+                tools=[{"type": "function", "function": {"name": "end_call"}}]).json()["choices"][0]
+    assert reply["finish_reason"] == "stop" and "tool_calls" not in reply["message"]
+
+
+def test_spoken_headcount_and_wheelchair_are_understood_on_the_first_turn_without_a_model(vd):
+    c = vd
+    join(c, R1)
+    c.app.state.intake.llm = c.app.state.locator.llm = None
+    reply = spoken(say(c, "We are four, and we need one w- wheelchair.", conv="conv_9"))
+    assert "Accessible Van" in reply and "coming to your door" in reply and "How many" not in reply
+    household = next(h for h in c.get("/state").json()["households"] if h["household_id"] == thread_of(c, R1)["household_id"])
+    assert household["needs"] == {"people": 4, "mobility": True, "accessible_vehicle": True}
+    assert spoken(say(c, "Uh, four.", conv="conv_9")).startswith("Got it.")
+    assert spoken(say(c, "Um-", conv="conv_9")) == ""
+
+
+def test_a_replaced_numeric_fragment_does_not_change_the_household_size(vd, monkeypatch):
+    c = vd
+    join(c, R1)
+    c.app.state.intake.llm = c.app.state.locator.llm = None
+    say(c, "We are four, and we need a wheelchair.", conv="conv_9")
+    monkeypatch.setattr(voice_mod, "COUNT_SETTLE_S", 0.05)
+    before = len(c.app.state.store.reports())
+
+    async def revised():
+        first = asyncio.create_task(c.app.state.voice.turn(R1, "conv_9", "Five."))
+        await asyncio.sleep(0.01)
+        replacement = await c.app.state.voice.turn(R1, "conv_9", "Um-")
+        return await first, replacement
+
+    assert c.portal.call(revised) == (None, None)
+    assert len(c.app.state.store.reports()) == before
+    household = next(h for h in c.get("/state").json()["households"] if h["household_id"] == thread_of(c, R1)["household_id"])
+    assert household["needs"]["people"] == 4
 
 
 def test_our_own_echo_is_ignored_but_the_caller_never_is(vd):
@@ -670,3 +778,14 @@ def test_a_voice_only_caller_is_told_how_to_enable_the_written_follow_up(vd, ass
             assert words == "You're welcome. Take care."
     finally:
         c.portal.call(photon.aclose)
+
+
+def test_tonights_live_calls(vd):
+    """Turns from the real calls of 2026-10-18 03:26–03:45: needs in one breath, an off-topic question, a request for
+    the police (a simulation can't send anyone: say so, then 911), and an "okay" that closes the call."""
+    join(vd, R1)
+    assert "Accessible Van" in spoken(say(vd, "We are four, and we need one w- wheelchair.", conv="conv_9"))
+    assert spoken(say(vd, "Um, do you know about Arnoux?", conv="conv_9")).startswith("I can only help with your evacuation. ")
+    police = spoken(say(vd, "Um, for some reason, I'm unable to. Can you send the police to me?", conv="conv_9"))
+    assert police.startswith("This is a simulation, so I can't send anyone. If anyone is in real danger, hang up and call 9 1 1.")
+    assert spoken(say(vd, "Sounds good.", conv="conv_9")).endswith(BYE)

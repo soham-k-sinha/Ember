@@ -67,7 +67,7 @@ def test_live_conversation_replayed(judge_phone):
     c = judge_phone
     assert any(q["to"] == JT for q in c.get("/state").json()["plan"]["info_requests"])
 
-    # 1. "Hi" → the plan's own question (people, hurt, wheelchair, oxygen or medication), not the model's generic prompt
+    # 1. "Hi" → the plan's own question (people, wheelchair or medical help), not the model's generic prompt
     assert say(c, "Hi") == [f"{DISCLOSURE} {ASK_NEEDS}"]
 
     # 2. the fact → a replan AND a reply, whatever the plan could do for them

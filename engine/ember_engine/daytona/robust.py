@@ -80,9 +80,9 @@ def robust_plan(world, scn: dict, reports=(), t_now: float = 0.0, prev: dict | N
                 k: int = 4, seeds: int = 50, pool=None, on_point=None, seed: int = 0, trigger: str | None = None,
                 include_baseline: bool = True, moves: int | None = None, version: int | None = None) -> tuple[dict, list]:
     t0 = time.time()
-    s = search(world, scn, reports, t_now, prev, prev_reports, seed, moves)
-    if version is not None:   # a fresh plan that replaces an existing version (optimize at t=0): tag points with it
-        s.version = version
+    # The published version must be used while assembling assignments, including timing variants.
+    # Relabeling only Search.version after assembly hides the new generators from staged_at_trip.
+    s = search(world, scn, reports, t_now, prev, prev_reports, seed, moves, version=version)
     cands = distinct(s.ranked, k)
     late = staged_at_trip(s, s.ranked[0])
     if late:

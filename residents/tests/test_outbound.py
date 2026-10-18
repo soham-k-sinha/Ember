@@ -120,13 +120,14 @@ def test_optimize_streams_points_then_plan(oc):
             if e["type"] == "scatter_point":
                 points.append(e["data"])
     assert types.index("plan") > max(i for i, t in enumerate(types) if t == "scatter_point")  # all points first
-    assert len(points) == points[0]["n_total"] == (2 + 1) * 2                  # (k + baseline) × seeds
+    assert len(points) == points[0]["n_total"] == (2 + 1 + 1) * 2  # candidates + delayed staging + baseline, paired seeds
+    assert any(p["candidate"] == "c00-trip" for p in points)
     for _ in range(100):
         last = oc.get("/optimize").json()
         if not last["running"]:
             break
         time.sleep(0.05)
-    assert last["last"]["error"] is None and last["last"]["points"] == 6
+    assert last["last"]["error"] is None and last["last"]["points"] == 8
     st = oc.get("/state").json()
     assert st["plan_version"] == last["last"]["plan_version"] == 2 and st["plan"]["search"]["robust"]
     assert oc.post("/optimize?seeds=0").status_code == oc.post("/optimize?seeds=2001").status_code == 422
