@@ -1,27 +1,23 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { MapView, perf } from "./components/MapView";
-import { Panels, snapshotNote, type PanelId } from "./components/Panels";
-import {
-  API_BASE,
-  fixturePlaybacks,
-  publishedComparison,
-  publishedScatter,
-  publishedState,
-  scenario,
-  town,
-} from "./fixtures";
-import type { LegendMode } from "./layers";
+import { createClock, useClock, type Clock } from "./clock";
+import { MapView } from "./components/MapView";
+import { Panels, type PanelId } from "./components/Panels";
+import { JoinCard, ScoreCard, Sources, Toasts, useToasts, waitingPeople } from "./components/Hud";
+import { API_BASE, fixturePlaybacks, JOIN_NUMBER, publishedComparison, publishedScatter, publishedState, scenario, town } from "./fixtures";
 import { buildGraph, planWalkers, type BgHousehold } from "./people";
 import { asPlayback, stateFromPlayback, type Playback } from "./playback";
 import { loadFullTown, type FullTown } from "./townFull";
-import { formatSim } from "./format";
-import { asComparison, asState, getJson, openSocket, postJson, robustOf, type LiveStatus } from "./live";
-import { activeKeyframe, closedEdges } from "./model";
+import { formatSim, planDiff, replanSeconds } from "./format";
+import { clockLabel } from "./iso/lighting";
+import { asCalls, asComparison, asPhones, asState, getJson, openSocket, postJson, robustOf, type LiveStatus } from "./live";
+import { closedEdges } from "./model";
 import type {
   AssignmentEvent,
+  Calls,
   Comparison,
   JudgeClosure,
   Message,
+  Phone,
   PlanMetrics,
   PlanSnapshot,
   Report,
@@ -33,7 +29,9 @@ import type {
 type Mode = "fixture" | "live";
 type Replay = "ember" | "baseline";
 
-const SPEEDS = [10, 30, 60, 180, 600];
+const SPEEDS = [30, 60, 180, 600];
+const MAX_PLAYERS = 30;
+const NO_CALLS: Calls = { live: [], recent: [] };
 
 type Model = {
   mode: Mode;
@@ -42,7 +40,6 @@ type Model = {
   liveDetail: string | null;
   snapshot: StateSnapshot;
   previous: StateSnapshot | null;
-  clock: number;
   playing: boolean;
   speed: number;
   comparison: Comparison | null;
@@ -52,22 +49,17 @@ type Model = {
   plans: PlanSnapshot[];
   judge: JudgeClosure[];
   selection: Selection | null;
-  notice: string | null;
-  showHouseholds: boolean;
-  showTrips: boolean;
   busy: string | null;
   tab: PanelId;
-  legend: LegendMode;
   follow: Selection | null;
   replay: Replay;
-  playbacks: { ember: Playback | null; baseline: Playback | null };
-  playbackNote: string | null;
-  showWalkers: boolean;
+  livePlaybacks: { ember: Playback | null; baseline: Playback | null };
+  phones: Phone[];
+  calls: Calls;
+  flat: boolean;
 };
 
 type Action =
-  | { type: "tick"; dt: number }
-  | { type: "clock"; t: number }
   | { type: "playing"; playing: boolean }
   | { type: "speed"; speed: number }
   | { type: "mode"; mode: Mode }
@@ -76,30 +68,22 @@ type Action =
   | { type: "state"; state: StateSnapshot }
   | { type: "plan"; plan: PlanSnapshot }
   | { type: "comparison"; comparison: Comparison }
-  | { type: "scatter"; point: ScatterPoint }
+  | { type: "scatter"; points: ScatterPoint[] }
   | { type: "assignment"; event: AssignmentEvent }
   | { type: "message"; message: Message }
   | { type: "report"; report: Report }
   | { type: "metrics"; metrics: PlanMetrics }
   | { type: "select"; selection: Selection | null }
-  | { type: "notice"; notice: string | null }
   | { type: "busy"; busy: string | null }
   | { type: "tab"; tab: PanelId }
-  | { type: "households" }
-  | { type: "walkers" }
-  | { type: "legend"; legend: LegendMode }
   | { type: "follow"; follow: Selection | null }
   | { type: "replay"; replay: Replay }
-  | { type: "playback"; planner: Replay; playback: Playback | null; note?: string | null }
-  | { type: "trips" }
+  | { type: "playback"; which: Replay; playback: Playback }
+  | { type: "phones"; phones: Phone[] }
+  | { type: "calls"; calls: Calls }
+  | { type: "flat"; flat: boolean }
   | { type: "close"; edgeId: number; t: number }
   | { type: "undo"; edgeId: number };
-
-function isRecordVersion(value: unknown): number | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  const version = (value as { plan_version?: unknown }).plan_version;
-  return typeof version === "number" ? version : null;
-}
 
 function planFromBody(value: unknown): PlanSnapshot | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
@@ -117,48 +101,29 @@ function withPlan(plans: PlanSnapshot[], plan: PlanSnapshot | null): PlanSnapsho
   return [...plans, plan];
 }
 
+const fixtureModel = {
+  liveStatus: "idle" as LiveStatus,
+  liveDetail: null,
+  snapshot: publishedState,
+  previous: null,
+  plans: [],
+  comparison: publishedComparison,
+  scatter: publishedScatter,
+  scatterBatch: publishedScatter[0]?.batchId ?? null,
+  scatterTotal: publishedScatter[0]?.nTotal ?? null,
+};
+
 function reducer(state: Model, action: Action): Model {
   switch (action.type) {
-    case "tick": {
-      const next = Math.min(scenario.t_end_s, state.clock + action.dt * state.speed);
-      return { ...state, clock: next, playing: next < scenario.t_end_s && state.playing };
-    }
-    case "clock":
-      return { ...state, clock: Math.min(scenario.t_end_s, Math.max(0, action.t)) };
     case "playing":
       return { ...state, playing: action.playing };
     case "speed":
       return { ...state, speed: action.speed };
     case "mode":
-      if (action.mode === "fixture") {
-        return {
-          ...state,
-          mode: "fixture",
-          liveStatus: "idle",
-          liveDetail: null,
-          snapshot: publishedState,
-          previous: null,
-          clock: 0,
-          plans: withPlan([], publishedState.plan),
-          comparison: publishedComparison,
-          scatter: publishedScatter,
-          scatterBatch: publishedScatter[0]?.batchId ?? null,
-          scatterTotal: publishedScatter[0]?.nTotal ?? null,
-          notice: "Fixture mode: allston_flood_v1 replayed end to end from the engine (contracts/fixtures/playback*.json). Press Play.",
-          playbacks: { ...fixturePlaybacks },
-          playbackNote: null,
-        };
-      }
-      return {
-        ...state,
-        mode: "live",
-        scatter: [],
-        scatterBatch: null,
-        scatterTotal: null,
-        notice: null,
-        playbacks: { ember: null, baseline: null },
-        playbackNote: null,
-      };
+      if (action.mode === state.mode) return state;
+      return action.mode === "fixture"
+        ? { ...state, ...fixtureModel, mode: "fixture" }
+        : { ...state, mode: "live", scatter: [], scatterBatch: null, scatterTotal: null };
     case "api":
       return { ...state, apiBase: action.apiBase };
     case "live-status":
@@ -167,17 +132,13 @@ function reducer(state: Model, action: Action): Model {
         liveStatus: action.status,
         liveDetail: action.detail === undefined ? state.liveDetail : action.detail,
       };
-    case "state": {
-      const previous = action.state.t_s === state.snapshot.t_s ? state.previous : state.snapshot;
-      const follow = state.mode === "live" && state.playing;
+    case "state":
       return {
         ...state,
         snapshot: action.state,
-        previous,
+        previous: action.state.t_s === state.snapshot.t_s ? state.previous : state.snapshot,
         plans: withPlan(state.plans, action.state.plan),
-        clock: follow ? state.clock : action.state.t_s,
       };
-    }
     case "plan":
       return {
         ...state,
@@ -187,16 +148,22 @@ function reducer(state: Model, action: Action): Model {
           : state.snapshot,
       };
     case "comparison":
-      return { ...state, comparison: action.comparison, tab: "compare" };
+      return { ...state, comparison: action.comparison, tab: "proof" };
     case "scatter": {
-      const sameBatch = state.scatterBatch === action.point.batchId;
-      const existing = sameBatch ? state.scatter : [];
-      if (existing.some((point) => point.runId === action.point.runId)) return state;
+      const batch = action.points[action.points.length - 1].batchId;
+      const kept = state.scatterBatch === batch ? state.scatter : [];
+      const seen = new Set(kept.map((point) => point.runId));
+      const fresh: ScatterPoint[] = [];
+      for (const point of action.points) {
+        if (point.batchId !== batch || seen.has(point.runId)) continue;
+        seen.add(point.runId);
+        fresh.push(point);
+      }
       return {
         ...state,
-        scatterBatch: action.point.batchId,
-        scatterTotal: action.point.nTotal ?? state.scatterTotal,
-        scatter: [...existing, action.point],
+        scatterBatch: batch,
+        scatterTotal: action.points[action.points.length - 1].nTotal ?? state.scatterTotal,
+        scatter: [...kept, ...fresh],
       };
     }
     case "assignment": {
@@ -243,33 +210,24 @@ function reducer(state: Model, action: Action): Model {
       return {
         ...state,
         selection: action.selection,
-        tab: action.selection ? "inspector" : state.tab,
         follow: action.selection && state.follow && (action.selection.kind !== state.follow.kind || action.selection.id !== state.follow.id) ? null : state.follow,
       };
-    case "notice":
-      return { ...state, notice: action.notice };
     case "busy":
       return { ...state, busy: action.busy };
     case "tab":
       return { ...state, tab: action.tab };
-    case "households":
-      return { ...state, showHouseholds: !state.showHouseholds };
-    case "walkers":
-      return { ...state, showWalkers: !state.showWalkers };
-    case "legend":
-      return { ...state, legend: action.legend };
     case "follow":
       return { ...state, follow: action.follow, selection: action.follow ?? state.selection };
     case "replay":
       return { ...state, replay: action.replay };
     case "playback":
-      return {
-        ...state,
-        playbacks: { ...state.playbacks, [action.planner]: action.playback },
-        playbackNote: action.note === undefined ? state.playbackNote : action.note,
-      };
-    case "trips":
-      return { ...state, showTrips: !state.showTrips };
+      return { ...state, livePlaybacks: { ...state.livePlaybacks, [action.which]: action.playback } };
+    case "phones":
+      return { ...state, phones: action.phones };
+    case "calls":
+      return { ...state, calls: action.calls };
+    case "flat":
+      return { ...state, flat: action.flat };
     case "close":
       if (state.judge.some((item) => item.edge_id === action.edgeId)) return state;
       return {
@@ -284,54 +242,52 @@ function reducer(state: Model, action: Action): Model {
 }
 
 const initial: Model = {
-  mode: "fixture",
+  ...fixtureModel,
+  mode: new URLSearchParams(window.location.search).has("live") ? "live" : "fixture",
   apiBase: API_BASE,
-  liveStatus: "idle",
-  liveDetail: null,
-  snapshot: publishedState,
-  previous: null,
-  clock: 0,
   playing: false,
-  speed: 30,
-  comparison: publishedComparison,
-  scatter: publishedScatter,
-  scatterBatch: publishedScatter[0]?.batchId ?? null,
-  scatterTotal: publishedScatter[0]?.nTotal ?? null,
-  plans: withPlan([], publishedState.plan),
+  speed: 60,
   judge: [],
   selection: null,
-  notice: "Fixture mode: allston_flood_v1 replayed end to end from the engine. Press Play, or jump to Judge's corner.",
-  showHouseholds: true,
-  showTrips: false,
   busy: null,
-  tab: "ledger",
-  legend: "status",
+  tab: "feed",
   follow: null,
   replay: "ember",
-  playbacks: { ...fixturePlaybacks },
-  playbackNote: null,
-  showWalkers: true,
+  livePlaybacks: { ember: null, baseline: null },
+  phones: [],
+  calls: NO_CALLS,
+  flat: false,
 };
 
 export function App() {
   const [model, dispatch] = useReducer(reducer, initial);
-  if (import.meta.env.DEV) (window as unknown as { __clock?: (t: number, playing?: boolean) => void }).__clock = (t, playing = false) => {
-    dispatch({ type: "playing", playing });
-    dispatch({ type: "clock", t });
-  };
-  const playback = model.playbacks[model.replay];
-  const replaying = playback != null && playback.scenario_id === model.snapshot.scenario_id;
-  // the picture at the clock: the replay over the base snapshot, or the snapshot itself
-  const display = useMemo(
-    () => perf("display", () => (replaying && playback ? stateFromPlayback(playback, model.snapshot, model.clock) : model.snapshot)),
-    [replaying, playback, model.snapshot, model.clock],
-  );
-  const closures = useMemo(
-    () => perf("closures", () => closedEdges(display, model.clock, model.judge)),
-    [display, model.clock, model.judge],
-  );
+  const [clock] = useState(createClock);
+  if (import.meta.env.DEV) (window as unknown as { __clock?: typeof clock }).__clock = clock;
+  // panels and the score card follow the clock 4× a second; only the stage and the transport follow every frame
+  const t = useClock(clock, 250);
+  const [toasts, toast] = useToasts();
+  const [sources, setSources] = useState(false);
+  const root = model.apiBase.replace(/\/$/, "");
+  const live = model.mode === "live";
 
-  // every household (full shared town) for lit homes and the walking crowd; the fixture's 1-in-12 sample until it loads
+  const playbacks = live ? model.livePlaybacks : fixturePlaybacks;
+  const sameScenario = (pb: Playback | null) => (pb && pb.scenario_id === model.snapshot.scenario_id ? pb : null);
+  const emberPb = sameScenario(playbacks.ember);
+  const baselinePb = sameScenario(playbacks.baseline);
+  const playback = model.replay === "baseline" ? baselinePb : emberPb;
+
+  const emberNow = useMemo(() => (emberPb ? stateFromPlayback(emberPb, model.snapshot, t) : model.snapshot), [emberPb, model.snapshot, t]);
+  const baselineNow = useMemo(() => (baselinePb ? stateFromPlayback(baselinePb, model.snapshot, t) : null), [baselinePb, model.snapshot, t]);
+  const display = model.replay === "baseline" ? baselineNow ?? model.snapshot : emberNow;
+  const closures = useMemo(() => closedEdges(display, t, model.judge), [display, t, model.judge]);
+  const plans = withPlan(model.plans, model.plans.length === 0 ? emberNow.plan : null);
+  const comparison = model.comparison?.scenario_id === model.snapshot.scenario_id ? model.comparison : null;
+  const nominal = {
+    ember: model.snapshot.plan?.metrics ?? emberNow.plan?.metrics,
+    baseline: baselinePb?.metrics ?? comparison?.nominal.baseline,
+  };
+
+  // every household (full shared town) for the walking crowd; the fixture's 1-in-12 sample until it loads
   const [fullTown, setFullTown] = useState<FullTown | null>(null);
   useEffect(() => {
     let alive = true;
@@ -365,55 +321,63 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [background, graph, shelterNode, assistedKey, fullTown],
   );
-  const frame = model.snapshot.scenario_id === scenario.scenario_id ? activeKeyframe(model.clock) : null;
-  const awayFromSnapshot = Math.abs(model.clock - model.snapshot.t_s) > 30;
+
+  const phones = live ? model.phones : [];
+  const calls = live ? model.calls : NO_CALLS;
+  const players = useMemo(() => {
+    const onCall = new Set(calls.live.map((call) => call.handle));
+    return new Map(
+      phones
+        .filter((phone) => phone.player != null && phone.household_id != null)
+        .map((phone) => [phone.household_id!, { label: `Player ${phone.player}`, onCall: onCall.has(phone.handle) }]),
+    );
+  }, [phones, calls]);
+
+  const playingRef = useRef(model.playing);
+  playingRef.current = model.playing;
+  const serverClock = useRef<number | null>(null);
+  const applyState = (snapshot: StateSnapshot) => {
+    dispatch({ type: "state", state: snapshot });
+    serverClock.current = snapshot.t_s;
+    if (!playingRef.current) clock.set(snapshot.t_s);
+  };
+
+  useEffect(() => {
+    if (!live) {
+      serverClock.current = null;
+      clock.set(0);
+    }
+  }, [live, clock]);
 
   useEffect(() => {
     if (!model.playing) return;
     let frameId = 0;
     let last = performance.now();
     const step = (now: number) => {
-      const dt = Math.min(0.1, (now - last) / 1000);
+      const next = Math.min(scenario.t_end_s, clock.get() + Math.min(0.1, (now - last) / 1000) * model.speed);
       last = now;
-      dispatch({ type: "tick", dt });
-      frameId = requestAnimationFrame(step);
+      clock.set(next);
+      if (next >= scenario.t_end_s) dispatch({ type: "playing", playing: false });
+      else frameId = requestAnimationFrame(step);
     };
     frameId = requestAnimationFrame(step);
     return () => cancelAnimationFrame(frameId);
-  }, [model.playing]);
+  }, [model.playing, model.speed, clock]);
 
   useEffect(() => {
-    if (model.mode !== "live") return;
+    if (!live) return;
     let stop = () => {};
     let cancelled = false;
     const run = async () => {
       dispatch({ type: "live-status", status: "connecting", detail: null });
       try {
-        const body = await getJson(`${model.apiBase.replace(/\/$/, "")}/state`);
-        const snapshot = asState(body);
-        if (!cancelled && snapshot) {
-          dispatch({ type: "state", state: snapshot });
-          dispatch({
-            type: "live-status",
-            status: "connecting",
-            detail: `state v${snapshot.version} · ${snapshot.scenario_id}`,
-          });
-        }
+        const snapshot = asState(await getJson(`${root}/state`));
+        if (!cancelled && snapshot) applyState(snapshot);
         if (!cancelled && !snapshot) {
-          dispatch({
-            type: "live-status",
-            status: "error",
-            detail: "GET /state did not return a state snapshot. Showing the last good picture.",
-          });
+          dispatch({ type: "live-status", status: "error", detail: "GET /state did not return a state snapshot. Showing the last good picture." });
         }
       } catch (error) {
-        if (!cancelled) {
-          dispatch({
-            type: "live-status",
-            status: "error",
-            detail: error instanceof Error ? error.message : "GET /state failed.",
-          });
-        }
+        if (!cancelled) dispatch({ type: "live-status", status: "error", detail: error instanceof Error ? error.message : "GET /state failed." });
       }
       if (cancelled) return;
       // The backend broadcasts `plan` after a replan but not always a fresh `state`, so closed roads and
@@ -422,39 +386,48 @@ export function App() {
       const refetchState = async () => {
         refetch = undefined;
         try {
-          const snapshot = asState(await getJson(`${model.apiBase.replace(/\/$/, "")}/state`));
-          if (!cancelled && snapshot) dispatch({ type: "state", state: snapshot });
+          const snapshot = asState(await getJson(`${root}/state`));
+          if (!cancelled && snapshot) applyState(snapshot);
         } catch {
           // keep the last good picture; the socket status already reports connectivity
         }
       };
+      // a 1,000-run fan-out streams 1,000 scatter points: hand them to React once per frame
+      let pending: ScatterPoint[] = [];
+      let flush = 0;
       const closeSocket = openSocket(
         model.apiBase,
         (event) => {
           if (event.type === "state") {
             window.clearTimeout(refetch);
             refetch = undefined;
-            dispatch({ type: "state", state: event.state });
+            applyState(event.state);
           } else if (event.type === "plan") {
             dispatch({ type: "plan", plan: event.plan });
             window.clearTimeout(refetch);
             refetch = window.setTimeout(() => void refetchState(), 300);
-          } else if (event.type === "scatter_point") dispatch({ type: "scatter", point: event.point });
-          else if (event.type === "assignment") dispatch({ type: "assignment", event: event.event });
+          } else if (event.type === "scatter_point") {
+            pending.push(event.point);
+            flush ||= requestAnimationFrame(() => {
+              flush = 0;
+              dispatch({ type: "scatter", points: pending });
+              pending = [];
+            });
+          } else if (event.type === "assignment") dispatch({ type: "assignment", event: event.event });
           else if (event.type === "message") dispatch({ type: "message", message: event.message });
           else if (event.type === "report") dispatch({ type: "report", report: event.report });
           else if (event.type === "metrics") dispatch({ type: "metrics", metrics: event.metrics });
         },
         (status, detail) => dispatch({ type: "live-status", status, detail }),
         async () => {
-          const body = await getJson(`${model.apiBase.replace(/\/$/, "")}/state`);
-          const snapshot = asState(body);
-          if (snapshot) dispatch({ type: "state", state: snapshot });
+          const snapshot = asState(await getJson(`${root}/state`));
+          if (snapshot) applyState(snapshot);
           else throw new Error("GET /state did not return a state snapshot.");
         },
       );
       stop = () => {
         window.clearTimeout(refetch);
+        cancelAnimationFrame(flush);
         closeSocket();
       };
     };
@@ -463,145 +436,128 @@ export function App() {
       cancelled = true;
       stop();
     };
-  }, [model.mode, model.apiBase]);
+  }, [live, root]);
 
-  // live: fetch the replay of the current plan (and the baseline when asked) after every new plan version
-  const livePlanVersion = model.mode === "live" ? model.snapshot.plan?.version ?? model.snapshot.plan_version : null;
+  // live: the replays of the current plan and of the baseline on the same reports; a failed fetch keeps the last good one
+  const livePlanVersion = live ? model.snapshot.plan?.version ?? model.snapshot.plan_version : null;
+  const reportCount = model.snapshot.reports.length;
   useEffect(() => {
-    if (model.mode !== "live" || livePlanVersion == null) return;
-    let cancelled = false;
-    const root = model.apiBase.replace(/\/$/, "");
-    const planners: Replay[] = model.replay === "baseline" ? ["ember", "baseline"] : ["ember"];
-    for (const planner of planners) {
-      getJson(`${root}/playback?planner=${planner}`, 30000)
+    if (!live || livePlanVersion == null) return;
+    const abort = new AbortController();
+    for (const which of ["ember", "baseline"] as const) {
+      getJson(`${root}/playback?which=${which}`, 30000, abort.signal)
         .then((body) => {
-          if (cancelled) return;
           const pb = asPlayback(body);
-          dispatch({ type: "playback", planner, playback: pb, note: pb ? null : "GET /playback returned no replay; vehicles move between snapshots." });
+          if (pb) dispatch({ type: "playback", which, playback: pb });
         })
-        .catch((error: unknown) => {
-          if (cancelled) return;
-          dispatch({
-            type: "playback",
-            planner,
-            playback: null,
-            note: `Live replay unavailable (${error instanceof Error ? error.message : "GET /playback failed"}); vehicles move between snapshots.`,
-          });
-        });
+        .catch(() => undefined);
     }
-    return () => {
-      cancelled = true;
+    return () => abort.abort();
+  }, [live, root, livePlanVersion, reportCount]);
+
+  // live: the drill roster and the calls in progress (no WebSocket events for either)
+  useEffect(() => {
+    if (!live) return;
+    const poll = () => {
+      getJson(`${root}/phones`)
+        .then((body) => {
+          const list = asPhones(body);
+          if (list) dispatch({ type: "phones", phones: list });
+        })
+        .catch(() => undefined);
+      getJson(`${root}/calls`)
+        .then((body) => {
+          const list = asCalls(body);
+          if (list) dispatch({ type: "calls", calls: list });
+        })
+        .catch(() => undefined);
     };
-  }, [model.mode, model.apiBase, livePlanVersion, model.replay]);
-
-  const clockRef = useRef(model.clock);
-  clockRef.current = model.clock;
-  const apiRef = useRef(model.apiBase);
-  apiRef.current = model.apiBase;
-  const modeRef = useRef(model.mode);
-  modeRef.current = model.mode;
-  const serverClock = useRef<number | null>(null);
-
-  useEffect(() => {
-    serverClock.current = model.mode === "live" ? model.snapshot.t_s : null;
-  }, [model.mode, model.snapshot]);
-
-  useEffect(() => {
-    if (model.mode !== "live" || model.playing) return;
-    if (serverClock.current == null) return;
-    if (Math.abs(model.clock - serverClock.current) < 1) return;
-    const handle = window.setTimeout(() => {
-      void pushClock(apiRef.current, clockRef.current);
-    }, 400);
-    return () => window.clearTimeout(handle);
-  }, [model.mode, model.playing, model.clock]);
-
-  useEffect(() => {
-    if (model.mode !== "live" || !model.playing) return;
-    const handle = window.setInterval(() => {
-      if (serverClock.current == null) return;
-      void pushClock(apiRef.current, clockRef.current);
-    }, 1200);
+    poll();
+    const handle = window.setInterval(poll, 2000);
     return () => window.clearInterval(handle);
-  }, [model.mode, model.playing]);
+  }, [live, root]);
 
-  async function pushClock(apiBase: string, t: number) {
-    if (modeRef.current !== "live") return;
-    try {
-      await postJson(`${apiBase.replace(/\/$/, "")}/clock`, { t_s: t }, 20000);
-    } catch (error) {
-      dispatch({
-        type: "notice",
-        notice: error instanceof Error ? `Clock failed: ${error.message}` : "Clock failed.",
-      });
+  // a toast for every new live plan version: what changed and how long the replan took
+  const latestPlan = model.plans[model.plans.length - 1];
+  const seenPlan = useRef<{ mode: Mode; version: number } | null>(null);
+  useEffect(() => {
+    if (!latestPlan) return;
+    const seen = seenPlan.current;
+    seenPlan.current = { mode: model.mode, version: latestPlan.version };
+    if (!live || seen?.mode !== "live" || latestPlan.version <= seen.version) return;
+    const seconds = replanSeconds(latestPlan);
+    toast(`v${seen.version} → v${latestPlan.version}${seconds != null ? ` in ${seconds.toFixed(1)} s` : ""} · ${planDiff(latestPlan, model.snapshot) || "no assignment changed"}`, "plan");
+  }, [latestPlan?.version, model.mode]);
+
+  // live: the backend's clock follows the scrubber (debounced) and the play head
+  useEffect(() => {
+    if (!live) return;
+    const push = () => {
+      if (serverClock.current == null || Math.abs(clock.get() - serverClock.current) < 1) return;
+      postJson(`${root}/clock`, { t_s: clock.get() }, 20000).catch((error: unknown) =>
+        toast(`Clock failed: ${error instanceof Error ? error.message : "POST /clock failed"}`, "error"),
+      );
+    };
+    if (model.playing) {
+      const handle = window.setInterval(push, 1200);
+      return () => window.clearInterval(handle);
     }
-  }
+    let handle = 0;
+    const stop = clock.subscribe(() => {
+      window.clearTimeout(handle);
+      handle = window.setTimeout(push, 400);
+    });
+    return () => {
+      stop();
+      window.clearTimeout(handle);
+    };
+  }, [live, model.playing, root, clock, toast]);
 
   async function closeRoad(edgeId: number) {
-    dispatch({ type: "close", edgeId, t: model.clock });
-    if (model.mode !== "live") {
-      dispatch({
-        type: "notice",
-        notice: "Fixture mode kept this closure on the map. Live mode also POSTs /disruption.",
-      });
+    dispatch({ type: "close", edgeId, t: clock.get() });
+    if (!live) {
+      toast("Closed on this map only. Live mode also tells the planner (POST /disruption).");
       return;
     }
     dispatch({ type: "busy", busy: "close" });
     try {
-      const root = model.apiBase.replace(/\/$/, "");
       await postJson(`${root}/disruption`, { close_edges: [edgeId] }, 30000);
-      const body = await getJson(`${root}/state`);
-      const snapshot = asState(body);
-      if (snapshot) dispatch({ type: "state", state: snapshot });
-      dispatch({ type: "notice", notice: `POST /disruption closed edge ${edgeId} (both directions).` });
+      const snapshot = asState(await getJson(`${root}/state`));
+      if (snapshot) applyState(snapshot);
+      toast(`Road closed: edge ${edgeId}, both directions.`);
     } catch (error) {
-      dispatch({
-        type: "notice",
-        notice: error instanceof Error ? `Close failed: ${error.message}` : "Close failed.",
-      });
+      toast(error instanceof Error ? `Close failed: ${error.message}` : "Close failed.", "error");
     } finally {
       dispatch({ type: "busy", busy: null });
     }
   }
 
   async function replan() {
-    if (model.mode !== "live") {
-      dispatch({ type: "notice", notice: "Replan needs the backend. Switch to live, then try again." });
-      dispatch({ type: "tab", tab: "plans" });
+    if (!live) {
+      toast("Replanning needs the backend: switch to Live in settings.");
       return;
     }
     dispatch({ type: "busy", busy: "replan" });
     try {
-      const root = model.apiBase.replace(/\/$/, "");
       const body = await postJson(`${root}/replan`, {}, 30000);
       const plan = planFromBody(body);
       if (plan) dispatch({ type: "plan", plan });
       const snapshot = asState(await getJson(`${root}/state`));
-      if (snapshot) dispatch({ type: "state", state: snapshot });
-      const version = isRecordVersion(body);
-      dispatch({
-        type: "notice",
-        notice: version == null ? "POST /replan returned." : `POST /replan returned plan v${version}.`,
-      });
+      if (snapshot) applyState(snapshot);
     } catch (error) {
-      dispatch({
-        type: "notice",
-        notice: error instanceof Error ? `Replan failed: ${error.message}` : "Replan failed.",
-      });
+      toast(error instanceof Error ? `Replan failed: ${error.message}` : "Replan failed.", "error");
     } finally {
       dispatch({ type: "busy", busy: null });
     }
   }
 
   async function optimize() {
-    if (model.mode !== "live") {
-      dispatch({ type: "notice", notice: "Optimize runs on the backend (Daytona or the local pool). Switch to Live first." });
-      dispatch({ type: "tab", tab: "scatter" });
+    dispatch({ type: "tab", tab: "proof" });
+    if (!live) {
+      toast("Optimize runs on the backend (Daytona, or the local pool): switch to Live in settings.");
       return;
     }
     dispatch({ type: "busy", busy: "optimize" });
-    dispatch({ type: "tab", tab: "scatter" });
-    const root = model.apiBase.replace(/\/$/, "");
     try {
       try {
         await postJson(`${root}/optimize`, {}, 15000);
@@ -621,209 +577,165 @@ export function App() {
         if (Date.now() > deadline) throw new Error("still running after 5 min");
       }
       const snapshot = asState(await getJson(`${root}/state`));
-      if (snapshot) dispatch({ type: "state", state: snapshot });
-      const robust = robustOf(snapshot?.plan) ?? null;
+      if (snapshot) applyState(snapshot);
       const error = typeof last === "object" && last !== null ? (last as { error?: unknown }).error : undefined;
-      dispatch({
-        type: "notice",
-        notice: typeof error === "string"
-          ? `Optimize failed: ${error}`
-          : robust
-            ? `${robust.jobs} runs on ${robust.pool}${robust.workers ? ` (${robust.workers} workers)` : ""}` +
-              `${robust.fanout_wall_s != null ? ` in ${robust.fanout_wall_s.toFixed(1)} s` : ""}. ` +
-              (robust.chosen !== robust.nominal_best
-                ? `Chose ${robust.chosen} over the nominal best ${robust.nominal_best}: better in the worst 20% of worlds.`
-                : `Kept ${robust.chosen}: the nominal best is also the most robust.`)
-            : "Optimize finished.",
-      });
+      const robust = robustOf(snapshot?.plan);
+      if (typeof error === "string") toast(`Optimize failed: ${error}`, "error");
+      else if (robust) {
+        toast(robust.chosen !== robust.nominal_best
+          ? `Chose ${robust.chosen} over the forecast's best ${robust.nominal_best}: fewer people missed in the worst 20% of worlds.`
+          : `Kept ${robust.chosen}: the forecast's best plan is also the most robust.`, "plan");
+      }
     } catch (error) {
-      dispatch({
-        type: "notice",
-        notice: error instanceof Error ? `Optimize failed: ${error.message}` : "Optimize failed.",
-      });
+      toast(error instanceof Error ? `Optimize failed: ${error.message}` : "Optimize failed.", "error");
     } finally {
       dispatch({ type: "busy", busy: null });
     }
   }
 
   async function compare() {
-    if (model.mode !== "live") {
-      dispatch({
-        type: "notice",
-        notice: "The table is the published comparison fixture. Live mode refreshes it from GET /comparison.",
-      });
-      dispatch({ type: "tab", tab: "compare" });
+    dispatch({ type: "tab", tab: "proof" });
+    if (!live) {
+      toast("This is the published comparison. Live mode reruns it on the current reports.");
       return;
     }
     dispatch({ type: "busy", busy: "compare" });
-    const root = model.apiBase.replace(/\/$/, "");
     try {
-      const body = await getJson(`${root}/comparison?seeds=5`, 90000);
-      const comparison = asComparison(body);
+      const comparison = asComparison(await getJson(`${root}/comparison?seeds=5`, 90000));
       if (!comparison) throw new Error("GET /comparison did not include nominal.baseline and nominal.ember.");
       dispatch({ type: "comparison", comparison });
-      dispatch({
-        type: "notice",
-        notice: `Comparison loaded for ${comparison.scenario_id}. B − A is EMBER minus baseline. Spread, not confidence bounds.`,
-      });
     } catch (error) {
-      dispatch({
-        type: "notice",
-        notice: error instanceof Error ? `Comparison failed: ${error.message}` : "Comparison failed.",
-      });
+      toast(error instanceof Error ? `Comparison failed: ${error.message}` : "Comparison failed.", "error");
     } finally {
       dispatch({ type: "busy", busy: null });
     }
   }
 
-  // KPIs show what the current plan is projected to achieve over the whole horizon; "so far" is the outcome at the clock
-  const soFar = display.metrics;
-  const projected = display.plan?.metrics;
-  const metrics = projected ?? soFar;
-  const planVersion = display.plan?.version ?? display.plan_version;
-  const hospital = display.facilities.find((facility) => facility.type === "hospital");
+  const status = live ? model.liveStatus : "idle";
+  const select = (selection: Selection | null) => dispatch({ type: "select", selection });
+  const follow = (selection: Selection | null) => dispatch({ type: "follow", follow: selection });
 
   return (
     <div className="app">
       <header className="top">
-        <div className="brand">
-          <p className="kicker">Ember</p>
-          <h1>Allston flood</h1>
-          <p className="meta">{snapshotNote(model.snapshot)}</p>
-        </div>
-        <div className="clock">
-          <button className="primary" onClick={() => dispatch({ type: "playing", playing: !model.playing })}>
-            {model.playing ? "Pause" : "Play"}
-          </button>
-          <label className="scrub">
-            <span>{formatSim(model.clock)}</span>
-            <input
-              type="range"
-              min={0}
-              max={scenario.t_end_s}
-              step={scenario.tick_s ?? 60}
-              value={model.clock}
-              onChange={(event) => dispatch({ type: "clock", t: Number(event.target.value) })}
-            />
-          </label>
-          <div className="segmented small" role="group" aria-label="Speed">
-            {SPEEDS.map((speed) => (
-              <button key={speed} className={model.speed === speed ? "on" : ""} onClick={() => dispatch({ type: "speed", speed })}>
-                {speed}×
+        <p className="brand">
+          <strong>EMBER</strong>
+          <span>Allston flood drill</span>
+        </p>
+        <Transport clock={clock} playing={model.playing} onPlay={(playing) => dispatch({ type: "playing", playing })} />
+        <label className="switch">
+          <input
+            type="checkbox"
+            checked={model.replay === "baseline"}
+            onChange={(event) => dispatch({ type: "replay", replay: event.target.checked ? "baseline" : "ember" })}
+          />
+          <i />
+          vs baseline
+        </label>
+        <p className={`status ${status}`} title={model.liveDetail ?? undefined}>
+          {live ? (status === "live" ? "Live" : status === "error" ? "Offline" : "Connecting") : "Replay"}
+        </p>
+        <button className="link" onClick={() => setSources(true)}>
+          Sources
+        </button>
+        <details className="settings">
+          <summary aria-label="Settings">⚙</summary>
+          <div className="popover">
+            <p>Data</p>
+            <div className="segmented">
+              <button className={live ? "" : "on"} onClick={() => dispatch({ type: "mode", mode: "fixture" })}>
+                Fixtures
               </button>
-            ))}
+              <button className={live ? "on" : ""} onClick={() => dispatch({ type: "mode", mode: "live" })}>
+                Live
+              </button>
+            </div>
+            {live ? (
+              <input
+                aria-label="Backend URL"
+                defaultValue={model.apiBase}
+                key={model.apiBase}
+                onBlur={(event) => {
+                  const next = event.target.value.trim();
+                  if (next && next !== model.apiBase) dispatch({ type: "api", apiBase: next });
+                }}
+              />
+            ) : null}
+            {live && model.liveDetail ? <small>{model.liveDetail}</small> : null}
+            <p>Speed</p>
+            <div className="segmented">
+              {SPEEDS.map((speed) => (
+                <button key={speed} className={model.speed === speed ? "on" : ""} onClick={() => dispatch({ type: "speed", speed })}>
+                  {speed}×
+                </button>
+              ))}
+            </div>
+            <p>View</p>
+            <div className="segmented">
+              <button className={model.flat ? "" : "on"} onClick={() => dispatch({ type: "flat", flat: false })}>
+                Stage
+              </button>
+              <button className={model.flat ? "on" : ""} onClick={() => dispatch({ type: "flat", flat: true })}>
+                Flat map
+              </button>
+            </div>
           </div>
-          <p className="meta">{frame ? frame.label ?? `Keyframe ${formatSim(frame.t_s)}` : "Dry"}</p>
-        </div>
-        <div className="mode">
-          <div className="segmented" role="group" aria-label="Plan replayed on the map">
-            <button className={model.replay === "ember" ? "on" : ""} onClick={() => dispatch({ type: "replay", replay: "ember" })}>
-              EMBER plan
-            </button>
-            <button className={model.replay === "baseline" ? "on baseline" : ""} onClick={() => dispatch({ type: "replay", replay: "baseline" })}>
-              Baseline
-            </button>
-          </div>
-          <p className={`meta ${replaying ? "live-live" : ""}`}>
-            {replaying
-              ? `● Replaying ${playback?.planner === "baseline" ? "the baseline" : `plan v${playback?.plan_version ?? "?"}`}`
-              : model.playbackNote ?? "Snapshots only"}
-          </p>
-          <div className="segmented" role="group" aria-label="Data source">
-            <button
-              className={model.mode === "fixture" ? "on" : ""}
-              onClick={() => dispatch({ type: "mode", mode: "fixture" })}
-            >
-              Fixtures
-            </button>
-            <button
-              className={model.mode === "live" ? "on" : ""}
-              onClick={() => dispatch({ type: "mode", mode: "live" })}
-            >
-              Live
-            </button>
-          </div>
-          <p className={`meta live-${model.liveStatus}`}>
-            {model.mode === "fixture"
-              ? "No backend"
-              : model.liveDetail ?? model.liveStatus}
-          </p>
-        </div>
+        </details>
       </header>
-      <section className="kpis" aria-label="Plan metrics">
-        <p className="kpi-caption">
-          <span>{projected ? "Projected" : "So far"}</span>
-          <strong>plan v{planVersion ?? "—"}</strong>
-        </p>
-        <Kpi
-          label="Reached by deadline"
-          value={metrics?.people_reached_before_deadline}
-          sub={projected && soFar ? `${soFar.people_reached_before_deadline ?? 0} so far` : undefined}
-        />
-        <Kpi label="Not reached" value={metrics?.people_unreached} tone={(metrics?.people_unreached ?? 0) > 0 ? "bad" : undefined} />
-        <Kpi label="Unresolved needs" value={metrics?.unresolved_needs} />
-        <Kpi
-          label="Overflow to the Charles"
-          value={metrics?.overflow_m3}
-          unit="m³"
-          tone={(metrics?.overflow_m3 ?? 0) > 0 ? "bad" : "good"}
-          sub={projected && soFar ? `${Math.round(soFar.overflow_m3 ?? 0).toLocaleString("en-US")} m³ so far` : undefined}
-        />
-        <Kpi
-          label="Hospital outage"
-          value={metrics?.hospital_outage_s != null ? Math.round(metrics.hospital_outage_s / 60) : undefined}
-          unit="min"
-          tone={(metrics?.hospital_outage_s ?? 0) > 0 ? "bad" : "good"}
-          sub={hospital ? `now: ${hospital.state}` : undefined}
-        />
-        <Kpi label="Roads closed" value={closures.length} />
-        <Kpi label="Vehicle-km" value={metrics?.vehicle_km} digits={0} />
-      </section>
       <main className="workspace">
-      {awayFromSnapshot && !replaying ? (
-        <p className="banner">
-          Flood extent and road closures follow the clock. Household status, facility state,
-          and resource positions stay at the {formatSim(model.snapshot.t_s)}{" "}
-          {model.snapshot.source === "scenario" ? "scenario picture" : "snapshot"} until a newer state arrives.
-        </p>
-      ) : null}
-        <MapView
-          state={display}
-          previous={replaying ? null : model.previous}
-          t={model.clock}
-          closures={closures}
-          playback={replaying ? playback : null}
-          walkers={walkers}
-          background={background}
-          backgroundById={backgroundById}
-          showHouseholds={model.showHouseholds}
-          showTrips={model.showTrips}
-          showWalkers={model.showWalkers}
-          legend={model.legend}
-          onLegend={(legend) => dispatch({ type: "legend", legend })}
-          selection={model.selection}
-          follow={model.follow}
-          onFollow={(follow) => dispatch({ type: "follow", follow })}
-          onSelect={(selection) => dispatch({ type: "select", selection })}
-        />
+        <section className="stage">
+          <MapView
+            clock={clock}
+            snapshot={model.snapshot}
+            previous={model.previous}
+            playback={playback}
+            judge={model.judge}
+            walkers={walkers}
+            background={background}
+            backgroundById={backgroundById}
+            players={players}
+            flat={model.flat}
+            selection={model.selection}
+            follow={model.follow}
+            onFollow={follow}
+            onSelect={select}
+          />
+          <ScoreCard
+            plan={model.snapshot.plan ?? emberNow.plan}
+            projected={nominal.ember}
+            baseline={nominal.baseline}
+            soFar={emberNow.metrics}
+            waiting={waitingPeople(emberNow)}
+            waitingBaseline={baselineNow ? waitingPeople(baselineNow) : null}
+          />
+          {model.replay === "baseline" ? (
+            <p className="replay-chip">
+              {baselinePb ? "Showing the baseline: incident by incident, same reports" : "Baseline replay unavailable"}
+            </p>
+          ) : live && !emberPb ? (
+            <p className="replay-chip muted">No live replay yet · vehicles step between snapshots</p>
+          ) : null}
+          <Toasts toasts={toasts} />
+          <JoinCard number={JOIN_NUMBER} phones={phones} calls={calls} state={emberNow} max={MAX_PLAYERS} />
+        </section>
         <Panels
           tab={model.tab}
           onTab={(tab) => dispatch({ type: "tab", tab })}
           state={display}
-          t={model.clock}
+          t={t}
           closures={closures}
           selection={model.selection}
-          playback={replaying ? playback : null}
+          playback={playback}
           walkers={walkers}
           follow={model.follow}
-          onFollow={(follow) => dispatch({ type: "follow", follow })}
-          onSelect={(selection) => dispatch({ type: "select", selection })}
-          comparison={model.comparison}
+          onFollow={follow}
+          onSelect={select}
+          comparison={comparison}
+          nominal={nominal}
           scatter={model.scatter}
           scatterTotal={model.scatterTotal}
-          plans={model.plans}
+          plans={plans}
           judge={model.judge}
-          notice={model.notice}
           busy={model.busy}
           onCloseRoad={(edgeId) => void closeRoad(edgeId)}
           onUndoClosure={(edgeId) => dispatch({ type: "undo", edgeId })}
@@ -832,71 +744,32 @@ export function App() {
           onOptimize={() => void optimize()}
         />
       </main>
-      <footer className="foot">
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={model.showHouseholds}
-            onChange={() => dispatch({ type: "households" })}
-          />
-          Lit homes
-        </label>
-        <label className="check">
-          <input type="checkbox" checked={model.showWalkers} onChange={() => dispatch({ type: "walkers" })} />
-          People on foot (illustrative)
-        </label>
-        <label className="check">
-          <input type="checkbox" checked={model.showTrips} onChange={() => dispatch({ type: "trips" })} />
-          Ambient trips
-        </label>
-        <details>
-          <summary>What is synthetic</summary>
-          <p>
-            {[
-              ...(model.snapshot.synthetic ?? scenario.synthetic ?? []),
-              "household names and members are generated from ids",
-              "neighbours on foot, people gathering at doors and the walking share are illustrative (not simulated, not in any metric)",
-              "vehicles, pickups, deadlines, facility states and overflow come from the engine's simulation",
-            ].join(" · ")}
-          </p>
-        </details>
-        {model.mode === "live" ? (
-          <ApiField value={model.apiBase} onCommit={(apiBase) => dispatch({ type: "api", apiBase })} />
-        ) : null}
-      </footer>
+      {sources ? <Sources synthetic={model.snapshot.synthetic ?? scenario.synthetic ?? []} onClose={() => setSources(false)} /> : null}
     </div>
   );
 }
 
-function ApiField(props: { value: string; onCommit: (value: string) => void }) {
+/** Play, scrub and the clock: follows every frame, so the scrubber never lags the stage. */
+function Transport(props: { clock: Clock; playing: boolean; onPlay: (playing: boolean) => void }) {
+  const t = useClock(props.clock);
   return (
-    <label className="api">
-      API
+    <div className="transport">
+      <button className="play" aria-label={props.playing ? "Pause" : "Play"} onClick={() => props.onPlay(!props.playing)}>
+        {props.playing ? "❚❚" : "▶"}
+      </button>
       <input
-        defaultValue={props.value}
-        key={props.value}
-        onBlur={(event) => {
-          const next = event.target.value.trim();
-          if (next && next !== props.value) props.onCommit(next);
-        }}
+        type="range"
+        aria-label="Simulation time"
+        min={0}
+        max={scenario.t_end_s}
+        step={scenario.tick_s ?? 60}
+        value={t}
+        onChange={(event) => props.clock.set(Number(event.target.value))}
       />
-    </label>
-  );
-}
-
-function Kpi(props: { label: string; value?: number; digits?: number; text?: string; unit?: string; sub?: string; tone?: "good" | "bad" }) {
-  const text = props.text ?? (props.value == null ? "—" : props.value.toLocaleString("en-US", {
-    maximumFractionDigits: props.digits ?? 0,
-    minimumFractionDigits: props.digits ?? 0,
-  }));
-  return (
-    <p className={props.tone ? `kpi ${props.tone}` : "kpi"}>
-      <span>{props.label}</span>
-      <strong>
-        {text}
-        {props.unit && props.value != null ? <small> {props.unit}</small> : null}
-      </strong>
-      {props.sub ? <em>{props.sub}</em> : null}
-    </p>
+      <p className="time">
+        {formatSim(t)}
+        <small>{clockLabel(t)}</small>
+      </p>
+    </div>
   );
 }

@@ -3,8 +3,8 @@ import { TripsLayer } from "@deck.gl/geo-layers";
 import { PathStyleExtension } from "@deck.gl/extensions";
 import type { Layer } from "@deck.gl/core";
 import type { FeatureCollection } from "geojson";
-import { scenario, town, trajectories } from "./fixtures";
-import { assistedIds, floodGeometry } from "./model";
+import { scenario, town } from "./fixtures";
+import { assistedIds, curb, floodGeometry, householdColor, peopleCount } from "./model";
 import { pathAhead, type Playback } from "./playback";
 import {
   arrivedAtShelter,
@@ -20,9 +20,7 @@ import {
 import { atlas } from "./sprites";
 import type {
   Closure,
-  HouseholdStatus,
   LngLat,
-  Needs,
   ResourceStatus,
   Selection,
   StateFacility,
@@ -31,27 +29,8 @@ import type {
   StateSnapshot,
 } from "./types";
 
-export type LegendMode = "status" | "needs" | "deadline";
-
 type RGB = [number, number, number];
 type RGBA = [number, number, number, number];
-
-export const STATUS_COLOR: Record<HouseholdStatus, RGB> = {
-  unknown: [245, 182, 66],
-  needs: [240, 92, 72],
-  assigned: [96, 165, 250],
-  confirmed: [52, 211, 183],
-  picked_up: [125, 211, 252],
-  safe: [110, 220, 130],
-  unreached: [236, 72, 153],
-};
-
-export const NEEDS_COLOR = {
-  mobility: [180, 130, 255] as RGB,
-  medical: [255, 99, 99] as RGB,
-  unknown: [245, 182, 66] as RGB,
-  standard: [148, 186, 255] as RGB,
-};
 
 const RESOURCE_COLOR: Record<string, RGB> = {
   van: [125, 180, 255],
@@ -74,35 +53,6 @@ const FACILITY_COLOR = {
   backup: [245, 182, 66],
   down: [236, 72, 72],
 } as const;
-
-export function needsKey(needs: Needs): keyof typeof NEEDS_COLOR {
-  if (needs === "unknown") return "unknown";
-  if (needs.mobility || needs.accessible_vehicle) return "mobility";
-  if (needs.medical) return "medical";
-  return "standard";
-}
-
-export function deadlineColor(deadline: number | null, t: number): RGB {
-  if (deadline == null) return [150, 160, 170];
-  const left = (deadline - t) / 60;
-  if (left <= 0) return [120, 120, 130];
-  if (left < 30) return [240, 80, 70];
-  if (left < 60) return [250, 150, 60];
-  if (left < 90) return [240, 210, 80];
-  return [110, 220, 130];
-}
-
-export function householdColor(household: StateHousehold, mode: LegendMode, t: number): RGB {
-  if (mode === "needs") return NEEDS_COLOR[needsKey(household.needs)];
-  if (mode === "deadline") return deadlineColor(household.deadline_s, t);
-  return STATUS_COLOR[household.status];
-}
-
-export function peopleCount(household: StateHousehold, fallback = 2): number {
-  const needs = household.needs;
-  if (needs !== "unknown" && typeof needs.people === "number") return needs.people;
-  return fallback;
-}
 
 // ---------- per-frame caches: deck re-uploads (and re-tessellates) whenever `data` is a new array ----------
 const DISTRICT: FeatureCollection = scenario.district
@@ -136,20 +86,6 @@ function backgroundRows(source: BgHousehold[], assisted: Set<number>): BgHouseho
   return bgCache.rows;
 }
 
-const NODE_POS = new Map<number, LngLat>(town.nodes.map((node) => [node.id, [node.lon, node.lat] as LngLat]));
-
-/** Where a household's people wait: on the street a few metres from the nearest road node, toward the home. */
-export function curb(lon: number, lat: number, node: number | undefined): LngLat {
-  const at = node != null ? NODE_POS.get(node) : undefined;
-  if (!at) return [lon, lat];
-  const dx = lon - at[0];
-  const dy = lat - at[1];
-  const d = Math.hypot(dx * 82_000, dy * 111_000);
-  if (d < 1) return at;
-  const f = Math.min(1, 7 / d);
-  return [at[0] + dx * f, at[1] + dy * f];
-}
-
 /** One shared instance: a new extension object per render makes deck rebuild the layer (shader recompile) every frame. */
 const DASHED = [new PathStyleExtension({ dash: true })];
 
@@ -173,14 +109,10 @@ export type LayerArgs = {
   t: number;
   closures: Closure[];
   view: ViewInfo;
-  legend: LegendMode;
   playback: Playback | null;
   walkers: WalkerPlan | null;
   background: BgHousehold[];
   backgroundById: Map<number, BgHousehold>;
-  showHouseholds: boolean;
-  showTrips: boolean;
-  showWalkers: boolean;
   selection: Selection | null;
   follow: Selection | null;
 };
@@ -205,7 +137,7 @@ type Figure = {
 };
 
 export function buildLayers(args: LayerArgs): Layer[] {
-  const { state, t, closures, view, legend, playback, selection } = args;
+  const { state, t, closures, view, playback, selection } = args;
   const sprites = atlas();
   const zoom = view.zoom;
   const street = zoom >= 15.2;
@@ -273,42 +205,23 @@ export function buildLayers(args: LayerArgs): Layer[] {
     }),
   ];
 
-  if (args.showTrips) {
-    layers.push(
-      new TripsLayer({
-        id: "ambient-trips",
-        data: trajectories.trips,
-        getPath: (trip) => trip.path,
-        getTimestamps: (trip) => trip.t,
-        getColor: [200, 200, 220, 90],
-        widthMinPixels: 2,
-        currentTime: t,
-        trailLength: 180,
-        pickable: false,
-      }),
-    );
-  }
-
   // lit homes: every household in the district as a warm dot (synthetic placement, town.meta.synthetic)
-  if (args.showHouseholds) {
-    const bg = backgroundRows(args.background, assisted);
-    layers.push(
-      new ScatterplotLayer<BgHousehold>({
-        id: "households-bg",
-        parameters: ON_TOP,
-        data: bg,
-        getPosition: (household) => [household.lon, household.lat],
-        getFillColor: (household) => {
-          const flicker = hash(household.id, 2) < 0.12 ? 60 : 0;
-          return [255, 200, 130, (street ? 70 : 110) - flicker];
-        },
-        getRadius: street ? 2.5 : 1.6,
-        radiusUnits: "pixels",
-        pickable: true,
-        updateTriggers: { getFillColor: [street] },
-      }),
-    );
-  }
+  layers.push(
+    new ScatterplotLayer<BgHousehold>({
+      id: "households-bg",
+      parameters: ON_TOP,
+      data: backgroundRows(args.background, assisted),
+      getPosition: (household) => [household.lon, household.lat],
+      getFillColor: (household) => {
+        const flicker = hash(household.id, 2) < 0.12 ? 60 : 0;
+        return [255, 200, 130, (street ? 70 : 110) - flicker];
+      },
+      getRadius: street ? 2.5 : 1.6,
+      radiusUnits: "pixels",
+      pickable: true,
+      updateTriggers: { getFillColor: [street] },
+    }),
+  );
 
   // trails and where each vehicle is heading
   if (playback) {
@@ -430,13 +343,13 @@ export function buildLayers(args: LayerArgs): Layer[] {
       data: state.households,
       getPosition: (household) => [household.lon, household.lat],
       getFillColor: (household) => {
-        const c = householdColor(household, legend, t);
+        const c = householdColor(household);
         const gone = household.status === "picked_up" || household.status === "safe";
         return [c[0], c[1], c[2], gone ? 60 : street ? 70 : 220];
       },
       getLineColor: (household) => {
         if (household.judge) return [255, 196, 70, 255];
-        const c = householdColor(household, legend, t);
+        const c = householdColor(household);
         return [c[0], c[1], c[2], 255];
       },
       getRadius: (household) => {
@@ -451,8 +364,8 @@ export function buildLayers(args: LayerArgs): Layer[] {
       pickable: true,
       autoHighlight: true,
       updateTriggers: {
-        getFillColor: [legend, Math.floor(t / 30), street],
-        getLineColor: [legend, Math.floor(t / 30)],
+        getFillColor: [Math.floor(t / 30), street],
+        getLineColor: [Math.floor(t / 30)],
         getRadius: [Math.round(pulse * 10), street],
       },
     }),
@@ -465,7 +378,7 @@ export function buildLayers(args: LayerArgs): Layer[] {
     for (const household of state.households) {
       if (household.status === "picked_up" || household.status === "safe") continue;
       const n = Math.min(6, peopleCount(household));
-      const c = householdColor(household, legend, t);
+      const c = householdColor(household);
       const mobility = household.needs !== "unknown" && (household.needs.mobility || household.needs.accessible_vehicle);
       cluster(curb(household.lon, household.lat, household.node), n, household.household_id, gap * 1.3).forEach((position, i) => {
         figures.push({
@@ -479,7 +392,7 @@ export function buildLayers(args: LayerArgs): Layer[] {
       });
     }
   }
-  if (args.walkers && args.showWalkers) {
+  if (args.walkers) {
     const poses = walkersAt(args.walkers, t, view.bounds);
     for (const pose of poses) {
       const back = pose.walker.turnedBack && pose.walker.times[Math.floor(pose.walker.path.length / 2)] <= t;
@@ -501,7 +414,7 @@ export function buildLayers(args: LayerArgs): Layer[] {
   // shelter crowd: people the vans dropped off (sim) + walkers who arrived (illustrative)
   if (shelter) {
     const dropped = shelter.people_on_site ?? 0;
-    const walked = args.walkers && args.showWalkers ? arrivedAtShelter(args.walkers, t) : 0;
+    const walked = args.walkers ? arrivedAtShelter(args.walkers, t) : 0;
     const n = Math.min(90, dropped + walked);
     if (street && n > 0) {
       crowd([shelter.lon, shelter.lat], n, gap).forEach((position, i) => {

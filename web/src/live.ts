@@ -1,7 +1,9 @@
 import type {
   AssignmentEvent,
+  Calls,
   Comparison,
   Message,
+  Phone,
   PlanMetrics,
   PlanSnapshot,
   Report,
@@ -58,6 +60,21 @@ export function asComparison(value: unknown): Comparison | null {
   if (!isRecord(nominal) || !isRecord(nominal.baseline) || !isRecord(nominal.ember)) return null;
   if (!Array.isArray(value.metrics) || !Array.isArray(value.headline)) return null;
   return value as Comparison;
+}
+
+const numberOrNull = (value: unknown): number | null => (typeof value === "number" ? value : null);
+
+/** GET /phones rows; `player` and `household_id` are null on backends that predate the drill join. */
+export function asPhones(value: unknown): Phone[] | null {
+  if (!Array.isArray(value)) return null;
+  return value
+    .filter((row): row is Record<string, unknown> => isRecord(row) && typeof row.handle === "string")
+    .map((row) => ({ handle: row.handle as string, player: numberOrNull(row.player), household_id: numberOrNull(row.household_id) }));
+}
+
+export function asCalls(value: unknown): Calls | null {
+  if (!isRecord(value) || !Array.isArray(value.live)) return null;
+  return { live: value.live, recent: Array.isArray(value.recent) ? value.recent : [] } as Calls;
 }
 
 function asScatter(value: unknown): ScatterPoint | null {
@@ -157,8 +174,9 @@ async function readError(response: Response): Promise<string> {
   return trimmed ? `${response.status} ${trimmed.slice(0, 280)}` : `${response.status} ${response.statusText}`;
 }
 
-export async function getJson(url: string, timeoutMs = 8000): Promise<unknown> {
-  const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+export async function getJson(url: string, timeoutMs = 8000, signal?: AbortSignal): Promise<unknown> {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const response = await fetch(url, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
   if (!response.ok) throw new Error(await readError(response));
   return response.json() as Promise<unknown>;
 }

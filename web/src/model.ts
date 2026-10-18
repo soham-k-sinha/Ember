@@ -4,7 +4,9 @@ import type {
   Assignment,
   Closure,
   FloodGeometry,
+  HouseholdStatus,
   JudgeClosure,
+  LngLat,
   PlanSnapshot,
   ScenarioKeyframe,
   Selection,
@@ -17,6 +19,39 @@ import type {
 } from "./types";
 
 const edgeById = new Map<number, TownEdge>(town.edges.map((edge) => [edge.id, edge]));
+const nodePos = new Map<number, LngLat>(town.nodes.map((node) => [node.id, [node.lon, node.lat]]));
+
+const STATUS_COLOR: Record<HouseholdStatus, [number, number, number]> = {
+  unknown: [245, 182, 66],
+  needs: [240, 92, 72],
+  assigned: [96, 165, 250],
+  confirmed: [52, 211, 183],
+  picked_up: [125, 211, 252],
+  safe: [110, 220, 130],
+  unreached: [236, 72, 153],
+};
+
+export function householdColor(household: StateHousehold): [number, number, number] {
+  return STATUS_COLOR[household.status];
+}
+
+export function peopleCount(household: StateHousehold, fallback = 2): number {
+  const needs = household.needs;
+  if (needs !== "unknown" && typeof needs.people === "number") return needs.people;
+  return fallback;
+}
+
+/** Where a household's people wait: on the street a few metres from the nearest road node, toward the home. */
+export function curb(lon: number, lat: number, node: number | undefined): LngLat {
+  const at = node != null ? nodePos.get(node) : undefined;
+  if (!at) return [lon, lat];
+  const dx = lon - at[0];
+  const dy = lat - at[1];
+  const d = Math.hypot(dx * 82_000, dy * 111_000);
+  if (d < 1) return at;
+  const f = Math.min(1, 7 / d);
+  return [at[0] + dx * f, at[1] + dy * f];
+}
 
 export function edgeRecord(id: number): TownEdge | undefined {
   return edgeById.get(id);
