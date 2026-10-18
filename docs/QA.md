@@ -9,7 +9,7 @@ Roles: **A** = Aryaman (laptop), **S** = Soham (backend, operator phone), **J** 
 
 The website: a top bar (clock, play/scrub, "vs baseline" switch, LIVE dot, Sources, ⚙ for Fixtures/Live, speed and
 Stage/Flat map), the stage, a floating score card (reached before water, still waiting, hospital outage, sewage kept out
-of the Charles, each vs baseline), the latest-change strip (the reporter's own outcome first), the **Join the flood drill**
+of the Charles, each vs baseline), the latest-change strip (the reporter's own outcome first), the **Join the flood**
 card (number → Join → QR → "Player N joined") with the player roster, and three tabs: **Feed** (text in → fact → new plan →
 text out, open needs), **Plan** (vehicles, plan versions; click anything on the stage or in a list for its inspector and
 rationale) and **Proof** (Run comparison; **Pre-season stress test** at 0:00, **Optimize** later; **Stress test 10,000

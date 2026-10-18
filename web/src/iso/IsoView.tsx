@@ -677,11 +677,21 @@ function placeLabels(ctx: Ctx) {
   const placed: Array<[number, number, number, number]> = [];
   const W = ctx.app.screen.width;
   const H = ctx.app.screen.height;
-  for (const { item, x, y, prio } of queued) {
-    const r: [number, number, number, number] = [x - item.w / 2 - 2, y - item.h - 2, x + item.w / 2 + 2, y + 2];
+  const box = (x: number, y: number, item: { w: number; h: number }): [number, number, number, number] => [x - item.w / 2 - 2, y - item.h - 2, x + item.w / 2 + 2, y + 2];
+  const over = (r: [number, number, number, number]) => placed.find((q) => r[0] < q[2] && r[2] > q[0] && r[1] < q[3] && r[3] > q[1]);
+  for (const { item, x, y: y0, prio } of queued) {
+    let y = y0;
+    let r = box(x, y, item);
+    // the judge, players and the selection never yield: a clash lifts them above what is already there
+    if (prio >= PRIO.JUDGE) {
+      for (let k = 0, q = over(r); q && k < 6; k++, q = over(r)) {
+        y = q[1] - 4;
+        r = box(x, y, item);
+      }
+    }
     const off = r[2] < 0 || r[0] > W || r[3] < 0 || r[1] > H;
-    // the judge, players and the selection never yield; everything else gives way to what is already placed
-    const clash = prio < PRIO.JUDGE && placed.some((q) => r[0] < q[2] && r[2] > q[0] && r[1] < q[3] && r[3] > q[1]);
+    // everything else gives way to what is already placed
+    const clash = prio < PRIO.JUDGE && !!over(r);
     item.root.visible = !off && !clash;
     if (!item.root.visible) continue;
     item.root.position.set(x, y);

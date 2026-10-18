@@ -395,3 +395,9 @@ What: engine trails follow road geometry (every tick + vertices + 1.5 m simplifi
 Interfaces: playback fixture regenerated (same schema, denser traffic paths); stage.json roads gain optional `ow`.
 Status: web tsc + build + npm test pass; engine pytest 103/103. Measured overlaps between evacuation cars at t = 4,200 s: 49 → 0.
 Next: push/PR on approval. Visual polish paused at the user's request.
+
+## 2026-10-18 · No "drill" wording in the web, player labels stack instead of overlapping
+What: the header reads "Allston flood · live simulation", the join card reads "Join the flood", and the full-roster error, Feed placeholder, QR label, Sources line and QA.md drop "drill" (the backend wording changes on aryaman/call-first). Labels that never yield (players, the judge, the selection) now lift above a label already placed instead of drawing on top of it (Player 1 and Player 3 overlapped at district zoom).
+Interfaces: none.
+Status: web tsc + build + npm test pass. Label stacking not yet seen with live players.
+Next: push/PR on approval.

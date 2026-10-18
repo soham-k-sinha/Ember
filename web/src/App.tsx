@@ -631,7 +631,7 @@ export function App() {
       <header className="top">
         <p className="brand">
           <strong>EMBER</strong>
-          <span>Allston flood drill</span>
+          <span>Allston flood · live simulation</span>
         </p>
         <Transport clock={clock} playing={model.playing} onPlay={(playing) => dispatch({ type: "playing", playing })} />
         <label className="switch">
