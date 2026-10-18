@@ -628,15 +628,12 @@ function drawOverlay(ctx: Ctx, props: IsoProps, _now: number, pulse: number) {
     const onStage = p.inside(facility.lon, facility.lat);
     let x: number;
     let y: number;
-    let sub = "";
     if (onStage) {
       [x, y] = toScreen(ctx, ...p.lonlat(facility.lon, facility.lat, 22));
     } else {
       const item = offStage.find((o) => o.facility.id === facility.id)!;
       [x, y] = toScreen(ctx, ...p.iso(item.at[0], item.at[1], 0));
-      const [ca, cb] = [(p.bounds.a0 + p.bounds.a1) / 2, (p.bounds.b0 + p.bounds.b1) / 2];
       const [fa, fb] = p.toAB(facility.lon, facility.lat);
-      sub = ` · ${(Math.hypot(fa - ca, fb - cb) / 1000).toFixed(1)} km`;
       // arrow from the tile toward the facility
       const [dx, dy] = p.iso(fa - item.at[0], fb - item.at[1]);
       const len = Math.hypot(dx, dy) || 1;
@@ -647,17 +644,19 @@ function drawOverlay(ctx: Ctx, props: IsoProps, _now: number, pulse: number) {
     g.roundRect(x - 13, y - 13, 26, 26, 7).fill(meta.color).stroke({ width: 2.4, color: ring });
     pill(ctx, `glyph:${facility.id}`, meta.glyph, x, y + 7, { bg: meta.color, size: meta.glyph.length > 1 ? 9 : 12 });
     if (onStage) g.moveTo(x, y + 13).lineTo(x, y + 13 + 22 * ctx.cam.s * 0.5).stroke({ width: 1.5, color: meta.color, alpha: 0.8 });
-    pill(ctx, `fac:${facility.id}`, `${facility.name}${sub}`, x, y - 17, { bg: 0x161a22, border: alarm ? ring : undefined });
+    // the shelter is the venue: its name goes on the YOU ARE HERE pill
+    if (facility.type !== "shelter") pill(ctx, `fac:${facility.id}`, facility.name, x, y - 17, { bg: 0x161a22, border: alarm ? ring : undefined });
     hit(ctx, `hit:fac:${facility.id}`, x, y, 16, { kind: "facility", id: facility.id });
   }
 
   // you are here: the venue the judges are standing in, above its shelter marker
   {
     const [x, y] = toScreen(ctx, ...p.lonlat(town.venue.lon, town.venue.lat, 22));
-    pill(ctx, "venue", "YOU ARE HERE", x, y - 38, { bg: 0xffc542, fg: 0x1a1406, size: 10 });
+    pill(ctx, "venue", `YOU ARE HERE · ${town.venue.name}`, x, y - 17, { bg: 0xffc542, fg: 0x1a1406, size: 10 });
   }
 
-  // incidents: households still waiting, and every drill player's home
+  // incidents: households still waiting, and every drill player's home; zoomed out, an ordinary household is a dot
+  const close = ctx.cam.s > ctx.fitS * 2;
   for (const household of props.state.households) {
     if (!p.inside(household.lon, household.lat)) continue;
     const waiting = household.status === "needs" || household.status === "unknown" || household.status === "assigned" || household.status === "confirmed";
@@ -668,6 +667,11 @@ function drawOverlay(ctx: Ctx, props: IsoProps, _now: number, pulse: number) {
     const gold = household.judge || player != null;
     const color = toHex(householdColor(household));
     const [gx, gy] = toScreen(ctx, ...p.lonlat(...waitLonLat(ctx.aw, household)));
+    if (!close && !gold && !selected) {
+      g.circle(gx, gy - 6, 5).fill(color).stroke({ width: 1.5, color: 0xffffff });
+      hit(ctx, `hit:hh:${household.household_id}`, gx, gy - 6, 10, { kind: "household", id: household.household_id });
+      continue;
+    }
     const urgent = household.status === "needs" || household.status === "unknown";
     if (urgent) g.ellipse(gx, gy, (14 + 10 * pulse) * Math.min(1.6, Math.max(0.6, ctx.cam.s * 0.5)), (7 + 5 * pulse) * Math.min(1.6, Math.max(0.6, ctx.cam.s * 0.5))).stroke({ width: 2, color, alpha: 0.85 - 0.5 * pulse });
     const py = gy - 30;

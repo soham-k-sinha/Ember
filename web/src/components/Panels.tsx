@@ -3,7 +3,10 @@ import {
   formatNeeds,
   formatNumber,
   formatSim,
+  planCause,
   planDiff,
+  planTiming,
+  poolLabel,
   replanSeconds,
   statusLabel,
   targetLabel,
@@ -18,9 +21,9 @@ import {
   householdColor,
   peopleCount,
   resourceById,
+  targetName,
 } from "../model";
 import { town } from "../fixtures";
-import { robustOf } from "../live";
 import { householdName, members, type WalkerPlan } from "../people";
 import { householdTimeline, resourceTimeline, type Playback, type TimelineItem } from "../playback";
 import type {
@@ -56,6 +59,7 @@ export function Panels(props: {
   nominal: { ember?: PlanMetrics; baseline?: PlanMetrics };
   scatter: ScatterPoint[];
   scatterTotal: number | null;
+  robust: RobustSummary | null;
   plans: PlanSnapshot[];
   judge: JudgeClosure[];
   busy: string | null;
@@ -100,14 +104,6 @@ export function Panels(props: {
   );
 }
 
-function targetName(state: StateSnapshot, target: Target): string {
-  if ("household_id" in target) {
-    const label = householdById(state, target.household_id)?.label;
-    return label && !/^household/i.test(label) ? label : `#${target.household_id}`;
-  }
-  return facilityById(state, target.facility_id)?.name ?? target.facility_id;
-}
-
 type FeedItem = { key: string; t_s: number; kind: "in" | "fact" | "plan" | "out"; title: string; text: string; quote?: string; target?: Target };
 
 /** The story in order: a text comes in → it becomes a fact → the plan changes → EMBER texts back. */
@@ -122,12 +118,13 @@ function feedItems(state: StateSnapshot, plans: PlanSnapshot[], playback: Playba
     items.push({ key: message.id, t_s: message.t_s, kind: message.direction, title: message.direction === "in" ? who : `EMBER → ${who}`, text: message.text, target: message.thread });
   }
   const seen = new Set<string>();
+  const texted = new Set(state.messages.map((message) => message.report_id));
   for (const report of state.reports) {
     if (report.observed_at_t_s > t) continue;
     seen.add(report.id);
     const target: Target | undefined = report.household_id != null ? { household_id: report.household_id } : report.facility_id ? { facility_id: report.facility_id } : undefined;
     const needs = report.kind === "need" ? report.payload : undefined;
-    items.push({ key: report.id, t_s: report.observed_at_t_s, kind: "fact", title: target ? targetName(state, target) : "Report", text: `${statusLabel(report.kind)}${needs ? ` · ${formatNeeds(needs)}` : ""}`, target });
+    items.push({ key: report.id, t_s: report.observed_at_t_s, kind: "fact", title: target ? targetName(state, target) : "Report", text: `${statusLabel(report.kind)}${needs ? ` · ${formatNeeds(needs)}` : ""}`, quote: texted.has(report.id) ? undefined : report.text, target });
   }
   for (const [index, report] of (playback?.reports ?? []).entries()) {
     const key = report.id ?? `pb-${index}`;
@@ -145,13 +142,12 @@ function feedItems(state: StateSnapshot, plans: PlanSnapshot[], playback: Playba
   }
   for (const plan of plans) {
     if (plan.created_at_t_s > t) continue;
-    const seconds = replanSeconds(plan);
     items.push({
       key: `plan-${plan.version}`,
       t_s: plan.created_at_t_s,
       kind: "plan",
-      title: `v${plan.version}${seconds != null ? ` in ${seconds.toFixed(1)} s` : ""}`,
-      text: [plan.trigger, plan.version > 1 ? planDiff(plan, state) : ""].filter(Boolean).join(" · "),
+      title: `v${plan.version} ${planTiming(plan)}`,
+      text: [planCause(plan, state), plan.version > 1 ? planDiff(plan, state) : ""].filter(Boolean).join(" → "),
     });
   }
   // newest first; at the same moment, later in the story first, then later arrivals first
@@ -229,7 +225,7 @@ function PlanTab(props: { state: StateSnapshot; plans: PlanSnapshot[]; busy: str
                 <span>{formatSim(plan.created_at_t_s)}</span>
                 {seconds != null ? <span className="pill">{seconds.toFixed(2)} s</span> : null}
               </header>
-              {plan.trigger ? <p>{plan.trigger}</p> : null}
+              {plan.trigger ? <p>{planCause(plan, props.state)}</p> : null}
               {diff ? <p className="meta">{diff}</p> : null}
             </li>
           );
@@ -674,7 +670,7 @@ const PROOF_METRICS: Array<{ metric: "people_reached_before_deadline" | "people_
 ];
 
 function Proof(props: {
-  state: StateSnapshot;
+  robust: RobustSummary | null;
   comparison: Comparison | null;
   nominal: { ember?: PlanMetrics; baseline?: PlanMetrics };
   scatter: ScatterPoint[];
@@ -692,7 +688,7 @@ function Proof(props: {
       : { metric, label, unit, baseline: (props.nominal.baseline?.[metric] ?? 0) * scale, ember: (props.nominal.ember?.[metric] ?? 0) * scale, spread: "" };
   });
   const points = props.scatter;
-  const robust = robustOf(props.state.plan);
+  const robust = props.robust;
   const result = robust && (points.length === 0 || robust.batch_id === points[0].batchId) ? robust : null;
   return (
     <div className="stack">
@@ -742,7 +738,7 @@ function Proof(props: {
             ? `${points.length}${props.scatterTotal ? ` / ${props.scatterTotal}` : ""} worlds back`
             : result
               ? throughput(result)
-              : "Top candidate plans and the baseline, each run in perturbed worlds: travel times, flood timing, backup endurance, a vehicle failing."}
+              : "Press Optimize to stress-test this plan on 250 worlds: the top candidate plans and the baseline, with travel times, flood timing, backup endurance and a vehicle failing perturbed."}
         </p>
         {points.length > 0 ? <ScatterChart points={points} chosen={result?.chosen ?? null} /> : null}
         {result?.ranking ? <Verdict robust={result} /> : null}
@@ -752,7 +748,7 @@ function Proof(props: {
 }
 
 function throughput(robust: RobustSummary): string {
-  const where = robust.pool === "daytona" ? `${robust.workers ?? "?"} Daytona sandboxes` : `${robust.pool} pool${robust.workers ? ` (${robust.workers} workers)` : ""}`;
+  const where = poolLabel(robust);
   const time = robust.fanout_wall_s != null ? ` · ${robust.fanout_wall_s.toFixed(1)} s` : "";
   const startup = robust.startup_s ? ` (+${robust.startup_s.toFixed(1)} s startup)` : "";
   return `${where} · ${robust.jobs} worlds${time}${startup}`;

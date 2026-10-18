@@ -154,6 +154,16 @@ export function assignmentForTarget(state: StateSnapshot, target: Target): Assig
   });
 }
 
+/** A thread or target as the projector names it: "Judge", "Player 2", a facility's name, else "#id". */
+export function targetName(state: StateSnapshot, target: Target): string {
+  if ("household_id" in target) {
+    const household = householdById(state, target.household_id);
+    if (household?.judge) return "Judge";
+    return household?.label && !/^household/i.test(household.label) ? household.label : `#${target.household_id}`;
+  }
+  return facilityById(state, target.facility_id)?.name ?? target.facility_id;
+}
+
 export function closureFor(
   closures: Closure[],
   edgeId: number,
