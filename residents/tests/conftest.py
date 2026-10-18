@@ -10,8 +10,7 @@ from fastapi.testclient import TestClient
 from residents.app import create_app
 from residents.config import CONTRACTS, REPO_ROOT, Settings
 from residents.engine_bridge import EngineBridge
-from tests.test_drill import make
-from tests.test_engine import SCENARIO
+from tests.helpers import SCENARIO, make
 
 FIXTURE = CONTRACTS / "fixtures" / "state.fixture.json"
 
@@ -47,6 +46,17 @@ def settings(tmp_path: Path) -> Settings:
 
 
 @pytest.fixture(scope="session")
+def bridge():
+    """Small search budget for speed. Demo-beat tests use `full_bridge` (the engine's default search)."""
+    return EngineBridge(SCENARIO, moves=10)
+
+
+@pytest.fixture(scope="session")
+def full_bridge():
+    return EngineBridge(SCENARIO)
+
+
+@pytest.fixture(scope="session")
 def solo_bridge():
     """Only the drill's people need rescue (no synthetic households): offers come fast and are predictable."""
     return EngineBridge(SCENARIO, moves=10, solo=True)
@@ -54,7 +64,7 @@ def solo_bridge():
 
 @pytest.fixture
 def drill(settings, solo_bridge):
-    """The text-driven drill (test_drill.make): real allocator and simulator, a scripted model, the auto clock."""
+    """The text-driven drill (helpers.make): real allocator and simulator, a scripted model, the auto clock."""
     with make(settings, solo_bridge) as c:
         yield c
 

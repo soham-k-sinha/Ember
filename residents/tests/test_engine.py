@@ -11,24 +11,10 @@ from referencing import Registry, Resource
 
 from ember_engine.state import validate_state
 from residents.app import create_app
-from residents.config import CONTRACTS, REPO_ROOT
+from residents.config import CONTRACTS
 from residents.contracts import errors
-from residents.engine_bridge import EngineBridge
 from residents.intake import URGENT
-
-SCENARIO = REPO_ROOT / "scenarios" / "allston_flood_v1" / "scenario.json"
-JUDGE = 10296
-
-
-@pytest.fixture(scope="session")
-def bridge():
-    """Small search budget for speed. Demo-beat tests use `full_bridge` (the engine's default search)."""
-    return EngineBridge(SCENARIO, moves=10)
-
-
-@pytest.fixture(scope="session")
-def full_bridge():
-    return EngineBridge(SCENARIO)
+from tests.helpers import JUDGE, SCENARIO, judge_need
 
 
 @pytest.fixture
@@ -50,11 +36,6 @@ def ws_validator():
         s = json.loads(p.read_text())
         reg = reg.with_resource(s["$id"], Resource.from_contents(s))
     return jsonschema.Draft202012Validator(json.loads(path.read_text()), registry=reg)
-
-
-def judge_need(**payload):
-    return {"source": "judge", "kind": "need", "household_id": JUDGE, "text": "we are 2, one wheelchair",
-            "payload": {"people": 2, "mobility": True, "accessible_vehicle": True, **payload}}
 
 
 def drain(ws, n):

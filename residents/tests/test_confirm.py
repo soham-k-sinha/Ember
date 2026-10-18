@@ -7,14 +7,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from residents.app import create_app
-from tests.test_engine import JUDGE, SCENARIO, bridge, judge_need  # noqa: F401
-from tests.test_extract import FakeLLM, ex, fact
+from tests.helpers import JUDGE, SCENARIO, FakeLLM, ex, fact, judge_need
 
 JT = {"household_id": JUDGE}
 
 
 @pytest.fixture
-def cc(settings, bridge):  # noqa: F811
+def cc(settings, bridge):
     llm = FakeLLM({"yes": ex(fact("confirm")), "no thanks": ex(fact("reject")), "YES": ex(fact("confirm"))})
     s = replace(settings, scenario=SCENARIO, extract_enabled=True)
     with TestClient(create_app(s, bridge=bridge, llm=llm)) as c:
@@ -115,7 +114,7 @@ def test_api_errors_and_idempotence(cc):
     assert r.json()["applied"] and r.json()["plan_version"] == 3
 
 
-def test_confirmation_survives_restart(settings, bridge):  # noqa: F811
+def test_confirmation_survives_restart(settings, bridge):
     s = replace(settings, scenario=SCENARIO)
     with TestClient(create_app(s, bridge=bridge)) as c:
         c.post("/phones", json={"role": "resident", "handle": "6175550120"})

@@ -3,7 +3,7 @@
 import pytest
 
 from residents import fallback
-from tests.test_drill import PUTNAM, R1, Tap, register, text, thread_of
+from tests.helpers import PUTNAM, R1, Tap, register, text, thread_of
 
 
 class Down:

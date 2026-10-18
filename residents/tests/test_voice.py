@@ -13,8 +13,7 @@ from residents.drill import Drill
 from residents.speech import render, render_all
 from residents.voice import (CALM, INBOUND, OPENER, PROMISE, SYSTEM_PROMPT, WHERE, WHO_WE_ARE, configure_agent,
                              create_voice_app)
-from tests.test_drill import GREEN, PUTNAM, R1, R2, Tap, make, register, text, thread_of
-from tests.test_extract import ex, fact
+from tests.helpers import GREEN, PUTNAM, R1, R2, Tap, ex, fact, make, register, text, thread_of
 
 OURS = "+16175550199"           # the Photon voice number (placeholder)
 TOKEN = "t0k"

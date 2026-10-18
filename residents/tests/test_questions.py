@@ -9,8 +9,7 @@ import pytest
 from residents.briefing import BRING, SAFETY, TOPICS
 from residents.drill import Drill
 from residents.intake import ESCALATED
-from tests.test_drill import GREEN, PUTNAM, R1, R2, Tap, clock, place, register, text, thread_of
-from tests.test_extract import ex, fact, outcome
+from tests.helpers import GREEN, PUTNAM, R1, R2, Tap, clock, ex, fact, outcome, place, register, text, thread_of
 
 BARE = "We've passed your question to the coordinators."
 ASKS = "Please tell us: How many people are with you"
