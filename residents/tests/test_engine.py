@@ -264,3 +264,19 @@ def test_switching_scenario_reseeds(settings, esettings, bridge):
     with TestClient(create_app(esettings, bridge=bridge)) as c:  # same DB, engine on allston
         h = c.get("/health").json()
         assert (h["scenario_id"], h["plan_version"]) == ("allston_flood_v1", 1)
+
+
+def test_sewage_kept_out_is_frozen_at_the_last_plan_before_the_hospital_trade(esettings, full_bridge):
+    """plan.search.kept_before_tradeoff_m3 = baseline − EMBER overflow, until a plan trades the overflow for the hospital;
+    then it keeps the last value, so the score card and a reload say the same thing (D92)."""
+    with TestClient(create_app(esettings, bridge=full_bridge)) as c:
+        c.post("/clock", json={"t_s": 300})
+        c.post("/reports", json=judge_need())
+        before = c.get("/state").json()["plan"]
+        baseline = c.get("/playback?which=baseline").json()["metrics"]["overflow_m3"]
+        assert before["search"]["kept_before_tradeoff_m3"] == round(baseline - before["metrics"]["overflow_m3"], 1) > 0
+        c.post("/clock", json={"t_s": 900})
+        c.post("/disruption", json={"facility_id": "mt-auburn", "set": {"state": "backup", "backup_endurance_s": 600}})
+        after = c.get("/state").json()["plan"]
+        assert any("facility_id" in u["target"] for u in after["unresolved"]) and after["metrics"]["overflow_m3"] > 0
+        assert after["search"]["kept_before_tradeoff_m3"] == before["search"]["kept_before_tradeoff_m3"]

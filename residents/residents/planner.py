@@ -66,6 +66,7 @@ class Planner:
             # texts sent before this moment belong to the previous run (see Messenger._before_this_run)
             self.store.kv_set("run_started_at", datetime.now(timezone.utc).isoformat())
             plan = await run_in_threadpool(self.bridge.plan, [], 0.0, None, None, "initial plan")
+            await self._keep_sewage(plan, [])
             self.store.add_plan(plan, reports_used=[])
             self._comparison = None
             self._playback.clear()
@@ -218,10 +219,22 @@ class Planner:
     async def _store_plan(self, plan: dict, known: list[dict], t_now: float) -> dict:
         """(lock held) Make `plan` the current version and recompute the state."""
         used = [r["id"] for r in known if r["kind"] in FACT_KINDS]
+        await self._keep_sewage(plan, known)
         self.store.add_plan(plan, reports_used=used)
         self.store.mark_reports_resolved(used)
         self._comparison = None
         return await self._refresh(t_now)
+
+    async def _keep_sewage(self, plan: dict, known: list[dict]) -> None:
+        """(lock held) plan.search.kept_before_tradeoff_m3: baseline − EMBER sewage overflow on the same reports, at the last
+        plan that didn't trade the overflow for a facility (people, then hospitals, then sewage: a plan that accepts overflow to
+        power a hospital says so in `unresolved`, and the score card keeps what was kept out of the river before that call)."""
+        if any("facility_id" in u["target"] for u in plan["unresolved"]):
+            kept = ((self.store.current_plan() or {}).get("search") or {}).get("kept_before_tradeoff_m3")
+        else:
+            baseline = await run_in_threadpool(self.bridge.simulate, "baseline", None, known)
+            kept = round(baseline["overflow_m3"] - plan["metrics"]["overflow_m3"], 1)
+        plan["search"] = {**(plan.get("search") or {}), "kept_before_tradeoff_m3": kept}
 
     async def _publish(self, state: dict, trigger: str, t0: float) -> dict:
         view = state["plan"]
