@@ -4,6 +4,7 @@ replies DONE; with auto_clock the sim clock jumps to the next step. Real allocat
 fake geocoder, no network."""
 import asyncio
 import json
+import time
 from dataclasses import replace
 
 import pytest
@@ -15,82 +16,14 @@ from residents.drill import Drill, SetupError, main as drill_main
 from residents.extract import to_outcome
 from residents.guide import STEP_DONE
 from residents.locate import JOIN_LEAD_S
-from residents.messaging import DEV_LINE
+from residents.messaging import DEV_LINE, IPHONE_ONLY, JOIN_TTL_S
 from residents.photon import parse_inbound
 from residents.places import Place, parse_coords
-from tests.fake_photon import LINE, FakePhoton, received
-from tests.test_engine import SCENARIO, bridge  # noqa: F401
-from tests.test_extract import FakeLLM, ex, fact
-from tests.test_messaging import deliver
+from tests.fake_photon import LINE, PROJECT, FakePhoton, received
+from tests.helpers import (CALLENDER, EVERETT, GREEN, PUTNAM, R1, R2, SCENARIO, SCRIPT, FakeLLM, Tap, clock, deliver, ex,
+                           fact, make, place, register, text, thread_of)
 
-R1, R2, OP = "+16175550101", "+16175550102", "+16175550103"
-GREEN = "corner of Green St and Sellers St"           # outside the forecast flood: shelter in place
-PUTNAM = "Putnam Ave and Western Ave"                   # the flood reaches it (pickup by 135 min)
-CALLENDER = "Callender St and Putnam Ave"               # also in the flood
-EVERETT = "Everett St and Western Ave"
-SCRIPT = {
-    "hi": ex(fact("other")),
-    GREEN: ex(fact("location", address="Green St", cross_street="Sellers St")),
-    EVERETT: ex(fact("location", address="Everett St", cross_street="Western Ave")),
-    PUTNAM: ex(fact("location", address="Putnam Ave", cross_street="Western Ave")),
-    CALLENDER: ex(fact("location", address="Callender St", cross_street="Putnam Ave")),
-    "125 Western Ave, my mom uses a wheelchair": ex(fact("location", address="125 Western Ave"),
-                                                    fact("need", mobility=True, accessible_vehicle=True)),
-    "somewhere in Ohio": ex(fact("location", address="somewhere in Ohio")),
-    "42.0, -75.0": ex(fact("location", address="42.0, -75.0")),
-    "2 of us": ex(fact("need", people=2)),
-    "just me": ex(fact("need", people=1)),
-    "me and my dad, he uses a wheelchair": ex(fact("need", people=2, mobility=True, accessible_vehicle=True)),
-    "yes": ex(fact("confirm")),
-    "we're at the corner now": ex(fact("done")),
-    "done": ex(fact("done")),  # only reaches the model when no step is waiting on them
-    "on backup, 40 minutes of fuel left": ex(fact("facility_status", facility_state="backup", endurance_min=40)),
-}
-
-
-def make(settings, b, auto=True, **kw):
-    s = replace(settings, scenario=SCENARIO, extract_enabled=True, auto_clock=auto, **kw)
-    return TestClient(create_app(s, bridge=b, llm=FakeLLM(SCRIPT)))
-
-
-class Tap:
-    """Every text in/out, per phone handle (what the drill console prints)."""
-
-    def __init__(self, c):
-        self.c, self.events = c, []
-        c.app.state.messenger.taps.append(self.events.append)
-
-    def outs(self, handle):
-        from residents.threads import phone_for_thread
-        out = []
-        for e in self.events:
-            who = e["who"]
-            if not isinstance(who, str):
-                p = phone_for_thread(self.c.app.state.store, who)
-                who = p["handle"] if p else None
-            if who == handle and e["direction"] == "out":
-                out.append(e["text"].removeprefix("[EMBER drill] "))
-        return out
-
-
-def register(c, handle=R1, **kw):
-    r = c.post("/phones", json={"role": "resident", "handle": handle, "locate": True, **kw})
-    assert r.status_code == 200, r.text
-    return r.json()
-
-
-def text(c, handle, msg, role="resident"):
-    r = c.post("/dev/inbound", json={"role": role, "handle": handle, "text": msg})
-    assert r.status_code == 200, r.text
-    return r.json()
-
-
-def thread_of(c, handle):
-    return next(p["thread"] for p in c.get("/phones").json() if p["handle"] == handle)
-
-
-def clock(c):
-    return c.get("/health").json()["t_s"]
+OP = "+16175550103"
 
 
 def outcome(c, thread):
@@ -98,13 +31,6 @@ def outcome(c, thread):
     plan = st.store.current_plan()
     a = next(x for x in plan["assignments"] if x["target"] == thread and x["status"] == "confirmed")
     return st.planner.bridge.outcomes(plan, st.store.reports())[a["id"]]
-
-
-def place(c, tap, handle=R1, where=PUTNAM):
-    text(c, handle, where)
-    t = thread_of(c, handle)
-    assert t is not None, tap.outs(handle)
-    return t
 
 
 # ---------- places ----------
@@ -771,6 +697,28 @@ def test_a_team_phone_cannot_join(lobby):
     assert c.post("/join", json={"handle": R1}).status_code == 409
 
 
+def test_team_phones_hold_seats_and_players_who_never_text_give_theirs_back(lobby):
+    """D92: every Photon assignment holds a seat (so the 25th join is a 409, never Photon's 502), and a registration that
+    hasn't texted within JOIN_TTL_S is released (Photon DELETE) to make room; one that texted keeps its seat."""
+    c, fp = lobby
+    c.app.state.messenger.max_players = 3
+    register(c, R1)                                                         # a team phone: one seat
+    [reg] = register_players(c, "+16175550201")
+    assert reg["note"] == IPHONE_ONLY
+    join(c, "+16175550202")
+    assert c.post("/join", json={"handle": "+16175550203"}).status_code == 409
+    store = c.app.state.store
+    for h in ("+16175550201", "+16175550202"):                              # 11 min ago
+        store.kv_set(f"registered:{h}", str(time.time() - JOIN_TTL_S - 60))
+    [late] = register_players(c, "+16175550203")
+    released = [r.url.path for r in fp.requests if r.method == "DELETE"]
+    assert released == [f"/v1/projects/{PROJECT}/platforms/imessage/assignments/asg-0201"] and late["player"] == 3
+    assert store.phone(handle="+16175550201") is None and store.phone(handle="+16175550202") is not None
+    c.app.state.messenger.max_players = 4
+    [back] = register_players(c, "+16175550201")                           # a released phone may join again: a new seat
+    assert back["player"] == 4 and assignments(fp)[-1].headers["idempotency-key"] == "ember-assign-+16175550201-1"
+
+
 def test_reset_places_players_who_texted(lobby):
     c, fp = lobby
     join(c, "+16175550201", "+16175550202")
@@ -820,8 +768,8 @@ def test_an_undelivered_text_becomes_a_call(lobby):
     [body] = seen
     assert body["to_number"] == h
     first = body["conversation_initiation_client_data"]["conversation_config_override"]["agent"]["first_message"]
-    assert first == "Hi, it's EMBER from the flood drill, calling because our text to you didn't go through. " \
-                    "Is anyone with you on oxygen?", first
+    assert first == "Hi, this is EMBER, an automated assistant for the flood drill, calling because our text to you didn't go " \
+                    "through. Is anyone with you on oxygen?", first
     assert c.get("/calls").json()["live"][0]["reason"] == "undelivered"
     c.portal.call(v.hang_up, h)                                             # nobody answered
     c.post("/ask", json={"role": "resident", "household_id": hid, "question": "Are you still at home?"})

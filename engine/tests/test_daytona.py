@@ -192,6 +192,30 @@ def test_a_dropped_connection_during_batch_setup_keeps_the_sandbox(world, scn):
     assert len(pts) == 2 and pool.sandboxes == first and not pool.log
 
 
+def test_orphan_sweep_spares_another_backends_live_pool():
+    """Only this process's sandboxes, or app sandboxes past the TTL, are orphans; another backend's warm pool is not."""
+    from datetime import UTC, datetime, timedelta
+
+    from ember_engine.daytona.pool import LABELS, OWNER
+    now = datetime.now(UTC)
+    other = {**LABELS, "owner": "laptop-2-4242"}
+    sbs = [SimpleNamespace(id="mine", labels=OWNER, created_at=now), SimpleNamespace(id="theirs", labels=other, created_at=now),
+           SimpleNamespace(id="stale", labels=other, created_at=now - timedelta(hours=7))]
+    deleted = []
+
+    async def listing(q):
+        for s in sbs:
+            if q.labels.items() <= s.labels.items() and (q.created_at_before is None or s.created_at < q.created_at_before):
+                yield s
+
+    async def delete(sb, timeout=None):
+        deleted.append(sb.id)
+    pool = DaytonaPool(2)
+    pool.client = SimpleNamespace(list=listing, delete=delete)
+    asyncio.run(pool._delete_orphans())
+    assert sorted(deleted) == ["mine", "stale"] and pool.log == ["deleted 2 orphaned sandboxes"]
+
+
 def test_get_pool_falls_back_to_local(monkeypatch):
     monkeypatch.delenv("DAYTONA_API_KEY", raising=False)
     monkeypatch.setattr("ember_engine.daytona.pool.load_env", lambda *a, **k: None)

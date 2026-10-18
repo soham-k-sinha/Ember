@@ -11,23 +11,10 @@ from referencing import Registry, Resource
 
 from ember_engine.state import validate_state
 from residents.app import create_app
-from residents.config import CONTRACTS, REPO_ROOT
+from residents.config import CONTRACTS
 from residents.contracts import errors
-from residents.engine_bridge import EngineBridge
-
-SCENARIO = REPO_ROOT / "scenarios" / "allston_flood_v1" / "scenario.json"
-JUDGE = 10296
-
-
-@pytest.fixture(scope="session")
-def bridge():
-    """Small search budget for speed. Demo-beat tests use `full_bridge` (the engine's default search)."""
-    return EngineBridge(SCENARIO, moves=10)
-
-
-@pytest.fixture(scope="session")
-def full_bridge():
-    return EngineBridge(SCENARIO)
+from residents.intake import URGENT
+from tests.helpers import JUDGE, SCENARIO, judge_need
 
 
 @pytest.fixture
@@ -49,11 +36,6 @@ def ws_validator():
         s = json.loads(p.read_text())
         reg = reg.with_resource(s["$id"], Resource.from_contents(s))
     return jsonschema.Draft202012Validator(json.loads(path.read_text()), registry=reg)
-
-
-def judge_need(**payload):
-    return {"source": "judge", "kind": "need", "household_id": JUDGE, "text": "we are 2, one wheelchair",
-            "payload": {"people": 2, "mobility": True, "accessible_vehicle": True, **payload}}
 
 
 def drain(ws, n):
@@ -155,6 +137,18 @@ def test_a_text_without_a_model_still_replans(ec):
     assert plan["version"] == 2 and plan["trigger"] == "Judge: 2 people, wheelchair; Judge (River Street): road blocked"
     [a] = [a for a in plan["assignments"] if a["target"] == {"household_id": JUDGE} and a["status"] not in ("cancelled", "rejected")]
     assert a["resource_id"] == "van-3"  # the accessible van
+
+
+def test_an_urgent_text_gets_a_replan_a_calm_word_and_the_eta(ec):
+    """D92, reproduced by the judges with extraction off: "the water is at our door, please hurry" got "Sorry, I didn't catch
+    that". Now: a replan (sooner if a vehicle can come sooner), then reassurance, what to do meanwhile and the current ETA."""
+    ec.post("/dev/inbound", json={"role": "resident", "text": "2 of us, one in a wheelchair"})
+    ec.post("/dev/inbound", json={"role": "resident", "text": "the water is at our door, please hurry"})
+    st = ec.get("/state").json()
+    assert st["plan"]["version"] == 3 and st["plan"]["trigger"] == "Judge: urgent, asked us to hurry"
+    last = st["messages"][-1]["text"]
+    assert last.startswith(f"[EMBER drill] {URGENT} ") and "Accessible Van 3" in last and "arriving in about" in last, last
+    assert not any("didn't catch" in m["text"] for m in st["messages"])
 
 
 def test_clock_moves_the_flood(ec, bridge):
@@ -264,3 +258,19 @@ def test_switching_scenario_reseeds(settings, esettings, bridge):
     with TestClient(create_app(esettings, bridge=bridge)) as c:  # same DB, engine on allston
         h = c.get("/health").json()
         assert (h["scenario_id"], h["plan_version"]) == ("allston_flood_v1", 1)
+
+
+def test_sewage_kept_out_is_frozen_at_the_last_plan_before_the_hospital_trade(esettings, full_bridge):
+    """plan.search.kept_before_tradeoff_m3 = baseline − EMBER overflow, until a plan trades the overflow for the hospital;
+    then it keeps the last value, so the score card and a reload say the same thing (D92)."""
+    with TestClient(create_app(esettings, bridge=full_bridge)) as c:
+        c.post("/clock", json={"t_s": 300})
+        c.post("/reports", json=judge_need())
+        before = c.get("/state").json()["plan"]
+        baseline = c.get("/playback?which=baseline").json()["metrics"]["overflow_m3"]
+        assert before["search"]["kept_before_tradeoff_m3"] == round(baseline - before["metrics"]["overflow_m3"], 1) > 0
+        c.post("/clock", json={"t_s": 900})
+        c.post("/disruption", json={"facility_id": "mt-auburn", "set": {"state": "backup", "backup_endurance_s": 600}})
+        after = c.get("/state").json()["plan"]
+        assert any("facility_id" in u["target"] for u in after["unresolved"]) and after["metrics"]["overflow_m3"] > 0
+        assert after["search"]["kept_before_tradeoff_m3"] == before["search"]["kept_before_tradeoff_m3"]

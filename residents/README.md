@@ -107,7 +107,7 @@ ended_t_s}]}`. Six calls end to end without ElevenLabs or an LLM: `uv run python
 | `POST /disruption` | judge's map controls: `{"close_edges": [edge ids]}` (reverse direction closed too) or `{"facility_id", "set": {...}}` → report → replan |
 | `POST /replan` | replan now (no new fact) |
 | `POST /optimize?seeds=50&k=4` → 202 (seeds 1..2000, k 1..8) | robust fan-out (top-k candidates × perturbed worlds + baseline; Daytona if engine/.env has a key, else local processes). Streams WS `scatter_point`, then `plan`. Runs outside the planner lock on its own engine session + World (clock / texts / replans keep flowing); if a replan lands meanwhile the result is discarded as superseded. 409 while running; `GET /optimize` = `{running, last}` |
-| `POST /join {handle}` | multiplayer (D89): register a phone (E.164) as a drill player on the shared iMessage line → `{handle, player, assigned_number, dev, household_id, texted}`; its first text to `assigned_number` places it. Idempotent; 409 when full (`MAX_PLAYERS`) or for a team phone; 422 for a non-phone |
+| `POST /join {handle}` | multiplayer (D89): register a phone (E.164) as a drill player on the shared iMessage line → `{handle, player, assigned_number, dev, household_id, texted, note}`; its first text to `assigned_number` places it. Idempotent; 409 when every seat is taken (`MAX_PLAYERS`, team phones count) or for a team phone; 422 for a non-phone |
 | `POST /simulate {planner: ember\|baseline}` | projected metrics over the horizon for the current plan or the incident-by-incident baseline, with every report known by the clock |
 | `POST /ask {role, household_id?, facility_id?, question?}` | prompt a specific household/facility. A role alone works with at most one active registration of that role; multiple matches → 422. Returns delivery status, assigned_number and action_needed; blocked sends do not consume the plan's question. |
 | `POST /clock {t_s}` | move the sim clock (play / scrub); broadcasts `state` |
@@ -132,7 +132,10 @@ assignment for, so the web's join card sends `POST /join {handle}` first: the ph
 one household, D55) and Player N (join order), and the answer is `{assigned_number, player}`. The QR then opens
 `sms:<assigned_number>?&body=JOIN%20EMBER` (iMessage on an iPhone). That first text (any text) places the phone on a
 free building in the forecast flood that we choose, and the plan asks its own question; a burst of joins shares one
-replan. Idempotent per phone; over `MAX_PLAYERS` (25, Photon's free-plan seats) → 409 "drill is full". Texts from
+replan. Idempotent per phone. Every Photon assignment holds one of `MAX_PLAYERS` seats (25, Photon's free plan; team
+phones count), so a full drill is a 409 "drill is full", never Photon's refusal; a player who hasn't texted 10 min after
+`/join` (wall clock) is released (Photon `DELETE` of the assignment) to make room (D92). The answer's `note` says it's
+iPhone (iMessage) only: an Android scan texts by SMS, which never reaches the line. Texts from
 phones that never registered are ignored. With Photon off, `/join` returns a dev line and `/dev/inbound` with that
 handle places it. `/dev/reset` places again every player who has texted.
 
@@ -221,8 +224,8 @@ curl -s localhost:8000/state > /tmp/state.json
 uv run --project ../engine ember validate-state /tmp/state.json --scenario ../contracts/fixtures/scenario.fixture.json
 ```
 
-## The one LLM call (text → report)
-`residents/extract.py`: each inbound text (Photon or `/dev/inbound`) → Claude (`EXTRACT_MODEL`, default `claude-sonnet-5-5`, effort `low`, structured outputs) → `facts[]` + confidence + optional clarifying question. Everything after is code: confidence < 0.6 or a missing head count / unplaceable street → one clarifying question (a partial need waits in `pending` for the reply); street names → town edges near the household (`engine_bridge.resolve_road`, both directions); minutes → `backup_endurance_s`. All facts from one text → one replan. The model never sees or emits routes, times or assignments. With no `ANTHROPIC_API_KEY` or `EXTRACT_ENABLED=0`, every text goes to the keyword parser (`fallback.py`) instead and still replans (D85).
+## Reading texts (model or keyword parser)
+`residents/extract.py`: each inbound text (Photon or `/dev/inbound`) → Claude (`EXTRACT_MODEL`, default `claude-sonnet-5-5`, effort `low`, structured outputs) → `facts[]` + confidence + optional clarifying question. Everything after is code: confidence < 0.6 or a missing head count / unplaceable street → one clarifying question (a partial need waits in `pending` for the reply); street names → town edges near the household (`engine_bridge.resolve_road`, both directions); minutes → `backup_endurance_s`. All facts from one text → one replan. The model never sees or emits routes, times or assignments. With no `ANTHROPIC_API_KEY` or `EXTRACT_ENABLED=0`, every text goes to the keyword parser (`fallback.py`) instead and still replans (D85). An urgent text ("the water is at our door", "we're trapped", "hurry", "help"; fact `urgent`) replans at once, so a vehicle that can come sooner does, and gets a calm word, what to do meanwhile and the current ETA, never "didn't catch that" (D92).
 Live accuracy: `uv run python scripts/eval_extract.py` on `tests/samples.json` (20 messages; last run 20/20, median 1.9 s). Unit tests use a fake model and never call the API.
 
 ## Outbound instructions

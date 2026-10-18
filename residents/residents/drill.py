@@ -264,7 +264,7 @@ class Drill:
                 rows.append((name, "resident" if role == "resident" else f"operator of {p.get('facility_id')}", p))
         except (PhoneConflict, ValueError) as e:
             raise SetupError(f"Can't register the phones: {e}"
-                             + (" (--keep continues the last run with its phones as they were)" if self.args.keep else ""))
+                             + (" (--keep continues the last run with its phones as they were)" if self.args.keep else "")) from e
         print("\nparticipants:")
         for name, role, p in rows:
             line = f"  {name:4} {role:28} {p['handle']}"

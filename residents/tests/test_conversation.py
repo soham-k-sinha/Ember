@@ -11,8 +11,7 @@ from fastapi.testclient import TestClient
 
 from residents.app import create_app
 from residents.extract import Extraction, Fact, to_outcome
-from tests.test_engine import JUDGE, SCENARIO, bridge, full_bridge  # noqa: F401
-from tests.test_extract import FakeLLM, ex, fact
+from tests.helpers import JUDGE, SCENARIO, FakeLLM, ex, fact
 
 JT = {"household_id": JUDGE}
 ACCESSIBLE = {"van-3"}  # the scenario's only wheelchair-accessible vehicle
@@ -27,7 +26,7 @@ LIVE = {  # what claude-opus-5-5 returned for each text
 
 
 @pytest.fixture
-def judge_phone(settings, bridge):  # noqa: F811
+def judge_phone(settings, bridge):
     s = replace(settings, scenario=SCENARIO, extract_enabled=True)
     with TestClient(create_app(s, bridge=bridge, llm=FakeLLM(LIVE))) as c:
         c.post("/phones", json={"role": "resident", "handle": "6175550120"})
@@ -94,7 +93,7 @@ def test_every_fact_gets_a_reply_even_when_nothing_changed(judge_phone):
     assert len(replies) == 1 and replies[0].startswith("[EMBER drill] ")
 
 
-def test_question_goes_to_coordinators_with_status(settings, bridge):  # noqa: F811
+def test_question_goes_to_coordinators_with_status(settings, bridge):
     llm = FakeLLM({"2 of us, my mom uses a wheelchair": LIVE["2 of us, my mom uses a wheelchair"],
                    "is the western ave bridge open?": ex(fact("question"))})
     s = replace(settings, scenario=SCENARIO, extract_enabled=True)
@@ -107,7 +106,7 @@ def test_question_goes_to_coordinators_with_status(settings, bridge):  # noqa: F
         assert c.get("/questions").json()[0]["text"] == "is the western ave bridge open?"
 
 
-def test_tuned_demo_beat_through_the_text_pipeline(settings, full_bridge):  # noqa: F811
+def test_tuned_demo_beat_through_the_text_pipeline(settings, full_bridge):
     """Engine's judge beat (engine/tests/test_demo_beats.py), but starting from the judge's TEXT: at minute 5
     "2 of us, my mom's in a wheelchair, River St is blocked" → one replan → the judge gets the accessible van
     before the deadline AND the generator plan changes; the judge is texted the instruction."""

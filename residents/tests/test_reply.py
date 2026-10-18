@@ -11,8 +11,7 @@ from fastapi.testclient import TestClient
 
 from residents.app import create_app
 from residents.reply import check
-from tests.test_drill import PUTNAM, R1, SCENARIO, SCRIPT, Tap, register, text, thread_of
-from tests.test_extract import FakeLLM, ex, fact
+from tests.helpers import PUTNAM, R1, SCENARIO, SCRIPT, FakeLLM, Tap, ex, fact, register, text, thread_of
 
 NAMES = ["Van 1", "Van 2", "Accessible Van 3", "Utility truck", "David Rubenstein Treehouse (drill shelter)"]
 OFFER = ("[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 min and take "

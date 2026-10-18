@@ -9,9 +9,10 @@ and the shared town (named by a content hash, built once with `ember daytona-sna
 the town once in the stateful code_interpreter, then pulls chunks of about jobs ÷ N jobs from a queue
 (one round trip per chunk, not per job); results come back as the run_code return value (Tier 1/2
 sandboxes have no outbound network). Every call passes timeout=. A chunk that fails twice is computed
-locally so a batch always completes. The backend keeps one pool warm across batches; a start first
-deletes this app's sandboxes idle for ORPHAN_IDLE_MIN (left by a crash, they would hold the vCPU
-quota for their TTL). EMBER_LOCAL_POOL=1 forces the local pool.
+locally so a batch always completes. The backend keeps one pool warm across batches; every sandbox
+carries this process's OWNER label, and a start first deletes this process's own leftovers and any
+app sandbox older than the TTL (never another live backend's pool: Daytona's last_activity_at ignores
+run_code, so "idle" can't tell a warm pool from an orphan). EMBER_LOCAL_POOL=1 forces the local pool.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ import json
 import logging
 import math
 import os
+import socket
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import UTC, datetime, timedelta
@@ -38,7 +40,7 @@ SNAPSHOT_PREFIX = "ember-engine"
 PREP_TIMEOUT_S, BATCH_TIMEOUT_S, JOB_TIMEOUT_S = 180, 60, 60
 SETUP_TRIES = 3
 LABELS = {"app": "ember", "role": "robustness"}
-ORPHAN_IDLE_MIN = 3
+OWNER = {**LABELS, "owner": f"{socket.gethostname()}-{os.getpid()}"}
 log = logging.getLogger(__name__)
 
 
@@ -195,7 +197,7 @@ class DaytonaPool:
         for attempt in range(5):
             try:
                 sb = await self.client.create(CreateSandboxFromSnapshotParams(snapshot=self.snapshot, auto_stop_interval=0, ttl_minutes=self.ttl,
-                                                                              labels=LABELS), timeout=120)
+                                                                              labels=OWNER), timeout=120)
                 break
             except DaytonaRateLimitError:
                 await asyncio.sleep(2 ** attempt)
@@ -211,8 +213,9 @@ class DaytonaPool:
 
     async def _delete_orphans(self):
         from daytona import ListSandboxesQuery
-        idle = datetime.now(UTC) - timedelta(minutes=ORPHAN_IDLE_MIN)
-        old = [s async for s in self.client.list(ListSandboxesQuery(labels=LABELS, last_activity_before=idle))]
+        expired = datetime.now(UTC) - timedelta(minutes=self.ttl)
+        old = {s.id: s for q in (ListSandboxesQuery(labels=OWNER), ListSandboxesQuery(labels=LABELS, created_at_before=expired))
+               async for s in self.client.list(q)}.values()
         if old:
             await asyncio.gather(*(self.client.delete(s, timeout=60) for s in old), return_exceptions=True)
             self.log.append(f"deleted {len(old)} orphaned sandboxes")

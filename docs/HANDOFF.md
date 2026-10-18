@@ -60,7 +60,7 @@ cd residents && uv run python scripts/sim_calls.py && uv run python scripts/eval
 - **Chalk router unverified:** `CHALK_ROUTER_KEY` + `CHALK_ENV_ID` route both model calls through `api.chalk.ai/v1/router`; whether structured outputs and the beta header pass through is unknown (failure → keyword parser). One live call needed; `ANTHROPIC_API_KEY` still gates extraction.
 - **LLM eval column not run** (`eval_sim.py --extractor llm`).
 - ElevenLabs: the call-over status read (`GET /v1/convai/conversations/{id}`) and the agent's `first_message` setup are untested against the live API; a call that never reports done ends after `SESSION_IDLE_S` without the follow-up text.
-- Daytona's `last_activity_at` ignores `run_code`, so another process's pool start (e.g. `ember robust`) deletes a warm pool idle > 3 min; the backend then restarts it (~7–12 s). Don't run `ember robust` while the demo backend is up.
+- Daytona's `last_activity_at` ignores `run_code`, so the orphan sweep deletes only this process's own sandboxes (owner label) or ones past the TTL (D92); a second backend or `ember robust` on the same key no longer kills the demo pool, but shares the vCPU quota.
 - Web: real frame rate unmeasured on the demo machine; the stage labels need one look on the projector (D87).
 
 ## Gotchas learned the hard way

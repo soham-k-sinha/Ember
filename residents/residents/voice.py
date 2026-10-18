@@ -44,12 +44,13 @@ from .threads import normalize_handle, phone_thread, unplaced
 log = logging.getLogger("residents.voice")
 
 ELEVENLABS = "https://api.elevenlabs.io"
-OPENER = "Hi, it's EMBER from the flood drill"
+OPENER = "Hi, this is EMBER, an automated assistant for the flood drill"
 INBOUND = f"{OPENER}. How can I help?"   # the agent's first message when someone calls us
 WHY = {"no_reply": "calling because the water reaches your street in about {mins} minutes and we haven't heard back",
        "mobility": "calling about your wheelchair-accessible pickup",
        "medical": "calling about your pickup, because of the medical needs you told us about",
        "pickup_changed": "calling because your pickup has changed",
+       "new_offer": "calling with a new pickup for you, because {why}",
        "undelivered": "calling because our text to you didn't go through",
        "console": "calling about your evacuation plan"}
 PROMISE = "I'll text you this too."
@@ -73,8 +74,8 @@ SESSION_IDLE_S = 300.0           # a call with no turn for this long is over (it
 SCREENING = re.compile(r"\b(stay on the line|record (your|it)\b|recorded\b|reason for (your )?call|screening service|"
                        r"see if (this person|they)( is| are|'re)? (is )?available|i'll see if|who('s| is) (calling|this)|state your name|"
                        r"leave (a|your) (message|name))", re.I)
-WHO_WE_ARE = "It's EMBER, the HackHarvard flood drill; this is a drill, not a real emergency."
-# someone frightened gets a calm word before the plan
+WHO_WE_ARE = "It's EMBER, an automated assistant for the HackHarvard flood drill; this is a drill, not a real emergency."
+# someone frightened gets a calm word before the plan (once a call)
 PANIC = re.compile(r"\b(oh my god|omg|scared|terrified|panick?ing|hurry|help me|what do i do)\b", re.I)
 CALM = "I'm here with you; we'll go one step at a time."
 NO_REPLY_S = 180.0               # an open offer / step / question unanswered this long (sim-s), not called about yet …
@@ -103,6 +104,7 @@ class Session:
     last_said: str = ""          # what this call said last (to tell our own echo from the caller)
     screened: int = 0            # times we said again who we are (call screening, "who is this?", "hello?")
     promised: bool = False       # told them a text follows
+    calmed: bool = False         # said CALM
 
 
 class Voice:
@@ -230,8 +232,9 @@ class Voice:
             s.promised = True
         elif text:
             await self.messenger.phone_inbound(handle, text)
-            if PANIC.search(text):
+            if PANIC.search(text) and not s.calmed:
                 s.outbox.insert(0, CALM)
+                s.calmed = True
         elif not s.outbox:  # the call started with no first words from them: say where things stand
             await self.say_situation(handle)
         out, s.outbox = s.outbox, []
@@ -262,9 +265,15 @@ class Voice:
         needs = h["needs"] if isinstance(h.get("needs"), dict) else {}
         if reason == "mobility" and not (needs.get("mobility") or needs.get("accessible_vehicle")):
             reason = "medical"
+        thread = {"household_id": hid}
         why = WHY.get(reason, WHY["console"])
         if reason == "no_reply":  # only called with a deadline
-            why = why.format(mins=max(1, round((self.outbound.water_s({"household_id": hid}) - self._t_s()) / 60)))
+            why = why.format(mins=max(1, round((self.outbound.water_s(thread) - self._t_s()) / 60)))
+        elif reason == "pickup_changed":  # a confirmed pickup's update says why itself; a new offer says it here
+            view = self.store.plan_view() or {}
+            a = self.outbound.instruction_for(view, thread, exclude=self.outbound.rejected(thread_key(thread)))
+            if a is not None and not self.outbound.confirmed(a):
+                why = WHY["new_offer"].format(why=self.outbound.news(view["version"], thread))
         return f"{OPENER}, {why}."
 
     async def say_next(self, handle: str, reason: str) -> None:
@@ -272,13 +281,13 @@ class Voice:
         is now, if it changed, else the step they're on, the offer or where they stand, else our question."""
         phone = self.store.phone(handle=handle)
         thread = phone_thread(self.store, phone) if phone else None
-        plan = self.store.current_plan()
+        view = self.store.plan_view()  # the simulated ETAs, the same ones the texts and "what changed?" say
         a = None
-        if reason == "pickup_changed" and thread is not None and plan:
-            a = self.outbound.instruction_for(plan, thread, exclude=self.outbound.rejected(thread_key(thread)))
-        if a is not None:  # "Update: Van 2 is now arriving in about 40 min." / the new offer
-            await self.messenger.send_message(thread, self.outbound.compose(a, thread, self._t_s(), plan["version"]),
-                                              plan["version"], a["id"])
+        if reason == "pickup_changed" and thread is not None and view:
+            a = self.outbound.instruction_for(view, thread, exclude=self.outbound.rejected(thread_key(thread)))
+        if a is not None:  # "Update: Callender Street was reported blocked, so Van 2 is now arriving in about 40 min." / the new offer
+            await self.messenger.send_message(thread, self.outbound.compose(a, thread, self._t_s(), view["version"]),
+                                              view["version"], a["id"])
         else:
             await self.say_situation(handle, brief=True)
 
@@ -330,7 +339,7 @@ class Voice:
         if not self.configured():
             return []
         await self.reap()
-        free = self.settings.voice_max_concurrent - sum(1 for h in list(self.sessions) if self.live(h))
+        free = self.settings.voice_max_concurrent - self._live_count()
         now = self._t_s()
         due = sorted(d for p in self.store.phones() if (d := self._due(p, now)))
         placed = []
@@ -354,7 +363,7 @@ class Voice:
         last = self.store.kv_get(f"call:{handle}:undelivered")
         if last is not None and now - float(last) < COOLDOWN_S:
             return None
-        if sum(1 for h in list(self.sessions) if self.live(h)) >= self.settings.voice_max_concurrent:
+        if self._live_count() >= self.settings.voice_max_concurrent:
             return None
         self.store.kv_set(f"call:{handle}:undelivered", str(now))
         self.open(handle, reason="undelivered").outbox.append(text)  # the opening says this text, nothing else
@@ -364,6 +373,9 @@ class Voice:
             self.end(handle, reason="dial failed")
             log.warning("call-back to %s for an undelivered text failed: %s", handle, e)
             return None
+
+    def _live_count(self) -> int:
+        return sum(1 for h in list(self.sessions) if self.live(h))
 
     def _due(self, phone: dict, now: float) -> tuple[float, str, str] | None:
         """(deadline, handle, reason) when this resident should get a call now, else None."""
@@ -384,9 +396,7 @@ class Voice:
             return None  # they never wrote to us (no call out of the blue), or they're writing right now
         view = self.store.plan_view() or {}
         a = self.outbound.instruction_for(view, thread, exclude=self.outbound.rejected(key))
-        stored = next((x["status"] for x in (self.store.current_plan() or {}).get("assignments", [])
-                       if a is not None and x["id"] == a["id"]), None)
-        offered = a is not None and "confirmed" not in (a["status"], stored)
+        offered = a is not None and not self.outbound.confirmed(a)
         asked = any(q["to"] == thread and self.store.kv_get(f"asked:{q['id']}") for q in view.get("info_requests", []))
         stepping = self.outbound.guide is not None and self.outbound.guide.awaiting_done(thread)
         changed = json.loads(self.store.kv_get(f"instr:{key}") or "{}").get("changed_t_s")

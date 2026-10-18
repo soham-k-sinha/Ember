@@ -11,8 +11,7 @@ from residents.app import create_app
 from residents.intake import PLANNER_DOWN
 from residents.photon import PhotonListener, parse_inbound
 from tests.fake_photon import FakePhoton, received
-from tests.test_engine import JUDGE, SCENARIO, bridge  # noqa: F401
-from tests.test_extract import FakeLLM, ex, fact
+from tests.helpers import JUDGE, SCENARIO, FakeLLM, ex, fact
 
 JT = {"household_id": JUDGE}
 TWO = "2 of us"
@@ -23,7 +22,7 @@ SCRIPT = {TWO: ex(fact("need", people=2)),
 
 
 @pytest.fixture
-def rc(settings, bridge):  # noqa: F811
+def rc(settings, bridge):
     s = replace(settings, scenario=SCENARIO, extract_enabled=True)
     with TestClient(create_app(s, bridge=bridge, llm=FakeLLM(SCRIPT))) as c:
         c.post("/phones", json={"role": "resident", "handle": "6175550120"})

@@ -8,14 +8,13 @@ from fastapi.testclient import TestClient
 
 from residents.app import DEFAULT_ASK, create_app
 from residents.contracts import def_errors
-from tests.test_engine import JUDGE, SCENARIO, bridge, judge_need  # noqa: F401
-from tests.test_extract import FakeLLM, ex, fact
+from tests.helpers import JUDGE, SCENARIO, FakeLLM, ex, fact, judge_need
 
 OP = {"facility_id": "mt-auburn"}
 
 
 @pytest.fixture
-def oc(settings, bridge):  # noqa: F811
+def oc(settings, bridge):
     llm = FakeLLM({"about 90 minutes of diesel": ex(fact("facility_status", endurance_min=90)), "hi": ex(fact("other"))})
     s = replace(settings, scenario=SCENARIO, extract_enabled=True)
     with TestClient(create_app(s, bridge=bridge, llm=llm)) as c:
