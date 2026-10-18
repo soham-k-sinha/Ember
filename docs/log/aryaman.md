@@ -424,3 +424,8 @@ Interfaces: needs question text changed in engine explain, seed state and contra
 Status: residents 359+ pass, engine 107, web build + checks, ruff clean; sim_calls re-run (docs/voice_transcripts.md).
 Next: Daytona snapshot, e2e --big, merge, live call test.
 
+### 2026-10-18 06:10 · Ambulance for medical needs (D114)
+What: `ambulance` resource kind (scenario 0.4, state 0.3) and "Ambulance 1" in allston_flood_v1 at EMS Station 14; allocator gives medical needs the ambulance when it is on time (eligibility + construction preference + an objective term after churn), rationale names it; residents' `briefing.fits` mirrors the eligibility.
+Interfaces: state schema version 0.3 (residents' `load_seed` follows it; seed state and fixtures regenerated); web needs an `ambulance` sprite/colour (web/src/opening.ts still writes state "0.2").
+Status: engine 108 pass, ruff clean, smoke OK, residents full suite green; plan v1 78 vs 58 reached, 0 vs 2,316.7 m³ (unchanged). New snapshot `ember-engine-3884c8eb34`, not built.
+Next: integrator builds the snapshot, web draws the ambulance, DEMO.md can mention it.
