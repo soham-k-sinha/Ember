@@ -68,9 +68,10 @@ AGAIN = re.compile(r"^\W*(sorry|pardon|huh|excuse me|what)\W*(what|was that|did 
 # "thank you, dear" / "okay, got it" / "bye": the call is winding down
 CLOSING = re.compile(r"^(?=.*\b(thank|bye|got it|will do|take care))(\W*(oh|ok(ay)?|great|alright|all right|perfect|"
                      r"thanks?|thank you|so much|very much|dear|bye|good ?bye|got it|will do|take care|you too))+\W*$", re.I)
-# "okay" / "sounds good" once they know their pickup: the instruction landed, so we close after answering it
-ACK = re.compile(r"^(\W*(oh|ok(ay)?|sounds good|got it|alright|all right|perfect|great|cool|understood|will do|"
-                 r"thanks?|thank you|yes|yeah|sure|(i'?m )?done))+\W*$", re.I)
+# "okay" / "um, sounds good to me" / "coming" once they know their pickup: the instruction landed, so we close after
+# answering it (a short turn with one of these and no question)
+ACK = re.compile(r"\b(ok(ay)?|sounds good|got it|alright|all right|perfect|great|cool|understood|will do|thanks?|"
+                 r"thank you|yes|yeah|sure|done|coming|on (my|our) way)\b", re.I)
 BYE = "I'll text you all of this now. Take care."
 STILL_THERE = "Are you still there?"
 # asking us to send help that a simulation can't send: say so first, every time
@@ -135,6 +136,7 @@ class Session:
     last: float = field(default_factory=time.monotonic)
     turns: int = 0
     last_said: str = ""          # what this call said last (to tell our own echo from the caller)
+    last_heard: str = ""         # what the caller said last (shown live on the roster)
     screened: int = 0            # times we said again who we are (call screening, "who is this?", "hello?")
     voicemail: bool = False      # a mailbox greeting is not an answered resident conversation
     calmed: bool = False         # said CALM
@@ -274,10 +276,12 @@ class Voice:
         s = self.open(handle, conversation_id)
         s.arrived = max(s.arrived, arrived)
         async with s.lock:  # ElevenLabs may post a revised turn before we've answered the last one
-            text = (text or "").strip()
+            text = re.sub(r"\b\w+- +(?=\w)", "", (text or "").strip())  # a stutter: "I don't need any med- medical help"
+            if _words(text):
+                s.last_heard = text
             if text and not _words(text):  # "...": no answer before ElevenLabs' turn timeout
                 return await self._silence(s, handle)
-            if re.fullmatch(r"(?:um+|uh+|erm|er)[\W_]*", text, re.I):
+            if re.fullmatch(r"(?:um+|uh+|erm|er|hm+|mm+)[\W_]*", text, re.I):
                 return None  # hesitation is not a request to repeat the onboarding question
             s.silent = 0
             if BARE_COUNT.fullmatch(text):
@@ -379,7 +383,7 @@ class Voice:
                 self.messenger.revising.discard(handle)
             if EMERGENCY.search(text) and not any("911" in t for t in s.outbox):
                 s.outbox.insert(0, NOT_REAL)
-            if ACK.match(text) and self._settled(handle):  # "okay" once they know their pickup: the call is done
+            if ACK.search(text) and len(_words(text)) <= 6 and "?" not in text and self._settled(handle):
                 s.outbox.append(BYE)
                 s.closing = True
             if joined:
@@ -393,6 +397,8 @@ class Voice:
                 s.calmed = True
         elif not s.outbox:  # the call started with no first words from them: say where things stand
             await self.say_situation(handle)
+        if text and not s.outbox and not self._settled(handle):  # "no" / "yep" over our opening: ask again, not "Okay."
+            await self.say_next(handle, s.reason)
         out, s.outbox = s.outbox, []
         s.last = time.monotonic()
         s.last_said = render_all(out) or s.last_said
@@ -597,7 +603,8 @@ class Voice:
     def calls_view(self) -> dict:
         """GET /calls: the calls in progress, and the finished ones newest first."""
         live = [{"handle": h, "household_id": self._household_id(h), "reason": s.reason, "started_t_s": s.started_t_s,
-                 "turns": s.turns} for h, s in list(self.sessions.items()) if self.live(h) and s.dialed]
+                 "turns": s.turns, "heard": s.last_heard, "said": s.last_said}
+                for h, s in list(self.sessions.items()) if self.live(h) and s.dialed]
         return {"live": live, "recent": self.recent[::-1][:20]}
 
 
@@ -681,8 +688,6 @@ def create_voice_app(get_voice, token: str) -> FastAPI:
             if session is None or not (session.voicemail or session.closing or goodbye) or not offered:
                 return None
             args = {"reason": "Voicemail answered" if session.voicemail else "Call finished"}
-            if text and not session.voicemail:
-                args["message"] = text
             return {"id": f"call_{secrets.token_hex(6)}", "type": "function",
                     "function": {"name": "end_call", "arguments": json.dumps(args)}}
 
@@ -690,7 +695,7 @@ def create_voice_app(get_voice, token: str) -> FastAPI:
             text = await answer()
             tool = end_call(text)
             return JSONResponse({"id": cid, "object": "chat.completion", "created": int(time.time()), "model": "ember",
-                                 "choices": [{"index": 0, "message": {"role": "assistant", "content": None if tool else text,
+                                 "choices": [{"index": 0, "message": {"role": "assistant", "content": text,
                                               **({"tool_calls": [tool]} if tool else {})},
                                               "finish_reason": "tool_calls" if tool else "stop"}]})
 
@@ -705,10 +710,10 @@ def create_voice_app(get_voice, token: str) -> FastAPI:
             text = ("" if texts is None else (render_all(texts) or "Okay.")) if task is not None else reply_now
             try:
                 tool = end_call(text)
+                if text:  # said first, then the call ends (a tool call's message isn't spoken)
+                    yield _chunk(cid, {"content": text})
                 if tool:
                     yield _chunk(cid, {"tool_calls": [{"index": 0, **tool}]})
-                elif text:
-                    yield _chunk(cid, {"content": text})
                 yield _chunk(cid, {}, "tool_calls" if tool else "stop")
                 yield "data: [DONE]\n\n"
             except (asyncio.CancelledError, GeneratorExit):
@@ -725,7 +730,7 @@ __all__ = ["Voice", "create_voice_app", "render", "SYSTEM_PROMPT", "DISCLOSURE",
 
 
 # ---------- ElevenLabs agent settings (the tunnel URL changes every run) ----------
-async def wait_for_voice(url: str, http: httpx.AsyncClient | None = None, timeout_s: float = 30.0, poll_s: float = 1.0) -> bool:
+async def wait_for_voice(url: str, http: httpx.AsyncClient | None = None, timeout_s: float = 90.0, poll_s: float = 1.0) -> bool:
     """Wait for the protected callback's health check: quick-tunnel DNS is not immediately ready."""
     client = http or httpx.AsyncClient(timeout=3.0)
     deadline = time.monotonic() + timeout_s

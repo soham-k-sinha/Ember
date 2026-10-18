@@ -392,7 +392,7 @@ type CallReason = "no_reply" | "mobility" | "pickup_changed" | "console" | "inbo
 
 /** GET /calls: voice calls in progress and recently ended. */
 export type Calls = {
-  live: Array<{ handle: string; household_id: number | null; reason: CallReason; started_t_s: number; turns: number }>;
+  live: Array<{ handle: string; household_id: number | null; reason: CallReason; started_t_s: number; turns: number; heard?: string; said?: string }>;
   recent: Array<{ handle: string; household_id: number | null; reason: CallReason; outcome: string; turns: number; ended_t_s: number }>;
 };
 

@@ -277,7 +277,7 @@ def test_first_contact_is_a_call(vd):
                                      rf"{water(c, R1)} minutes\. {re.escape(ASK_NEEDS)}", first), first
     [live] = c.get("/calls").json()["live"]
     assert live == {"handle": R1, "household_id": thread_of(c, R1)["household_id"], "reason": "first_contact",
-                    "started_t_s": 0.0, "turns": 0}
+                    "started_t_s": 0.0, "turns": 0, "heard": "", "said": first}  # the roster shows the call live
     words = spoken(say(c, "2 of us", caller=OURS, called=R1, conv="conv_9"))
     assert re.fullmatch(r"[\w ]+ picks you up (now|in about \d+ minutes)\. Pack medications, ID and your phone, then "
                         r"(walk|go out) to the pickup point[^.]+\.", words), words  # two sentences, no "can you be ready?"
@@ -516,14 +516,14 @@ def test_a_goodbye_or_mailbox_ends_the_call_when_the_provider_offers_the_tool(vd
     if stream:
         chunks = [json.loads(line[6:])["choices"][0] for line in response.text.split("\n\n") if line.startswith("data: {")]
         call = next(c["delta"]["tool_calls"][0] for c in chunks if c["delta"].get("tool_calls"))
+        said = "".join(c["delta"].get("content") or "" for c in chunks)
         assert chunks[-1]["finish_reason"] == "tool_calls" and response.text.rstrip().endswith("data: [DONE]")
     else:
         choice = response.json()["choices"][0]
-        assert choice["finish_reason"] == "tool_calls" and choice["message"]["content"] is None
-        call = choice["message"]["tool_calls"][0]
+        assert choice["finish_reason"] == "tool_calls"
+        call, said = choice["message"]["tool_calls"][0], choice["message"]["content"] or ""
     assert call["function"]["name"] == "end_call"
-    arguments = json.loads(call["function"]["arguments"])
-    assert ("message" in arguments) == ("bye" in words)
+    assert said.endswith("Take care.") if "bye" in words else said == ""  # the goodbye is spoken, then the call ends
 
 
 def test_a_needs_answer_does_not_end_a_call_even_when_the_tool_is_available(vd):
@@ -789,3 +789,26 @@ def test_tonights_live_calls(vd):
     police = spoken(say(vd, "Um, for some reason, I'm unable to. Can you send the police to me?", conv="conv_9"))
     assert police.startswith("This is a simulation, so I can't send anyone. If anyone is in real danger, hang up and call 9 1 1.")
     assert spoken(say(vd, "Sounds good.", conv="conv_9")).endswith(BYE)
+
+
+def test_a_casual_okay_closes_once_they_know_their_pickup(vd):
+    """Live 2026-10-18 04:35: "Um, sounds good to me." and "Okay. Coming." kept the call going."""
+    join(vd, R1)
+    say(vd, "We are four, and one needs a wheelchair.", conv="conv_9")
+    assert spoken(say(vd, "Um, sounds good to me.", conv="conv_9")).endswith(BYE)
+    assert not spoken(say(vd, "Okay, but where do we go?", conv="conv_9")).endswith(BYE)
+
+
+def test_words_over_our_opening_get_the_question_again(vd):
+    """Live 2026-10-18 05:50: "No." and "Yep." over the opening each got a bare "Okay."."""
+    join(vd, R1)
+    assert ASK_NEEDS in spoken(say(vd, "No.", conv="conv_9"))
+
+
+def test_a_stutter_does_not_flip_a_no(vd):
+    """Live 2026-10-18 05:21: "I don't need any med- medical help" was read as a medical need."""
+    join(vd, R1)
+    say(vd, "I am one person, and I don't need any med- medical help.", conv="conv_9")
+    hid = vd.app.state.voice._household_id(R1)
+    needs = next(h["needs"] for h in vd.app.state.store.households() if h["household_id"] == hid)
+    assert needs.get("people") == 1 and not needs.get("medical")

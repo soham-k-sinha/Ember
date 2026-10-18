@@ -49,12 +49,14 @@ class Intake:
         self.outbound = outbound
         self.guide = guide  # step-by-step directions on the plan's clock (guide.Guide), optional
         self.escalation_hooks: list[Callable[[dict], Any]] = []  # a question went to the coordinators (drill console)
-        # one message at a time, end to end: the next text must see what the previous one changed
-        # (known needs, pending questions, the new plan). Photon's worker is serial; HTTP isn't.
+        # One message per thread at a time, end to end: its next message must see what the previous one changed
+        # (known needs, pending questions). Reading (the model) runs alongside other threads' messages; what follows
+        # from a read (reports, the replan, replies) happens one message at a time. Photon's worker is serial; calls aren't.
+        self._threads: dict[str, asyncio.Lock] = {}
         self._lock = asyncio.Lock()
 
     async def on_inbound(self, msg: dict, role: str) -> Outcome | None:
-        async with self._lock:
+        async with self._threads.setdefault(thread_key(msg["thread"]), asyncio.Lock()):
             return await self._on_inbound(msg, role)
 
     def _duplicate(self, r: dict) -> bool:
@@ -164,7 +166,8 @@ class Intake:
         thread = msg["thread"]
         key = thread_key(thread)
         if self.guide is not None and self.guide.guiding(thread) and STEP_DONE.match(msg["text"]):
-            await self.guide.done(thread)  # "done" / "here" / "yes" while a pickup is under way: no LLM needed
+            async with self._lock:
+                await self.guide.done(thread)  # "done" / "here" / "yes" while a pickup is under way: no LLM needed
             return None
         pending_raw = self.store.kv_get(f"pending:{key}")
         pending = json.loads(pending_raw) if pending_raw else None
@@ -179,7 +182,14 @@ class Intake:
                                     **({"facility_id": thread["facility_id"]} if "facility_id" in thread else {})}])
             return await self._handle(msg, role, thread, key, out, pending)
         out = None
-        if self.llm is not None:
+        short = len(msg["text"].split()) <= 12  # a long sentence is worth the model's fuller read
+        quick = fallback.parse(msg["text"], role) if short and self.messenger.on_call_thread(thread) else None
+        if quick is not None and any(f.kind not in ("question", "other") for f in quick.facts):
+            # on a call every second counts: what the keyword parser reads with certainty doesn't wait for the model
+            out = to_outcome(quick, role=role, thread=thread, text=msg["text"], pending=pending,
+                             resolve_road=self.planner.bridge.resolve_road, last_assignment_id=last_assignment,
+                             known_needs=record.get("needs"))
+        elif self.llm is not None:
             try:
                 history = [x for x in self.store.conversation(key, 9)]
                 if history and history[-1] == {"from": "them", "text": msg["text"]}:
@@ -203,6 +213,10 @@ class Intake:
         return await self._handle(msg, role, thread, key, out, pending)
 
     async def _handle(self, msg: dict, role: str, thread: dict, key: str, out: Outcome, pending: dict | None) -> Outcome:
+        async with self._lock:
+            return await self._apply(msg, role, thread, key, out, pending)
+
+    async def _apply(self, msg: dict, role: str, thread: dict, key: str, out: Outcome, pending: dict | None) -> Outcome:
         """What was understood (by the model, the keyword parser or the YES fast path) → reports, replan, replies."""
         if self.messenger.revising_thread(thread):  # a call's revised words (D100): the facts count, a yes / no already did
             out.reports = [r for r in out.reports if r["kind"] not in ("confirm", "reject")]
@@ -267,8 +281,8 @@ class Intake:
             if not texted and self.outbound is not None:  # never leave a fact unanswered
                 if not stored and self.guide is not None and await self.guide.done(thread, lead="Got it."):
                     pass  # nothing new while their pickup is under way: a short "got it" and the ETA, not the whole plan
-                elif not await self.outbound.send_status(thread, prefix="Got it. "):
-                    await self.messenger.send_message(thread, "Got it, thanks.", version)
+                elif not await self.outbound.send_status(thread, prefix="Got it. "):  # no pickup to name yet
+                    await self.messenger.send_message(thread, f"Got it. {await self.outbound.situation(thread) or NO_PLAN}", version)
             if out.follow_up:
                 await self.messenger.send_message(thread, out.follow_up, version)
             topics = [t for t in out.topics if t != "plan"]  # "2 of us, what should we bring?": the instruction is the plan
