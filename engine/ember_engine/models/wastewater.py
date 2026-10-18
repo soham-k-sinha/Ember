@@ -25,6 +25,7 @@ class Wastewater:
     params: dict                  # scenario facility["wastewater"]
     storage_scale: float = 1.0    # perturbation: storage_max × this
     inflow_scale: float = 1.0     # perturbation: inflow × this
+    lead_s: float = 0.0           # perturbation: the storm runs this far ahead of the inflow forecast
     storage: float = field(init=False)
     overflow: float = field(init=False, default=0.0)
     inflow: float = field(init=False, default=0.0)
@@ -38,7 +39,7 @@ class Wastewater:
 
     def step(self, t: float, dt: float, powered: bool, downstream_ok: bool = True) -> float:
         """Advance dt seconds from t. Returns m³ overflowed this tick."""
-        self.inflow = step_value(self.params["inflow_m3ph"], t) * self.inflow_scale
+        self.inflow = step_value(self.params["inflow_m3ph"], t + self.lead_s) * self.inflow_scale
         can_pump = powered and downstream_ok and self.params.get("downstream_ok", True)
         available_m3ph = self.inflow + self.storage * 3600.0 / dt
         self.pumped = min(self.pump, available_m3ph) if can_pump else 0.0

@@ -12,7 +12,7 @@ Then read: `README.md` (judge landing page), `CLAUDE.md`, `docs/DECISIONS.md`, a
 All five build branches, merged and checked together (D78–D84), then the fix round (D85–D88), the register-then-text join (D89) and the call-back fallback (D90). Aryaman is sole owner (D77). CI (`.github/workflows/ci.yml`) runs the engine and residents tests and the web build on every push to `main` and every PR.
 | Part | State |
 |---|---|
-| Engine (`engine/`): town, flood, models, plan simulator, allocator + replans, baseline, compare, Daytona robustness, `EngineSession` | 103 tests, ruff clean. Snapshot **`ember-engine-87ccf09179`**. Warm 90-sandbox pool in the backend, chunked jobs, compressed batch setup retried on dropped connections (D82, D84); distinct candidates, forecast-best kept unless the robust pick saves ≥ 1 person (D86). |
+| Engine (`engine/`): town, flood, models, plan simulator, allocator + replans, baseline, compare, Daytona robustness, `EngineSession` | 104 tests, ruff clean. Snapshot **`ember-engine-d9ea4508c1`**. Warm 90-sandbox pool in the backend, chunked jobs, compressed batch setup retried on dropped connections (D82, D84); distinct candidates, forecast-best kept unless the robust pick saves ≥ 1 person (D86). |
 | Backend (`residents/`): SQLite state, HTTP + WS, Photon threads, extraction + reply writer + keyword fallback (D75–D76), calls via ElevenLabs with EMBER calling the most at-risk first and calling back undelivered texts (D74, D80, D90), multiplayer join by `POST /join` then a text (D89), `GET /playback` (D79), simulator-graded eval and Chalk seam (D83) | 290 tests. |
 | Website (`web/`): judge-facing shell (D81): score card vs baseline, Feed / Plan / Proof, plan-diff toasts, Daytona proof, join card (number → `POST /join` → QR) + roster, player pins and on-call ring, live replay | `tsc` + build pass; main chunk 2.94 MB (480 KB gzip), flat map lazy. |
 | **End-to-end** `engine/scripts/e2e.py --big` | **79/79** against a live backend with real Daytona: every beat, playback in both modes, `/calls` shape, 250 and 10,000 runs streamed, three phones `POST /join` (idempotent) then text `JOIN EMBER` → Players 1–3 on distinct flood-zone households with one replan, an unregistered text refused, a 4th `/join` → 409 over `MAX_PLAYERS`. |
@@ -35,7 +35,7 @@ cd residents && uv run python scripts/sim_calls.py && uv run python scripts/eval
 - Plan v1: 78 reached before deadline (baseline 58), 9 not, 0 m³ (baseline 2,317), 46 vehicle-km. Judge need → v2 in 0.61 s (0.69 s HTTP), Accessible Van 3; River St closed → v3 in 0.79 s, Generator 1 ETA 14 → 25 min.
 - Hospital at 15 min: v4 in 0.81 s, Generator 1 → Mount Auburn, outage 13 min (baseline 27), overflow 0 → 9,600 m³ (stated). End of horizon: 37/40 households safe.
 - Comparison (5 seeds, after the hospital beat): EMBER 88.6 vs baseline 51.6 reached (+37.0); hospital outage 11 vs 28 min; EMBER +31 vehicle-km.
-- `/optimize` on the warm pool, 90 sandboxes, at 15:00: 250 runs 3.15 s fan-out (4.6 s wall), keeps c00 (worst-20 % unreached 15.7; c04 15.9, c06 19.3, c02 21.1; baseline 55.2). `?seeds=2000` = 10,000 runs: 4.1 s fan-out (7.3 s wall), all 10,000 `scatter_point`s streamed, keeps c00 (18.0 vs baseline 54.0). Before D84 the same pool shrank 90 → 80 → 51 → 40 sandboxes over three runs and took 4–8 s.
+- `/optimize` on the warm pool, 90 sandboxes, at 15:00: 250 runs 3.15 s fan-out (4.6 s wall), picks c04 (worst-20 % unreached 18.7; c06 21.1, c00 21.4, c02 22.3; baseline 54.8; D94 sampler). `?seeds=2000` = 10,000 runs: 4.1 s fan-out (7.3 s wall), all 10,000 `scatter_point`s streamed, keeps c00 (18.5 vs baseline 53.4). Before D84 the same pool shrank 90 → 80 → 51 → 40 sandboxes over three runs and took 4–8 s.
 - Laptop vs Daytona (D86, `ember robust` at 0:00, 4 candidates + baseline, fan-out wall, identical results; laptop = 8 processes, load ≈ 10; Daytona = 90 warm sandboxes, 7–12 s startup not counted):
 
   | worlds | laptop | Daytona | speed-up |
@@ -45,7 +45,7 @@ cd residents && uv run python scripts/sim_calls.py && uv run python scripts/eval
   | 5,000 | 13.7 s | 4.0 s | 3.4× |
   | 10,000 | 24.3 s | 5.3 s | 4.6× |
 
-  At 250 worlds (the demo's 50 seeds) the laptop keeps up; Daytona is load-bearing from ~1,000 worlds. The backend allows `/optimize` up to 2,000 seeds (10,000 worlds). Robust picks: 0:00 → c03 (worst-20 % unreached 12.0 vs forecast-best c00 27.8, baseline 42.7); 15:00 → keeps c00 (13.4; distinct alternatives 13.3 / 16.9 / 20.8; baseline 55.2).
+  At 250 worlds (the demo's 50 seeds) the laptop keeps up; Daytona is load-bearing from ~1,000 worlds. The backend allows `/optimize` up to 2,000 seeds (10,000 worlds). Robust picks (D94 sampler): 0:00 → c03 (worst-20 % unreached 14.6 vs forecast-best c00 33.7, baseline 38.4; c00 with Generator 1 sent at the grid trip: same people, 3,995 vs 77 m³ overflow); 15:00 → c04 over c00 (18.7 vs 21.4; baseline 54.8).
 - Three joins (`POST /join` ×3, then each texts): one shared replan (0.62 s). Playback ≈4 s on first call, then cached.
 - `sim_calls.py`: 7 calls (Sam twice), 5 confirmed, 2 informed; every reply < 1 s. `eval_sim.py` (keyword parser): 46/51 pass, 4 asked, 1 fail (#32 "Welch's"), 98 % safe.
 

@@ -18,7 +18,7 @@ stage or in a list for its inspector and rationale) and **Proof** (Run compariso
 |---|---|---|---|---|---|
 | 0.1 | A | `cd engine && uv run pytest -q`; `cd residents && uv run pytest -q`; e2e against a fresh backend (HANDOFF § Run) | all pass; e2e 79/79 | **blocker**: fix or cut the beat | |
 | 0.2 | A | both `.env` files on the backend machine | `DAYTONA_API_KEY`, `EMBER_DAYTONA_WORKERS`, `PHOTON_*`, `ANTHROPIC_API_KEY`, `ELEVENLABS_*` present (names only) | Daytona missing → local pool; Photon/model missing → DEMO fallbacks | |
-| 0.3 | A | `cd engine && uv run ember daytona-snapshot` | "ready" in seconds (`ember-engine-87ccf09179`) | build takes ~90 s; never let `/optimize` be first to need it | |
+| 0.3 | A | `cd engine && uv run ember daytona-snapshot` | "ready" in seconds (`ember-engine-d9ea4508c1`) | build takes ~90 s; never let `/optimize` be first to need it | |
 | 0.4 | S | start backend (DEMO § Before going on stage) | plan v1, listener connected, no pool warm-up error | | |
 | 0.5 | A | `curl localhost:8000/health` | `mode: engine`, `extraction: on`, `photon: enabled`, listener connected, `max_players: 25`, `players` | **blocker** for real phones → `/dev/inbound` | |
 | 0.6 | S | `curl localhost:8000/phones` | resident and operator phones opted in | not opted in → that phone texts its line first | |
@@ -53,7 +53,7 @@ stage or in a list for its inspector and rationale) and **Proof** (Run compariso
 | # | Who | Action | Expected | Blocker / fallback | ✓ |
 |---|---|---|---|---|---|
 | 4.1 | A | Proof tab → **Optimize** | scatter fills with 250 points; ~3 s fan-out (4.6 s wall) on 90 sandboxes; `GET /optimize` → `pool: daytona` | `local-fallback` → say "local pool" | |
-| 4.2 | A | read the result | "Kept the forecast plan c00: no candidate beats it by ≥ 1 person in the worst 20%"; worst-20 % unreached 15.7 vs baseline 55.2; judge's van and hospital generator unchanged | | |
+| 4.2 | A | read the result | picks c04 over the forecast plan c00; worst-20 % unreached 18.7 vs baseline 54.8; judge's van (confirmed) and hospital generator unchanged, judge's ETA 85 → 111 min (deadline 165) | | |
 
 ## 5 · EMBER calls first (2:40–2:55)
 | # | Who | Action | Expected | Blocker / fallback | ✓ |

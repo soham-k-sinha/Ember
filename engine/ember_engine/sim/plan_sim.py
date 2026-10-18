@@ -158,8 +158,8 @@ def simulate(world, scn: dict, plan: dict, reports=(), perturbation: dict | None
     # ---------- facilities, wastewater ----------
     fac = {f["id"]: f for f in scn["facilities"]}
     fm = FacilityModel(scn["facilities"], endurance_scale=float(pert.get("endurance_scale", 1.0)))
-    ww = {k: Wastewater(f["wastewater"], storage_scale=float(pert.get("storage_scale", 1.0)),
-                        inflow_scale=float(pert.get("inflow_scale", 1.0))) for k, f in fac.items() if f.get("wastewater")}
+    ww = {k: Wastewater(f["wastewater"], storage_scale=float(pert.get("storage_scale", 1.0)), inflow_scale=float(pert.get("inflow_scale", 1.0)),
+                        lead_s=float(pert.get("storm_lead_s", 0.0))) for k, f in fac.items() if f.get("wastewater")}
     assets = {a["id"]: a for a in world.assets}
 
     def fac_node(k):

@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "ember/scenario.schema.json",
-  "title": "Ember flood scenario",
-  "description": "The concrete situation the planner runs on: district, flood timeline, facilities, resources, assisted households. Authored in scenarios/<name>/scenario.json; checked by `uv run --project engine ember validate-scenario <path>`. Coordinates [lon, lat]; times in seconds since simulation start; ids refer to data/town.json. Every assumed number belongs in assumptions.md.",
+  "title": "Ember scenario",
+  "description": "The concrete situation the planner runs on: district, hazard timeline, facilities, resources, assisted households. Authored in scenarios/<name>/scenario.json; checked by `uv run --project engine ember validate-scenario <path>`. Coordinates [lon, lat]; times in seconds since simulation start; ids refer to data/town.json. Every assumed number belongs in assumptions.md.",
   "type": "object",
   "required": ["version", "scenario_id", "name", "t_end_s", "district", "hazard", "facilities", "resources", "households", "reserve"],
   "additionalProperties": false,
   "properties": {
-    "version": {"enum": ["0.1", "0.2"], "description": "0.2 adds optional background_traffic (D73)."},
+    "version": {"enum": ["0.1", "0.2", "0.3"], "description": "0.2 adds optional background_traffic (D73); 0.3 adds the ellipse hazard (D94)."},
     "scenario_id": {"type": "string", "pattern": "^[a-z0-9_]+$"},
     "name": {"type": "string"},
     "description": {"type": "string"},
@@ -40,9 +40,9 @@
     },
     "hazard": {
       "type": "object", "required": ["type"], "additionalProperties": false,
-      "description": "Flood extent over time. Give `keyframes` inline or `keyframes_file` (a GeoJSON FeatureCollection next to scenario.json whose features carry properties.t_s). The latest keyframe with t_s <= t applies; an edge is closed when its line intersects the extent.",
+      "description": "Hazard extent over time. flood_keyframes: give `keyframes` inline or `keyframes_file` (a GeoJSON FeatureCollection next to scenario.json whose features carry properties.t_s). ellipse: a growing wind-driven ellipse (plume or fire front, engine GrowingEllipseHazard) that the loader samples every keyframe_every_s into keyframes (D94). The latest keyframe with t_s <= t applies; an edge is closed when its line intersects the extent.",
       "properties": {
-        "type": {"const": "flood_keyframes"},
+        "type": {"enum": ["flood_keyframes", "ellipse"]},
         "source": {"type": "string", "description": "Where the extents come from (e.g. FEMA NFHL via MassGIS, Boston Climate Ready) and how they were scaled in time."},
         "keyframes": {
           "type": "array", "minItems": 1,
@@ -55,9 +55,17 @@
             }
           }
         },
-        "keyframes_file": {"type": "string", "description": "Path relative to scenario.json."}
+        "keyframes_file": {"type": "string", "description": "Path relative to scenario.json."},
+        "center": {"$ref": "#/$defs/lonlat", "description": "ellipse: release or ignition point."},
+        "start_t_s": {"type": "number", "minimum": 0},
+        "speed_mps": {"type": "number", "exclusiveMinimum": 0, "description": "ellipse: growth of the semi-major axis."},
+        "heading_deg": {"type": "number", "description": "ellipse: compass direction the front moves toward (0 = N, 90 = E)."},
+        "ratio": {"type": "number", "minimum": 1, "description": "ellipse: length / breadth."},
+        "keyframe_every_s": {"type": "number", "exclusiveMinimum": 0, "default": 300}
       },
-      "oneOf": [{"required": ["keyframes"]}, {"required": ["keyframes_file"]}]
+      "if": {"properties": {"type": {"const": "ellipse"}}},
+      "then": {"required": ["center", "heading_deg", "speed_mps"]},
+      "else": {"oneOf": [{"required": ["keyframes"]}, {"required": ["keyframes_file"]}]}
     },
     "facilities": {
       "type": "array", "minItems": 1,

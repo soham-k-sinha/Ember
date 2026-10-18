@@ -68,12 +68,15 @@ def test_distinct_runs_each_plan_once():
     assert list(distinct(cands, 2)) == ["c00", "c02"]               # c01 only cancels work: the same plan as c00
 
 
-def test_hundred_jobs_complete_and_pick_a_plan(world, scn, town):
+def test_every_job_completes_and_picks_a_plan(world, scn, town):
     streamed = []
     plan, pts = robust_plan(world, scn, k=4, seeds=20, pool=LocalPool(1, world=world), on_point=streamed.append)
-    assert len(pts) == 100 and len(streamed) == 100                # 4 candidates + baseline × 20 seeds
+    assert len(pts) == 120 and len(streamed) == 120                # 4 candidates + c00 staged late + baseline × 20 seeds
     r = plan["search"]["robust"]
-    assert r["jobs"] == 100 and r["chosen"] in {c for c in r["candidates"] if c != "baseline"}
+    assert r["jobs"] == 120 and r["chosen"] in {c for c in r["candidates"] if c != "baseline"}
+    row = {x["candidate"]: x for x in r["ranking"]}                 # D94: same rescues, so only overflow separates them
+    assert row["c00-trip"]["worst20_people_unreached"] == row["c00"]["worst20_people_unreached"]
+    assert row["c00-trip"]["worst20_overflow_m3"] > row["c00"]["worst20_overflow_m3"]
     assert r["chosen"] in (r["ranking"][0]["candidate"], r["nominal_best"])
     st = __import__("ember_engine.sim", fromlist=["simulate"]).simulate(world, scn, plan).state_at(3600)
     assert validate_state(st, scn, town) == []
