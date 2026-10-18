@@ -43,14 +43,14 @@ For scale, the real Cottage Farm station released ≈ **80,700 m³** of untreate
 One call reads each text in context (`extract.py`); one words the reply, and a deterministic guard rejects any number, vehicle, street or facility the planner didn't compute (`reply.py`). If the model is down, a keyword parser takes over (`fallback.py`). Routes, times and assignments are always computed.
 
 ## How we evaluate
-- **Simulator-graded eval** (`docs/eval.md`): 51 sample messages; a reading passes only if, after the replan, the household still gets out in time with no regret. Keyword parser: **46/51 pass, 4 ask, 1 fail**. The LLM column is not run yet.
+- **Simulator-graded eval** (`docs/eval.md`): 51 sample messages; a reading passes only if, after the replan, the household still gets out in time with no regret. Claude Sonnet 5.5 through **Chalk's Model Gateway: 50/51 pass, 1 ask, 0 fail (100 % safe)**; the keyword fallback alone: 46/51 pass, 4 ask, 1 fail.
 - **End to end** (`engine/scripts/e2e.py --big`): **79/79 checks** against a live backend with real Daytona: every demo beat, contracts, WebSocket, playback, 250 and 10,000 worlds, register-then-text joins and the player cap.
 - **Unit tests**: engine 103, residents 290; CI runs them and the web build (`.github/workflows/ci.yml`).
 
 ## Real vs synthetic
 **Real:** OSM streets, City of Boston/Cambridge buildings, the venue, Mount Auburn Hospital, Cottage Farm CSO and outfall MWR201, Boston EMS Station 14, MWRA 2024 overflow figures. **Synthetic, labelled in the app:** the 40 assisted households and their needs, flood timing, backup endurance, sewage inflow, the fleet, perturbation ranges (`scenarios/allston_flood_v1/assumptions.md`). Only the flood is built.
 
-**Not yet verified live:** the register-then-text join with real phones on the shared iMessage line, ElevenLabs' call-ended status read, the optional Chalk router for the model calls.
+**Not yet verified live:** the register-then-text join with real phones on the shared iMessage line, ElevenLabs' call-ended status read.
 
 ## Climate adaptation
 Climate Ready Boston lists Allston/Brighton among the Charles River neighbourhoods exposed to flooding. The same `/optimize` run at t = 0 answers a pre-season question: where should generators be staged so the plan holds up across 50 versions of the storm? Sewage overflow is in the planner's objective, so keeping raw sewage out of the Charles is optimized, never at the expense of people.
