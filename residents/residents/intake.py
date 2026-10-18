@@ -266,10 +266,11 @@ class Intake:
         return out
 
     async def _help(self, thread: dict, last_out: str | None) -> None:
-        """Nothing readable without the LLM: repeat what we need from them (the plan's open question), with
-        examples, never the same apology twice in a row."""
+        """Nothing readable without the LLM: repeat what we need from them (the plan's open question, else where they
+        stand, e.g. the offer waiting for their YES), with examples, never the same apology twice in a row."""
         view = self.store.plan_view() or {}
-        q = next((x["question"] for x in view.get("info_requests", []) if x["to"] == thread), None)
+        q = next((x["question"] for x in view.get("info_requests", []) if x["to"] == thread), None) or (
+            self.outbound.status_text(view, thread) if view and self.outbound is not None else None)
         text = f"Sorry, I didn't catch that. {q}" if q else HELP
         if last_out and last_out.removeprefix("[EMBER drill] ").startswith(text[:40]):
             text = HELP if q else "Sorry, I still didn't catch that. Try a few words, like \"yes\" or \"done\"."

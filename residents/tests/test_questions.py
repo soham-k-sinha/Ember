@@ -120,9 +120,12 @@ def test_eta_before_any_vehicle_is_the_situation_not_the_coordinators(qd):
     c, tap = qd
     register(c)
     place(c, tap, R1, PUTNAM)
-    for msg in ("how long until pickup?", "where do I go?", "where will you take us?"):
+    for msg in ("how long until pickup?", "where do I go?"):
         [r] = ask(c, tap, msg)
         assert r.startswith("In this drill's flood forecast") and ASKS in r, (msg, r)
+    assert ask(c, tap, "where will you take us?") == [  # the shelter, then what we still need to know
+        "Everyone we pick up goes to David Rubenstein Treehouse (drill shelter). How many people are with you, and does "
+        "anyone need a wheelchair-accessible vehicle?"]
     assert c.get("/questions").json() == []  # answered: nothing for a coordinator
 
 

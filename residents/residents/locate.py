@@ -34,7 +34,8 @@ NOT_FOUND = ("We couldn't find \"{q}\" in the drill area ({area}). Send a street
              "cross streets there.")
 OUTSIDE = "That spot is outside the drill area ({area}). Send an address or intersection inside it."
 NO_BUILDING = "We couldn't match that spot to a building on our map. Send your street address, please."
-PLACED = "Got it: we have you at {label}. Your nearest pickup point is {corner}."
+PLACED = "Got it: we have you at {label}."
+PICKUP = " Your nearest pickup point is {corner}."
 ASK_FIRST = "We can tell you exactly what to do once we know where you are. "  # a question before a place (D60)
 
 
@@ -164,7 +165,8 @@ class Locator:
             flood = f" Water is forecast to reach your street in about {m} min."
         else:
             flood = " Your street is flooding now."
-        await self.messenger.send_to_phone(handle, PLACED.format(label=where.label, corner=corner) + flood)
+        pickup = "" if corner.endswith(where.label) else PICKUP.format(corner=corner)  # they named that corner
+        await self.messenger.send_to_phone(handle, PLACED.format(label=where.label) + pickup + flood)
         thread = {"household_id": hid}
         self.store.kv_set(f"located:{handle}", json.dumps({"household_id": hid, "lon": where.lon, "lat": where.lat,
                                                           "label": where.label, "source": where.source,

@@ -59,5 +59,7 @@ class Settings:
     voice_port: int = field(default_factory=lambda: int(os.environ.get("VOICE_PORT", "8100")))
     # someone who calls the number but isn't registered becomes a resident to be located (judges can call in)
     voice_admit_callers: bool = field(default_factory=lambda: _flag("VOICE_ADMIT_CALLERS", True))
+    # D80: EMBER calls the most at-risk residents itself, at most this many calls at once (0: never calls first)
+    voice_max_concurrent: int = field(default_factory=lambda: int(os.environ.get("VOICE_MAX_CONCURRENT", "2")))
     # D76: one natural reply per turn, written by Claude Haiku from the computed messages and checked by a guard
     reply_enabled: bool = field(default_factory=lambda: _flag("REPLY_ENABLED", True))

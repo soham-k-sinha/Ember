@@ -215,6 +215,9 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
             app.state.planner.plan_hooks.append(app.state.locator.on_plan)
         from .voice import Voice
         app.state.voice = Voice(app.state.store, app.state.messenger, app.state.outbound, settings)
+        if app.state.planner is not None:  # last: a call opens with what the other hooks just decided (D80)
+            app.state.planner.plan_hooks.append(app.state.voice.check)
+            app.state.planner.clock_hooks.append(app.state.voice.check)
         if app.state.planner is not None and settings.reply_enabled and (writer is not None or (
                 settings.anthropic_api_key and settings.extract_enabled)):
             from .reply import make_writer
@@ -461,15 +464,14 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
 
     @app.get("/calls")
     def get_calls() -> dict:
-        v = app.state.voice
-        return {"calls": v.calls, "live": [{"handle": h, "conversation_id": x.conversation_id, "turns": x.turns,
-                                            "unsaid": len(x.outbox)} for h, x in v.sessions.items()]}
+        """Calls in progress and finished ones (D80): who, why, how many turns, and what each changed."""
+        return app.state.voice.calls_view()
 
     @app.post("/calls")
     async def post_call(body: CallIn) -> dict:
-        """Call a registered phone now (D74). The call opens with what the thread would say right now."""
+        """Call a registered phone now (D74). The call opens with what the thread most needs from them."""
         try:
-            return await app.state.voice.call(body.handle, reason="api")
+            return await app.state.voice.call(body.handle, reason="console")
         except ValueError as e:
             raise HTTPException(404, str(e)) from e
         except RuntimeError as e:
