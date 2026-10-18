@@ -102,7 +102,6 @@ class Outbound:
         return ("your household's needs changed" if True in mine else "other households asked for pickups" if mine
                 else "we re-planned the routes")
 
-
     async def on_plan(self, view: dict, raw: dict | None = None) -> list[dict]:
         await self.mark_declined(view)
         return await self.sync(self.store.plan_view() or view)

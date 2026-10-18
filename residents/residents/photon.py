@@ -135,7 +135,6 @@ class PhotonClient:
         """Free an assignment's seat and handle (DELETE; repeating it is safe)."""
         return await self._request("DELETE", f"platforms/imessage/assignments/{assignment_id}")
 
-
     async def send_text(self, space_id: str, sender_id: str, text: str, idempotency_key: str) -> dict:
         return await self._request("POST", "messages", idempotency_key=idempotency_key, json={
             "spaceId": space_id, "senderId": sender_id,

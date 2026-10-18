@@ -225,7 +225,6 @@ def to_outcome(ex: Extraction, *, role: str, thread: dict, text: str, pending: d
             out.step_done = True
         elif f.kind == "urgent":
             out.urgent = True
-
         elif f.kind == "question":
             out.topics.append(f.question_topic or "other")
             if f.question_topic == "roads" and f.road_hint and out.road is None:

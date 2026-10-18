@@ -397,7 +397,6 @@ class Voice:
         view = self.store.plan_view() or {}
         a = self.outbound.instruction_for(view, thread, exclude=self.outbound.rejected(key))
         offered = a is not None and not self.outbound.confirmed(a)
-
         asked = any(q["to"] == thread and self.store.kv_get(f"asked:{q['id']}") for q in view.get("info_requests", []))
         stepping = self.outbound.guide is not None and self.outbound.guide.awaiting_done(thread)
         changed = json.loads(self.store.kv_get(f"instr:{key}") or "{}").get("changed_t_s")

@@ -32,8 +32,9 @@ MEDICAL = re.compile(r"\b(oxygen|dialysis|insulin|medical|injur\w*|medication)\b
 STREET = re.compile(r"\b([a-z]+(?: [a-z]+)? (?:st|street|ave|avenue|rd|road|dr|drive|pl|place|sq|square|bridge))\b")
 BLOCKED = re.compile(r"\b(flooded|blocked|closed|under water|impassable)\b")
 GREETING = re.compile(r"^(hi|hello|hey|hiya|good (morning|afternoon|evening))\b")
-URGENT = re.compile(r"\b(hurry|help|trapped|water('s| is)? (at|under|by|coming (in|under|through)) (our|my|the) (front )?(door|house|home|"
-                    r"apartment|basement|stairs)|(water|flooding|flooded)( is)? (inside|in (our|my|the) (house|home|apartment|basement)))\b")
+URGENT = re.compile(r"\b(hurry|help|trapped|water('s| is)? (at|under|by|coming (in|under|through)) (our|my|the) (front )?"
+                    r"(door|house|home|apartment|basement|stairs)|(water|flooding|flooded)( is)? (inside|in (our|my|the) "
+                    r"(house|home|apartment|basement)))\b")
 _LEAD = {"is", "are", "the", "on", "at", "of", "a", "an", "near", "across", "get", "by", "to", "from", "via", "and"}
 QUESTION = re.compile(r"\?|^(what|when|where|how|is|are|can|could|will|would|should|who|why|do|does|did)\b")
 TOPICS = [  # first match wins
@@ -113,7 +114,6 @@ def parse(text: str, role: str = "resident") -> Extraction | None:
     if URGENT.search(t) and not any(f.kind in ("confirm", "reject") for f in facts):  # "yes, please hurry" is a yes
         facts.append(_fact("urgent"))
     if not facts and GREETING.search(t) and len(t.split()) <= 4:
-
         return Extraction(facts=[_fact("other")], confidence=0.8, clarifying_question=None)  # → their status / the plan's question
     if QUESTION.search(t) and not any(f.kind in ("confirm", "reject") for f in facts):
         topic = next((k for k, pat in TOPICS if re.search(pat, t)), "other")

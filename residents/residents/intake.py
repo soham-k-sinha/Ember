@@ -255,7 +255,6 @@ class Intake:
             if not out.question:
                 return out
         if out.question and out.question_is_missing_info:
-
             topics = [t for t in out.topics if t != "plan"]  # answer what they asked, then what we still need
             if topics:
                 await self._answer(thread, topics, out.road, question, situation=False)

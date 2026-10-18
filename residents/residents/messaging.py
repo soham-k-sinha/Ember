@@ -157,7 +157,6 @@ class Messenger:
             fields: dict[str, str | None] = {} if previous else {"scenario_id": self.store.meta().get("scenario_id")}
             if self.photon is not None and not (previous and previous["assigned_number"]):
                 a = await self.photon.create_assignment(handle, int(self.store.kv_get(f"released:{handle}") or 0))
-
                 fields.update(assignment_id=a.get("assignmentId"), assigned_number=a.get("assignedPhoneNumber"))
             phone = self.store.upsert_phone(handle, "resident", **fields)
             if previous is None:
@@ -186,7 +185,6 @@ class Messenger:
             self.store.delete_phone(handle)
             self.store.kv_set(f"released:{handle}", str(int(self.store.kv_get(f"released:{handle}") or 0) + 1))
             log.info("released %s: registered %.0f min ago, never texted", handle, (time.time() - float(at)) / 60)
-
 
     @staticmethod
     def opted_in(phone: dict) -> bool:
@@ -504,4 +502,3 @@ class Messenger:
         delivery = await self._send_or_call(phone["handle"], msg["text"], msg["id"], msg["id"])
         self._tap({"direction": "out", "who": thread, "text": msg["text"], "delivery": delivery})
         return msg, delivery
-
