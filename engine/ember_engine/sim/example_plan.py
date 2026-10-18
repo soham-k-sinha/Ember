@@ -30,7 +30,7 @@ def example_plan(world, scn: dict, t0: float = 0.0, version: int = 1) -> dict:
 
     res = scn["resources"]
     start = {x["id"]: (node_of(fac[x["at_facility"]]) if "at_facility" in x else world.node_index(x["node"])) for x in res}
-    vehicles = [x for x in res if x["kind"] in ("van", "accessible_van", "truck") and not x.get("reserved")]
+    vehicles = [x for x in res if x["kind"] in ("van", "accessible_van", "ambulance", "truck") and not x.get("reserved")]
     gens = [x for x in res if x["kind"] == "generator" and not x.get("reserved")]
     rsv = scn.get("reserve", {})
     held = {x["id"] for x in sorted(vehicles, key=lambda x: -x.get("capacity_people", 0))[:rsv.get("vans", 0)]}
@@ -82,11 +82,12 @@ def example_plan(world, scn: dict, t0: float = 0.0, version: int = 1) -> dict:
         best = None
         for x in vehicles:
             vid = x["id"]
-            if vid not in free_at or x.get("capacity_people", 0) < need["people"] or (mob and not x.get("accessible")):
+            if vid not in free_at or x.get("capacity_people", 0) < need["people"] or (mob and not x.get("accessible")) \
+                    or (x["kind"] == "ambulance" and not need.get("medical")):
                 continue
             leg = (from_base[node] if at_base[vid] else out[vid][node]) / float(x.get("speed_factor", 1.0))
             eta = free_at[vid] + leg
-            score = eta + (ACCESSIBLE_PENALTY_S if x.get("accessible") and not mob else 0.0)
+            score = eta + (ACCESSIBLE_PENALTY_S if x.get("accessible") and not mob and x["kind"] != "ambulance" else 0.0)
             if np.isfinite(eta) and (best is None or score < best[2]):
                 best = (x, eta, score)
         if best is None or (d is not None and best[1] > d):

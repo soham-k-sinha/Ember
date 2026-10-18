@@ -6,7 +6,8 @@ in a row are handled in order, each against the plan the previous one produced.
 Every question gets an answer computed from the plan (D60): the topic's own answer (briefing.py), else
 the person's whole situation (Outbound.situation). A question the plan can't cover also goes to the
 coordinators' queue (kv `question:<report id>`, GET /questions, answered with POST /questions/{id}/answer
-or the drill console's `tell`), but the person is never left with only "passed to the coordinators".
+or the drill console's `tell`), but the person is never left with only "passed to the coordinators". On a call, a
+question, a worry or a hurt caller is answered by talk.py in two spoken sentences after the turn (D111).
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from .guide import STEP_DONE
 from .messaging import Messenger, plain
 from .outbound import Outbound
 from .planner import Planner, ReportError
+from .talk import REAL, REAL_911
 
 log = logging.getLogger("residents.intake")
 
@@ -38,8 +40,7 @@ _outage = {"logged": 0.0}  # one console line per minute while the LLM is down, 
 PLANNER_DOWN = "Got your message. Our planner hit a problem; a coordinator is looking at it and will text you."
 ESCALATED = "Our plan doesn't cover that, so we've passed your question to a coordinator, who will reply here."
 NO_PLAN = "Got your question. We're still building the plan; we'll text you as soon as we have something for you."
-URGENT = ("We hear you, and we're on it. If water comes inside, go to a higher floor (not a closed attic) and stay there; "
-          "in a real emergency, call 911.")
+URGENT = "We hear you, and we're on it. If water comes inside, go to a higher floor (not a closed attic) and stay there."
 
 
 class Intake:
@@ -48,6 +49,7 @@ class Intake:
         self.store, self.messenger, self.planner, self.llm = store, messenger, planner, llm
         self.outbound = outbound
         self.guide = guide  # step-by-step directions on the plan's clock (guide.Guide), optional
+        self.talk = None  # talk.Talk: on a call, the answer to a question, a worry or a hurt caller (D111)
         self.escalation_hooks: list[Callable[[dict], Any]] = []  # a question went to the coordinators (drill console)
         # One message per thread at a time, end to end: its next message must see what the previous one changed
         # (known needs, pending questions). Reading (the model) runs alongside other threads' messages; what follows
@@ -165,6 +167,9 @@ class Intake:
     async def _on_inbound(self, msg: dict, role: str) -> Outcome | None:
         thread = msg["thread"]
         key = thread_key(thread)
+        if REAL.search(msg["text"]):  # the one line that ever steps outside the flood, and nothing else (D111)
+            await self.messenger.send_message(thread, REAL_911, self.store.meta().get("plan_version"))
+            return None
         if self.guide is not None and self.guide.guiding(thread) and STEP_DONE.match(msg["text"]):
             async with self._lock:
                 await self.guide.done(thread)  # "done" / "here" / "yes" while a pickup is under way: no LLM needed
@@ -184,8 +189,9 @@ class Intake:
         out = None
         short = len(msg["text"].split()) <= 12  # a long sentence is worth the model's fuller read
         quick = fallback.parse(msg["text"], role) if short and self.messenger.on_call_thread(thread) else None
-        if quick is not None and any(f.kind not in ("question", "other") for f in quick.facts):
-            # on a call every second counts: what the keyword parser reads with certainty doesn't wait for the model
+        if quick is not None and any(f.kind != "other" for f in quick.facts):
+            # on a call every second counts: what the keyword parser reads with certainty doesn't wait for the model, and
+            # a question goes straight to its answer (talk.py reads the words themselves)
             out = to_outcome(quick, role=role, thread=thread, text=msg["text"], pending=pending,
                              resolve_road=self.planner.bridge.resolve_road, last_assignment_id=last_assignment,
                              known_needs=record.get("needs"))
@@ -213,8 +219,15 @@ class Intake:
         return await self._handle(msg, role, thread, key, out, pending)
 
     async def _handle(self, msg: dict, role: str, thread: dict, key: str, out: Outcome, pending: dict | None) -> Outcome:
+        before = len(self._sent(key))
         async with self._lock:
-            return await self._apply(msg, role, thread, key, out, pending)
+            out = await self._apply(msg, role, thread, key, out, pending)
+        if self.talk is not None and self.messenger.on_call_thread(thread):  # after the lock: nobody waits on its model
+            await self.talk.turn(thread, msg["text"], out, self._sent(key)[before:])
+        return out
+
+    def _sent(self, key: str) -> list[dict]:
+        return [m for m in self.store.thread_messages(key) if m["direction"] == "out"]
 
     async def _apply(self, msg: dict, role: str, thread: dict, key: str, out: Outcome, pending: dict | None) -> Outcome:
         """What was understood (by the model, the keyword parser or the YES fast path) → reports, replan, replies."""

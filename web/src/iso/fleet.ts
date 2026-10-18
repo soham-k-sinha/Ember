@@ -1,6 +1,6 @@
 /**
  * The response fleet on the stage, modelled after the real vehicle types (D71): an ambulance-style high-roof
- * van, a wheelchair-accessible van with a rear lift, a box truck carrying a generator, a road-crew pickup, and
+ * van, a box ambulance with a red cross on its roof, a wheelchair-accessible van with a rear lift, a box truck carrying a generator, a road-crew pickup, and
  * towed generator trailers. Each model is built once per heading (16) from shaded boxes and pre-rendered to a
  * texture; per frame a vehicle is a sprite plus a small additive layer for its flashing light bar, headlights
  * after dusk, and the selection ring. Positions and headings are the engine's playback tracks.
@@ -56,6 +56,24 @@ const MODELS: Record<string, Model> = {
       part(g, p, a, 2.0, 0.9, 2.02, 1.25, 2.05, GLASS); // windscreen + cab glass
       band(g, p, a, -0.5, 4.92, 2.14, 1.05, 1.32, 0x2f6fe0, 0x1a3e80); // stripe
       part(g, p, a, 1.0, 0.5, 1.4, 2.6, 2.75, 0x2a2a2e); // light bar housing
+    },
+  },
+  // box ambulance: white cab and taller box body, red stripe, red cross on the roof, red/white light bar
+  ambulance: {
+    L: 6.8,
+    bar: { u: 1.55, z: 3.05, colors: [0xff2a2a, 0xffffff] },
+    draw: (g, p, a) => {
+      shadow(g, p, a, 6.8, 2.3);
+      wheels(g, p, a, [2.3, -2.1], 2.2);
+      part(g, p, a, -0.75, 4.6, 2.3, 0.5, 2.9, WHITE); // box body
+      part(g, p, a, 2.25, 1.5, 2.0, 0.5, 2.05, WHITE); // cab
+      part(g, p, a, 2.7, 0.6, 2.02, 1.3, 1.95, GLASS); // windscreen
+      part(g, p, a, 3.25, 0.5, 2.0, 0.5, 1.2, WHITE); // bonnet
+      band(g, p, a, -0.75, 4.62, 2.34, 1.15, 1.5, 0xd62828, 0x7a1010); // stripe
+      band(g, p, a, -0.75, 4.62, 2.34, 2.55, 2.7, 0xd62828, 0x7a1010); // roofline band
+      part(g, p, a, -0.75, 2.2, 0.55, 2.9, 2.94, 0xd62828, 0xd62828); // roof cross
+      part(g, p, a, -0.75, 0.55, 2.0, 2.9, 2.94, 0xd62828, 0xd62828);
+      part(g, p, a, 1.55, 0.45, 1.6, 2.9, 3.05, 0x2a2a2e); // light bar housing
     },
   },
   // wheelchair-accessible van: the same body in purple livery, side windows, a rear lift platform

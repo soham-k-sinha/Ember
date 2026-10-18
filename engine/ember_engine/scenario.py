@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 
 CONTRACTS = Path(__file__).resolve().parents[2] / "contracts"
-VEHICLE_KINDS = {"van", "accessible_van", "truck"}
+VEHICLE_KINDS = {"van", "accessible_van", "ambulance", "truck"}
 
 
 # ---------- loading ----------

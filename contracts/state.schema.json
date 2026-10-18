@@ -7,7 +7,7 @@
   "required": ["version", "scenario_id", "t_s", "plan_version", "hazard", "closures", "households", "facilities", "resources", "plan", "reports", "messages", "metrics"],
   "additionalProperties": false,
   "properties": {
-    "version": {"const": "0.2"},
+    "version": {"const": "0.3", "description": "0.3 adds the ambulance resource kind (D114)."},
     "scenario_id": {"type": "string"},
     "t_s": {"type": "number", "minimum": 0, "description": "Sim clock."},
     "plan_version": {"type": ["integer", "null"], "description": "Current plan version (null before the first plan)."},
@@ -116,7 +116,7 @@
         "type": "object", "required": ["id", "kind", "name", "lon", "lat", "status"], "additionalProperties": false,
         "properties": {
           "id": {"type": "string"},
-          "kind": {"enum": ["van", "accessible_van", "truck", "crew", "generator"]},
+          "kind": {"enum": ["van", "accessible_van", "ambulance", "truck", "crew", "generator"]},
           "name": {"type": "string"},
           "lon": {"type": "number"}, "lat": {"type": "number"},
           "node": {"type": ["integer", "null"], "description": "OSM node when at a node; null when mid-edge."},

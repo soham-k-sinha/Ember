@@ -8,8 +8,8 @@ to what they actually said, acknowledging it, and a deterministic guard checks t
 - every number, vehicle, facility and street it mentions appears in the drafts or the fact sheet;
 - every question in the drafts survives, and it adds no ask of its own ("reply YES", "say done": D100, we go ahead
   unless told otherwise);
-- no safety claim the drafts don't make ("you're safe", "no need to leave", "stay put", "911"), and never an official
-  voice ("official", "emergency alert", police, FEMA);
+- no safety claim the drafts don't make ("you're safe", "no need to leave", "stay put", "911"), never an official
+  voice ("official", "emergency alert", police, FEMA) and nothing outside the flood (D111: simulation, demo, "I can't");
 - not much longer than the drafts.
 
 Anything the guard rejects, a timeout, an API error or a refusal → the drafts go out as they are. So the worst
@@ -32,7 +32,7 @@ log = logging.getLogger("residents.reply")
 
 TIMEOUT_S = 8.0
 
-SYSTEM = """You are EMBER, an automated flood-evacuation assistant in a live flood simulation in Allston/Cambridge, talking with one resident (or a facility operator) by text message or on a phone call. Lives are at stake in the scenario: be warm, calm and decisive.
+SYSTEM = """You are EMBER, an automated flood-evacuation assistant in Allston/Cambridge during a river flood, talking with one resident (or a facility operator) by text message or on a phone call. Lives are at stake: be warm, calm, decisive and proactive.
 
 Each turn you get what they just said, the recent conversation, and DRAFTS: the messages our planner computed for this turn. Write the ONE reply we send instead of the drafts.
 
@@ -44,7 +44,7 @@ How to write it:
 - State instructions as instructions. Never ask them to confirm, to reply yes or to say done: we go ahead unless they tell us otherwise. If a draft asks a question, end with that question.
 - Never claim to be, or to speak for, an official authority (no "official alert", police, fire department, FEMA, weather service).
 - Plain sentences, no lists, no markdown, no emoji. Text: usually 2-3 sentences. Phone call (read aloud): at most 2 short sentences.
-- Don't add or repeat the simulation notice and don't mention plan versions; we add what's needed."""
+- Never refuse or say you can't, never mention a simulation, drill, demo or emergency number or that anything isn't real, and don't mention plan versions."""
 
 Writer = Callable[[str, str], Awaitable[str | None]]  # (system, user) → reply text or None
 
@@ -79,6 +79,9 @@ UNSAFE = ("you're safe", "you are safe", "no need to leave", "no need to evacuat
           "911", "nine one one", "guarantee", "definitely", "for sure", "promise",
           # never an official voice (D100): these reach real phones
           "official", "emergency alert", "police", "fire department", "fema", "weather service")
+# never said after the opening line (D111): the flood is their reality; voice.py / intake.py add the one 911 line themselves
+FORBIDDEN = re.compile(r"simulat|\bdrills?\b|\bdemo\b|\bnot (?:a )?real\b|\bi can'?t\b|\bi cannot\b|\bi can only\b|\b911\b|"
+                       r"\b9 1 1\b|nine one one", re.I)
 _SFX = {"st": "street", "ave": "avenue", "rd": "road", "dr": "drive", "pl": "place", "sq": "square", "blvd": "boulevard"}
 
 
@@ -116,6 +119,8 @@ def check(reply: str, drafts: list[str], facts: str, names: list[str]) -> Check:
         st = _norm_street(m)
         if st not in known and not any(st in k or k in st for k in known):
             return Check(False, f"mentions {m!r}, which the drafts don't")
+    if FORBIDDEN.search(reply.replace("’", "'")):
+        return Check(False, "steps outside the flood")
     for phrase in UNSAFE:
         if phrase in low and phrase not in srclow:
             return Check(False, f"says {phrase!r}, which the drafts don't")

@@ -166,7 +166,7 @@ export function buildOpening(scenario: OpeningScenario, town: Town): StateSnapsh
   });
   const times = scenario.hazard.keyframes.map((frame) => frame.t_s);
   return {
-    version: "0.2",
+    version: "0.3",
     scenario_id: scenario.scenario_id,
     t_s: 0,
     plan_version: null,

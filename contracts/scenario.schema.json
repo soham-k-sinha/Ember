@@ -7,7 +7,7 @@
   "required": ["version", "scenario_id", "name", "t_end_s", "district", "hazard", "facilities", "resources", "households", "reserve"],
   "additionalProperties": false,
   "properties": {
-    "version": {"enum": ["0.1", "0.2", "0.3"], "description": "0.2 adds optional background_traffic (D73); 0.3 adds the ellipse hazard (D94)."},
+    "version": {"enum": ["0.1", "0.2", "0.3", "0.4"], "description": "0.2 adds optional background_traffic (D73); 0.3 adds the ellipse hazard (D94); 0.4 adds the ambulance resource kind (D114)."},
     "scenario_id": {"type": "string", "pattern": "^[a-z0-9_]+$"},
     "name": {"type": "string"},
     "description": {"type": "string"},
@@ -123,7 +123,7 @@
         "description": "Start at `node` (OSM id) or at facility `at_facility`.",
         "properties": {
           "id": {"$ref": "#/$defs/id"},
-          "kind": {"enum": ["van", "accessible_van", "truck", "crew", "generator"]},
+          "kind": {"enum": ["van", "accessible_van", "ambulance", "truck", "crew", "generator"], "description": "ambulance: carries medical cases (and stretcher / wheelchair cases with them); never a ride for a household without a medical need (D114)."},
           "name": {"type": "string"},
           "node": {"type": "integer"},
           "at_facility": {"$ref": "#/$defs/id"},

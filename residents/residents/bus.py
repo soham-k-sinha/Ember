@@ -16,7 +16,7 @@ from fastapi import WebSocket
 
 log = logging.getLogger("residents.bus")
 
-EVENT_TYPES = ("state", "plan", "assignment", "message", "report", "scatter_point", "metrics")
+EVENT_TYPES = ("state", "plan", "assignment", "message", "report", "scatter_point", "metrics", "arrival")
 SEND_TIMEOUT_S = 2.0  # a stuck browser tab must not stall the replan loop
 
 

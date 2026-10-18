@@ -2,7 +2,8 @@
 exactly what the thread would text, minus what only makes sense on a screen. At most two short sentences a turn
 is the aim (D100): the texts are written that way, and this drops what a call has no time for.
 
-- the texts' one-line simulation notice and "(plan vN)" tags (a call says who is calling itself, D100);
+- the texts' one-line notice and "(plan vN)" tags (a call says who is calling itself, D100);
+- the coordinators: a call never names them (D111; a question the plan can't answer gets its answer from talk.py);
 - what a call has no time for (D80): examples in parentheses ("(e.g. 125 Western Ave)"), the plan's reasons behind a
   pickup ("Accessible Van 3 is the only wheelchair-accessible vehicle that fits 4 people; it picks up 8 other households
   first; you share the trip with ..."), how long the walk takes, the full packing list of a question's answer and a
@@ -32,8 +33,10 @@ def _case(word: str, like: str) -> str:
 
 _RULES: list[tuple[re.Pattern, object]] = [
     (re.compile(re.escape(DISCLOSURE) + r"\s*"), ""),
-    (re.compile(r"Our plan doesn't cover that, [^.]*\.(?: Meanwhile, here's where you stand:)?"),
-     "I can only help with your evacuation."),
+    (re.compile(r"Our plan doesn't cover that, [^.]*\.(?: Meanwhile, here's where you stand:)?\s*"), ""),
+    (re.compile(r"\s*A coordinator can see the request to travel together\."), ""),
+    (re.compile(r"a coordinator has been told"), "we're working on it"),
+    (re.compile(r"a coordinator is looking at it and will text you"), "we're on it and will let you know"),
     (re.compile(r"\s*\(e\.g\.[^)]*\)"), ""),
     (re.compile(r"\s*\b[A-Z][\w ]*? is the only [\w-]+ ?vehicle that fits [^.;]*[.;]"), ""),
     (re.compile(r"\s*\b(?:It picks up|it picks up|You share the trip|you share the trip)\b[^.]*\."), ""),

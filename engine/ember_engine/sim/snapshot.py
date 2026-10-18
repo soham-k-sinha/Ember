@@ -109,7 +109,7 @@ def snapshot(res, t_s: float) -> dict:
         for k in ("capacity_people", "accessible", "kw", "connector"):
             if k in x:
                 r[k] = x[k]
-        if x["kind"] in ("van", "accessible_van", "truck"):
+        if x["kind"] in ("van", "accessible_van", "ambulance", "truck"):
             r["people_on_board"] = int(rt["on_board"][i])
         resources.append(r)
 
@@ -177,7 +177,7 @@ def snapshot(res, t_s: float) -> dict:
                "infeasible_assignments": sum(1 for o in res.outcomes if o["status"] == "infeasible" and o["arrive_t"] is not None and o["arrive_t"] <= t),
                "reserve_remaining": int(res.metrics["reserve_remaining"]), "replan_latency_s": None}
 
-    return {"version": "0.2", "scenario_id": scn["scenario_id"], "t_s": float(t), "plan_version": plan.get("version") if plan else None,
+    return {"version": "0.3", "scenario_id": scn["scenario_id"], "t_s": float(t), "plan_version": plan.get("version") if plan else None,
             "source": "simulator", "synthetic": list(scn.get("synthetic", [])),
             "hazard": {"keyframe_t_s": cur[-1]["t_s"] if cur else None, "geometry": cur[-1]["geometry"] if cur else None,
                        "next_keyframe_t_s": nxt[0]["t_s"] if nxt else None, "keyframe_times_s": [k["t_s"] for k in kfs]},

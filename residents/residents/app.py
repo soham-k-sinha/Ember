@@ -96,6 +96,7 @@ class SimulateIn(BaseModel):
 
 class ClockIn(BaseModel):
     t_s: float = Field(ge=0)
+    resume: bool = Field(default=False, description="release the arrival the clock waits at (D112), then move")
 
 
 class DisruptionIn(BaseModel):
@@ -175,7 +176,7 @@ def turn_writer(app: FastAPI, write):
 
 
 def create_app(settings: Settings | None = None, photon_client: PhotonClient | None = None,
-               bridge: EngineBridge | None = None, llm: LLM | None = None, writer=None) -> FastAPI:
+               bridge: EngineBridge | None = None, llm: LLM | None = None, writer=None, talker=None) -> FastAPI:
     settings = settings or Settings()
 
     @asynccontextmanager
@@ -202,6 +203,7 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
             app.state.guide = Guide(app.state.store, app.state.messenger, app.state.planner)
             app.state.planner.plan_hooks.append(app.state.guide.on_plan)
             app.state.planner.clock_hooks.append(app.state.guide.tick)
+            app.state.planner.arrivals, app.state.planner.auto_hold = app.state.guide, settings.auto_hold  # D112
             app.state.outbound.guide = app.state.guide  # "what do I do?" includes the step they're on
         app.state.intake = None
         if app.state.planner is not None:  # no model (no key, or EXTRACT_ENABLED=0): texts go to the keyword parser
@@ -226,6 +228,12 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
                 settings.anthropic_api_key and settings.extract_enabled)):
             from .reply import make_writer
             app.state.messenger.writer = turn_writer(app, writer or make_writer(settings))
+        if app.state.intake is not None:  # on a call: the answer to a question, a worry or a hurt caller (D111)
+            from .reply import make_writer
+            from .talk import TIMEOUT_S, Talk
+            model = talker or (make_writer(settings, TIMEOUT_S) if settings.reply_enabled and settings.anthropic_api_key
+                               and settings.extract_enabled else None)
+            app.state.intake.talk = Talk(app.state.store, app.state.messenger, app.state.outbound, model)
         if app.state.planner is not None:  # after messenger + hooks exist: a fresh plan v1 texts its open questions
             await start_engine(settings, app.state.store, app.state.planner)
         app.state.listener = None
@@ -305,6 +313,7 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
                 "photon_listener": listener.status() if listener is not None else None,
                 "max_players": settings.max_players, "players": len(store().kv_prefix("player:")),
                 "voice_number": settings.photon_voice_number if voice_open() else None,  # call it to join (D100)
+                "auto_hold": settings.auto_hold, "hold": app.state.planner.held() if app.state.planner is not None else None,  # D112
                 "reader": ("Claude via Chalk" if settings.chalk_router_key else "Claude") if app.state.intake and app.state.intake.llm
                 else "keyword parser"}
 
@@ -434,12 +443,13 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
 
     @app.post("/clock")
     async def post_clock(body: ClockIn) -> dict:
-        """Move the sim clock (play / scrub). Broadcasts `state`."""
+        """Move the sim clock (play / scrub). Broadcasts `state`. A player's vehicle reaching their door stops it there
+        (D112): `t_s` is clamped to that `arrival` (`held_by`) until its call ends or a move with `resume`."""
         try:
-            state = await planner().set_clock(body.t_s)
+            state = await planner().set_clock(body.t_s, body.resume)
         except ValueError as e:
             raise HTTPException(422, str(e)) from e
-        return {"t_s": state["t_s"], "plan_version": state["plan_version"]}
+        return {"t_s": state["t_s"], "plan_version": state["plan_version"], "held_by": planner().held()}
 
     @app.get("/comparison")
     async def get_comparison(seeds: int = 5) -> dict:
@@ -492,7 +502,7 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
     @app.post("/messages")
     async def post_message(body: MessageIn) -> dict:
         """Send a message on a thread (operator console / scripted prompts), as written (a phone's first text in a run
-        gets the one-line simulation notice, D100)."""
+        gets the one-line notice, D100)."""
         msg, delivery = await messenger().send_message(body.thread.as_thread(), body.text, body.plan_version, body.assignment_id)
         return {"message": msg, "delivery": delivery, **messenger().delivery_details(msg["thread"], delivery)}
 

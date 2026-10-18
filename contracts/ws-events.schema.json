@@ -2,7 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "ember/ws-events.schema.json",
   "title": "Ember WS events",
-  "description": "Every message on WS /ws is one envelope (authored by Soham, residents/; moved to contracts/ by engine, D38). Every message on WS /ws is one envelope. `seq` increases by 1 per broadcast; a client that sees a gap re-fetches GET /state. The `state` event sent on connect carries the current seq (state as of event N); the next broadcast is N+1. `t_s` = sim clock when the event was emitted.",
+  "version": "0.2",
+  "description": "Every message on WS /ws is one envelope (authored by Soham, residents/; moved to contracts/ by engine, D38). Every message on WS /ws is one envelope. `seq` increases by 1 per broadcast; a client that sees a gap re-fetches GET /state. The `state` event sent on connect carries the current seq (state as of event N); the next broadcast is N+1. `t_s` = sim clock when the event was emitted. Version 0.2 (D112) adds `arrival`.",
   "type": "object",
   "required": [
     "type",
@@ -20,7 +21,8 @@
         "message",
         "report",
         "scatter_point",
-        "metrics"
+        "metrics",
+        "arrival"
       ]
     },
     "seq": {
@@ -145,9 +147,65 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "arrival"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "data": {
+            "$ref": "#/$defs/arrival"
+          }
+        }
+      }
     }
   ],
   "$defs": {
+    "arrival": {
+      "type": "object",
+      "description": "A player's vehicle reached them (D112): the clock stops at `t_s` and the backend calls the player with the 'outside now' step. POST /clock answers moves past it with `t_s` clamped and `held_by` = this object, and GET /health shows it as `hold`, until the call ends or a POST /clock with `resume: true`. Only players (phones with a player number) cause one; AUTO_HOLD=0 turns it off.",
+      "required": [
+        "t_s",
+        "household_id",
+        "resource_id",
+        "resource_name",
+        "player",
+        "call"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "t_s": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Sim time the vehicle arrives (the plan simulation's arrive time); the clock waits here."
+        },
+        "household_id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resource_id": {
+          "type": "string"
+        },
+        "resource_name": {
+          "type": "string",
+          "description": "e.g. 'Accessible Van 3'."
+        },
+        "player": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Player N (join order)."
+        },
+        "call": {
+          "type": "boolean",
+          "description": "A call to the player was placed or queued (false: no calls configured or they were texting; the step went by text and the hold lasts until resume)."
+        }
+      }
+    },
     "assignment_event": {
       "type": "object",
       "description": "One changed assignment in a new plan version (one event per entry of plan.changes). `assignment` is null when change = removed.",

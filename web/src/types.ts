@@ -351,6 +351,10 @@ export type RobustSummary = {
   startup_s?: number;
   /** the same worlds' fan-out on this laptop, when the backend measured it */
   laptop_s?: number;
+  /** the plans compared on the same worlds (the baseline included) */
+  candidates?: string[];
+  /** why the batch ran on this laptop instead of Daytona (never silent) */
+  fallback_reason?: string;
   rule: string;
   chosen: string;
   nominal_best: string;
@@ -399,4 +403,14 @@ export type Calls = {
 export type JudgeClosure = {
   edge_id: number;
   closed_from_t_s: number;
+};
+
+/** A vehicle reached a watched household (a player's, or the judge's): the WS `arrival` event's data and `/health.hold` (D112). */
+export type Arrival = {
+  t_s: number;
+  household_id: number;
+  resource_id: string;
+  resource_name: string;
+  player: number | null;
+  call: boolean;
 };

@@ -3,8 +3,8 @@ drill actually needs, so a text or a call keeps working instead of answering "co
 
 It returns the same `Extraction` the model would, so everything after it is unchanged (`to_outcome`: a need
 without a head count still asks "how many", a YES only counts if something was offered, ...). It only reads
-what is unmistakable: "yes" / "no" / "done", "2 of us" / "just me" / "me and my mom", "wheelchair", a question's
-topic by its key words, "<street> is flooded", "we'll be okay here" (the safety advice for staying), and urgency ("the water
+what is unmistakable: "yes" / "no" / "done", "2 of us" / "just me" / "me and my mom", "wheelchair", "I hurt my leg
+and can't move", a question's topic by its key words, "<street> is flooded", "we'll be okay here" (the safety advice for staying), and urgency ("the water
 is at our door", "we're trapped", "hurry", "help"). Anything else → None (the caller asks a specific question, never
 a guess). Confidence is 0.8 for recognized facts. An unrecognized request for assistance asks for clarification
 before publishing a pickup on the head count alone; clear urgency still reaches the intake.
@@ -32,9 +32,12 @@ DONE = re.compile(r"\b(done|ready|(we'?re|i'?m|we are|i am) (here|outside)|at th
 COUNT = re.compile(r"\b" + _N + r"\s+(of us|people|persons?|adults|in total|total)\b")
 SPOKEN_COUNT = re.compile(r"\b(?:we are|we're)\s+" + _N + r"\b(?!\s+(?:minutes?|mins?|hours?|years?|blocks?|miles?|km|meters?))")
 ALONE = re.compile(r"\b(just me|only me|myself|i'?m alone|i am alone|just one)\b")
-PAIR = re.compile(r"\b(me and my|my (?!house|home|place|apartment|room)\w+ and (i|me))\b")
-CHAIR = re.compile(r"\b(wheel ?chair|walker|can'?t walk|cannot walk|bed ?ridden|mobility|help walking|crutches|accessible|stuck|can'?t get out)\b")
-MEDICAL = re.compile(r"\b(oxygen|dialysis|insulin|medical|injur\w*|medications?|hurt|bleeding|broken|needle)\b")
+PAIR = re.compile(r"\b(me and my|my (?!house|home|place|apartment|room|leg|arm|ankle|knee|foot|back|hip|head|hand|wrist|"
+                  r"shoulder|neck)\w+ and (i|me))\b")  # "I hurt my leg and I can't move" is one person
+CHAIR = re.compile(r"\b(wheel ?chair|walker|can'?t (?:walk|move|stand|get up)|cannot (?:walk|move|stand)|bed ?ridden|mobility|"
+                   r"help walking|crutches|accessible|stuck|can'?t get out)\b")
+MEDICAL = re.compile(r"\b(oxygen|dialysis|insulin|medical|injur\w*|medications?|hurt|bleed\w*|broken?|fell|fallen|"
+                     r"sprain\w*|pain|needle)\b")
 # "nobody's hurt", "no one needs a wheelchair": the answer to first contact's question (D100) names what isn't there
 NONE_OF = re.compile(r"\b(no ?one|nobody|none of us|not|isn'?t|aren'?t|don'?t|doesn'?t|no)\b(?:'s)?"
                      r"(?:\s+(?:is|are|was|were|needs?|requires?|has|have|uses?|using|an?|any|longer))*\s+"
@@ -99,6 +102,12 @@ def _people(t: str) -> int | None:
     if re.fullmatch(_N, t):  # a bare "3" answering "how many people"
         return int(t) if t.isdigit() else NUM[t]
     return None
+
+
+def answers(text: str) -> bool:
+    """Does it carry an answer (yes / no / done / a need / a street), not only a question or chatter?"""
+    ex = parse(text)
+    return bool(ex and any(f.kind not in ("question", "other") for f in ex.facts)) or bool(STREET.search(text.lower()))
 
 
 def parse(text: str, role: str = "resident") -> Extraction | None:

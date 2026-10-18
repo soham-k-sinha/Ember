@@ -1,7 +1,7 @@
 import type {
+  Arrival,
   AssignmentEvent,
   Calls,
-  Comparison,
   Message,
   Phone,
   PlanMetrics,
@@ -22,6 +22,7 @@ type LiveEvent =
   | { type: "report"; report: Report }
   | { type: "scatter_point"; point: ScatterPoint }
   | { type: "metrics"; metrics: PlanMetrics }
+  | { type: "arrival"; arrival: Arrival }
   | { type: "ignore" };
 
 const EVENT_TYPES = new Set([
@@ -32,6 +33,7 @@ const EVENT_TYPES = new Set([
   "report",
   "scatter_point",
   "metrics",
+  "arrival",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -54,14 +56,6 @@ export function robustOf(plan: { search?: unknown } | null | undefined): RobustS
   return robust as RobustSummary;
 }
 
-export function asComparison(value: unknown): Comparison | null {
-  if (!isRecord(value) || !isRecord(value.nominal)) return null;
-  const nominal = value.nominal;
-  if (!isRecord(nominal) || !isRecord(nominal.baseline) || !isRecord(nominal.ember)) return null;
-  if (!Array.isArray(value.metrics) || !Array.isArray(value.headline)) return null;
-  return value as Comparison;
-}
-
 const numberOrNull = (value: unknown): number | null => (typeof value === "number" ? value : null);
 
 /** GET /phones rows; `player` and `household_id` are null on backends that predate the drill join. */
@@ -70,6 +64,20 @@ export function asPhones(value: unknown): Phone[] | null {
   return value
     .filter((row): row is Record<string, unknown> => isRecord(row) && typeof row.handle === "string")
     .map((row) => ({ handle: row.handle as string, player: numberOrNull(row.player), household_id: numberOrNull(row.household_id) }));
+}
+
+/** The WS `arrival` event's data (D112): a vehicle reached a player's home. */
+export function asArrival(value: unknown): Arrival | null {
+  if (!isRecord(value)) return null;
+  if (typeof value.household_id !== "number" || typeof value.resource_id !== "string") return null;
+  return {
+    t_s: typeof value.t_s === "number" ? value.t_s : 0,
+    household_id: value.household_id,
+    resource_id: value.resource_id,
+    resource_name: typeof value.resource_name === "string" ? value.resource_name : value.resource_id,
+    player: typeof value.player === "number" ? value.player : null,
+    call: value.call === true,
+  };
 }
 
 export function asCalls(value: unknown): Calls | null {
@@ -127,6 +135,10 @@ function eventFrom(type: string, data: unknown): LiveEvent | null {
     return point ? { type: "scatter_point", point } : null;
   }
   if (type === "metrics" && isRecord(data)) return { type: "metrics", metrics: data as PlanMetrics };
+  if (type === "arrival") {
+    const arrival = asArrival(data);
+    return arrival ? { type: "arrival", arrival } : null;
+  }
   return null;
 }
 

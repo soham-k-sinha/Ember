@@ -37,6 +37,23 @@ def test_sustainability_beat_reactive_generator_overflows_ember_does_not(world, 
     assert b["overflow_m3"] > 1000 and e["overflow_m3"] == 0
 
 
+def test_medical_needs_ride_the_ambulance_when_it_is_on_time(world, scn):
+    """D114: every medical household Ambulance 1 can carry rides it before its deadline, and the rationale says why;
+    a medical household larger than the ambulance, and every non-medical one, rides something else."""
+    plan = allocate(world, scn)
+    res = {r["id"]: r for r in scn["resources"]}
+    amb = next(r for r in scn["resources"] if r["kind"] == "ambulance")
+    needs = {h["household_id"]: h["needs"] for h in scn["households"] if h["needs"] != "unknown"}
+    rescues = {a["target"]["household_id"]: a for a in plan["assignments"] if a["task"] == "rescue"}
+    for hid, n in needs.items():
+        a = rescues.get(hid)
+        if n.get("medical") and n["people"] <= amb["capacity_people"]:
+            assert a and a["resource_id"] == amb["id"] and a["eta_s"] <= a["deadline_s"], (hid, a)
+            assert f"medical need → {amb['name']}" in a["rationale"]
+        elif a:
+            assert res[a["resource_id"]]["kind"] != "ambulance", (hid, a)
+
+
 def test_judge_beat_one_reply_changes_a_rescue_and_the_generator(world, scn):
     """At minute 5 the judge texts '2 people, wheelchair, River St blocked': the judge gets the accessible van
     before the deadline AND the generator's route/ETA changes (it was going through the judge's corner)."""
@@ -54,7 +71,7 @@ def test_judge_beat_one_reply_changes_a_rescue_and_the_generator(world, scn):
     mine = [a for a in v2["assignments"] if a["target"].get("household_id") == judge and a.get("status") != "cancelled"]
     assert mine, [u for u in v2["unresolved"] if u["target"].get("household_id") == judge]
     spec = next(r for r in scn["resources"] if r["id"] == mine[0]["resource_id"])
-    assert spec.get("accessible") and mine[0]["eta_s"] <= mine[0]["deadline_s"]
+    assert spec["kind"] == "accessible_van" and mine[0]["eta_s"] <= mine[0]["deadline_s"]   # no medical need: not the ambulance
     gen_before = {a["id"]: a for a in v1["assignments"] if a["task"] == "protect"}
     gen_after = {a["id"]: a for a in v2["assignments"] if a["task"] == "protect"}
     changed = any(i not in gen_after or abs(gen_after[i]["eta_s"] - a["eta_s"]) > 120 for i, a in gen_before.items()) \

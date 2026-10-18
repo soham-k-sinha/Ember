@@ -424,3 +424,27 @@ Interfaces: needs question text changed in engine explain, seed state and contra
 Status: residents 359+ pass, engine 107, web build + checks, ruff clean; sim_calls re-run (docs/voice_transcripts.md).
 Next: Daytona snapshot, e2e --big, merge, live call test.
 
+### 2026-10-18 06:10 · Ambulance for medical needs (D114)
+What: `ambulance` resource kind (scenario 0.4, state 0.3) and "Ambulance 1" in allston_flood_v1 at EMS Station 14; allocator gives medical needs the ambulance when it is on time (eligibility + construction preference + an objective term after churn), rationale names it; residents' `briefing.fits` mirrors the eligibility.
+Interfaces: state schema version 0.3 (residents' `load_seed` follows it; seed state and fixtures regenerated); web needs an `ambulance` sprite/colour (web/src/opening.ts still writes state "0.2").
+Status: engine 108 pass, ruff clean, smoke OK, residents full suite green; plan v1 78 vs 58 reached, 0 vs 2,316.7 m³ (unchanged). New snapshot `ember-engine-3884c8eb34`, not built.
+Next: integrator builds the snapshot, web draws the ambulance, DEMO.md can mention it.
+
+### 2026-10-18 06:00 · Pause on arrival (D112)
+What: `aryaman/arrival-pause` (from `aryaman/call-to-join`): when the clock reaches a player's vehicle at their door, WS `arrival`, the player is called with the "outside now" step, and the clock holds there (POST /clock clamped, `held_by`; /health `hold`) until that call ends or `POST /clock {resume: true}`. `AUTO_HOLD=0` turns it off.
+Interfaces: ws-events.schema.json 0.2 adds `arrival` (+ fixture); /clock answers `held_by`, /health `auto_hold` + `hold`; bus EVENT_TYPES, Settings.auto_hold. Engine's `_ws_examples` (ember fixtures) doesn't emit `arrival` yet.
+Status: residents 366 pass (tests/test_arrival.py), engine 107, ruff clean, e2e 79/79 with the new [10].
+Next: web (D113) stops playback on `arrival` / `held_by` and shows the hold; merge.
+### 2026-10-18 06:40 · Calls that stay in the flood and answer anything (D111) · branch aryaman/smart-calls
+What: after the one opening line, nothing on a call or text says simulation, demo, "I can't", 911 or (on a call) coordinator, except "If this is a real emergency, please hang up and call 911." when someone says it is real. A hurt caller hears who is coming to the door and one thing to do (deterministic, fast path); any other question goes to residents/residents/talk.py: the reply model (Haiku via Chalk, 3.5 s) answers from a sheet of what EMBER knows, guarded (D76 + no coordinator/dead end/unplanned help, ≤ 2 sentences), else an in-world template. Short call questions skip the reading model. Ambulance kind counts as a vehicle (wording: paramedics).
+Files: residents/residents/{talk,voice,intake,fallback,speech,reply,briefing,messaging,guide,app,db}.py, residents/tests/{test_voice,test_fallback,test_questions,test_drill}.py, residents/scripts/sim_calls.py, docs/voice_transcripts.md (Ana: police + hurt leg).
+Run: residents full suite, ruff; sim_calls re-run; 27 real model calls to tune the prompt (0.7–1.6 s, median 1.0 s).
+Interfaces: none (no contract change). New create_app(talker=) for tests.
+Next: live call check of the police / hurt-leg / dog questions; merge with the D112 (arrival pause) and D113 (web) branches.
+
+## 2026-10-18 · Ops dashboard: four views and arrival alerts (D113) · branch aryaman/ops-dashboard
+What: the web is four views (1 Live, 2 Photon · multiplayer, 3 Impact, 4 Daytona) with the stage always mounted; text cut to numbers, icons and short labels. Live keeps the stage, score card, a decisions ticker and a call-to-join badge. Photon draws phones → Photon → AI reads → planner → told with pulses, the join card and per-player cards (vehicle, ETA, on-call words, Show). Impact: three big numbers vs baseline, sewage to scale against Cottage Farm 2024, plan-version steps. Daytona: worlds, sandboxes, fan-out vs laptop, a lit cell per sandbox, verdict, scatter. Arrival alerts pause the clock and zoom on Show (WS `arrival`, /health.hold, /clock held_by, or the replay/status); ambulance art.
+Files: web/src/{App.tsx,arrivals.ts,live.ts,types.ts,styles.css,opening.ts (state 0.3),layers.ts,sprites.ts}, web/src/components/{Photon,Impact,Daytona,Icon,Hud,Panels,MapView}.tsx, web/src/iso/{IsoView,fleet}.ts, web/scripts/check-ws.ts.
+Run: web tsc + build + npm test (ws incl. arrival parse/detect, closures, crowd, traffic). Keyless backend on :8077 (players via /join + JOIN EMBER, Replay beats 2–3, real Daytona: 250 and 10,000 worlds on 90 sandboxes, 2.0–3.8 s); also against aryaman/arrival-pause: hold at 15:00, Resume, next hold at 16:00. Screens at 1920×1080 and 1512×945. Stage frame cost ~6 ms of JS at 1920×1080 (?perf showed 24 fps only because the built-in pane throttles frames).
+Interfaces: none changed; reads the D112 arrival event, /health.auto_hold/hold and /clock held_by.
+Next: check ?perf at full speed in real Chrome on the demo Mac; rehearse an arrival with a real call (hold clears when the call ends).
