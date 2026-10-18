@@ -82,7 +82,7 @@ class Drill:
                 s.elevenlabs_api_key and s.elevenlabs_agent_id and s.elevenlabs_phone_number_id):
             problems.append("Calls need ELEVENLABS_API_KEY, ELEVENLABS_AGENT_ID and ELEVENLABS_PHONE_NUMBER_ID in "
                             "residents/.env (or run with --dry for pretend calls).")
-        if not self.args.resident and not self.args.operator and not self.args.caller:
+        if not (self.args.resident or self.args.operator or self.args.caller or self.args.voice):  # --voice: they call in
             problems.append("No phones: pass --resident PHONE (repeatable) and/or --operator PHONE@facility_id, "
                             "or set DRILL_RESIDENTS / DRILL_OPERATORS in residents/.env.")
         return problems
