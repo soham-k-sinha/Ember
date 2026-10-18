@@ -14,11 +14,14 @@ CORNERS=("Flagg St and Memorial Dr" "Akron St and Banks St" "Ballord Pl and Putn
 if [ "$1" = "--none" ]; then phones=(); else phones=("$@" $(sed -n 's/^DEMO_PHONES=//p' .env | tr ',' ' ')); fi
 callers=()
 for i in "${!phones[@]}"; do callers+=(--caller "${phones[$i]}=${CORNERS[$((i % ${#CORNERS[@]}))]}"); done
-pkill -INT -f "ember-drill" && while pgrep -f "ember-drill" >/dev/null; do sleep 1; done
+pkill -INT -f "bin/ember-drill" && while pgrep -f "bin/ember-drill" >/dev/null; do sleep 1; done
 until python3 -c "import socket; s = socket.socket(); s.bind(('127.0.0.1', 8000)); s.close()" 2>/dev/null; do sleep 1; done
 rm -f "$DB" "$DB-shm" "$DB-wal"
-tail -f /dev/null | PHOTON_ENABLED="${PHOTON_ENABLED:-0}" EXTRACT_ENABLED=1 VOICE_MAX_CONCURRENT=3 MAX_PLAYERS=25 \
-    nohup uv run ember-drill --voice --crowded "${callers[@]}" --db "$DB" > /tmp/ember-demo.log 2>&1 &
+# detached, with stdin held open: closing this window must not stop the backend (an EOF would quit its console)
+PHOTON_ENABLED="${PHOTON_ENABLED:-0}" EXTRACT_ENABLED=1 VOICE_MAX_CONCURRENT=3 MAX_PLAYERS=25 \
+    nohup bash -c 'tail -f /dev/null | exec uv run ember-drill "$@"' _ --voice --crowded "${callers[@]}" --db "$DB" \
+    > /tmp/ember-demo.log 2>&1 < /dev/null &
+disown
 until grep -qE "residents can call|isn't reachable|rror" /tmp/ember-demo.log 2>/dev/null; do sleep 1; done
 grep -E "residents can call|isn't reachable|rror" /tmp/ember-demo.log | tail -1
 echo "Fresh run: calling ${#phones[@]} phone(s). Reload localhost:43123/?live."
