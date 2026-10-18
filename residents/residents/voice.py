@@ -276,12 +276,12 @@ class Voice:
         s = self.open(handle, conversation_id)
         s.arrived = max(s.arrived, arrived)
         async with s.lock:  # ElevenLabs may post a revised turn before we've answered the last one
-            text = (text or "").strip()
+            text = re.sub(r"\b\w+- +(?=\w)", "", (text or "").strip())  # a stutter: "I don't need any med- medical help"
             if _words(text):
                 s.last_heard = text
             if text and not _words(text):  # "...": no answer before ElevenLabs' turn timeout
                 return await self._silence(s, handle)
-            if re.fullmatch(r"(?:um+|uh+|erm|er)[\W_]*", text, re.I):
+            if re.fullmatch(r"(?:um+|uh+|erm|er|hm+|mm+)[\W_]*", text, re.I):
                 return None  # hesitation is not a request to repeat the onboarding question
             s.silent = 0
             if BARE_COUNT.fullmatch(text):

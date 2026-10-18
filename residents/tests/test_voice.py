@@ -803,3 +803,12 @@ def test_words_over_our_opening_get_the_question_again(vd):
     """Live 2026-10-18 05:50: "No." and "Yep." over the opening each got a bare "Okay."."""
     join(vd, R1)
     assert ASK_NEEDS in spoken(say(vd, "No.", conv="conv_9"))
+
+
+def test_a_stutter_does_not_flip_a_no(vd):
+    """Live 2026-10-18 05:21: "I don't need any med- medical help" was read as a medical need."""
+    join(vd, R1)
+    say(vd, "I am one person, and I don't need any med- medical help.", conv="conv_9")
+    hid = vd.app.state.voice._household_id(R1)
+    needs = next(h["needs"] for h in vd.app.state.store.households() if h["household_id"] == hid)
+    assert needs.get("people") == 1 and not needs.get("medical")

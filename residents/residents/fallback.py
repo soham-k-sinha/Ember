@@ -29,21 +29,21 @@ REFUSAL = re.compile(r"\b(?:i|we) (?:don't|do not|won't|will not) (?:go|leave|ev
 STAY = re.compile(r"\b(stay(ing)? (put|here|home)|(we|i)'?re staying|(we|i)'?ll be (ok|okay|fine|alright))\b")
 DONE = re.compile(r"\b(done|ready|(we'?re|i'?m|we are|i am) (here|outside)|at the corner|on the (van|truck|bus)|"
                   r"aboard|on board|arrived|checked in|it'?s connected|connected)\b")
-COUNT = re.compile(r"\b" + _N + r"\s+(of us|people|persons|adults|in total|total)\b")
+COUNT = re.compile(r"\b" + _N + r"\s+(of us|people|persons?|adults|in total|total)\b")
 SPOKEN_COUNT = re.compile(r"\b(?:we are|we're)\s+" + _N + r"\b(?!\s+(?:minutes?|mins?|hours?|years?|blocks?|miles?|km|meters?))")
 ALONE = re.compile(r"\b(just me|only me|myself|i'?m alone|i am alone|just one)\b")
 PAIR = re.compile(r"\b(me and my|my (?!house|home|place|apartment|room)\w+ and (i|me))\b")
 CHAIR = re.compile(r"\b(wheel ?chair|walker|can'?t walk|cannot walk|bed ?ridden|mobility|help walking|crutches|accessible|stuck|can'?t get out)\b")
 MEDICAL = re.compile(r"\b(oxygen|dialysis|insulin|medical|injur\w*|medications?|hurt|bleeding|broken|needle)\b")
 # "nobody's hurt", "no one needs a wheelchair": the answer to first contact's question (D100) names what isn't there
-NONE_OF = re.compile(r"\b(no ?one|nobody|none of us|not|isn'?t|aren'?t|no)\b(?:'s)?"
+NONE_OF = re.compile(r"\b(no ?one|nobody|none of us|not|isn'?t|aren'?t|don'?t|doesn'?t|no)\b(?:'s)?"
                      r"(?:\s+(?:is|are|was|were|needs?|requires?|has|have|uses?|using|an?|any|longer))*\s+"
                      r"(hurt|injur\w*|medical|medications?|oxygen|wheel ?chair|walker|bleeding|help walking|"
                      r"accessible(?: vehicle)?)\b")
 STREET = re.compile(r"\b([a-z]+(?: [a-z]+)? (?:st|street|ave|avenue|rd|road|dr|drive|pl|place|sq|square|bridge))\b")
 BLOCKED = re.compile(r"\b(flooded|blocked|closed|under water|impassable)\b")
 GREETING = re.compile(r"^(hi|hello|hey|hiya|good (morning|afternoon|evening))\b")
-URGENT = re.compile(r"\b(hurry|help|trapped|water('s| is)? (at|under|by|coming (in(?: under| through)?|under|through)) (our|my|the) (front )?"
+URGENT = re.compile(r"\b(hurry|(?<!medical )help|trapped|water('s| is)? (at|under|by|coming (in(?: under| through)?|under|through)) (our|my|the) (front )?"
                     r"(door|house|home|apartment|basement|stairs)|(water|flooding|flooded)( is)? (inside|in (our|my|the) "
                     r"(house|home|apartment|basement)))\b")
 NOT_URGENT = re.compile(r"\b(?:(?:no ?one|nobody|none of us) (?:needs?|requires?) (?:any )?help|"
