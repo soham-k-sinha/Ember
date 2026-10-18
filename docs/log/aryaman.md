@@ -299,3 +299,11 @@ Run: cd engine && uv run pytest -q && uv run ember smoke; cd residents && uv run
 Interfaces: /health gains max_players. No contract change. Snapshot ember-engine-0f3cf261d7.
 Status: done, pushed to aryaman/integration (not merged). engine 102, residents 279, web tsc + build, smoke OK, e2e 71/71, sim_calls 7 calls, eval_sim 46/51.
 Next: merge to main after review; live checks of the SMS join reply (campaign), Chalk router and the LLM eval column.
+
+## 2026-10-18 02:00 · docs + repo hygiene for judging (D88) · branch aryaman/fix-docs
+What: Root README rewritten as the judge landing page: the loop, four-line architecture, a measured results table (88.6 vs 51.6 reached, hospital outage 11 vs 28 min, 0 vs 2,317 m³ at plan v1 against the real 80,700 m³ Cottage Farm anchor, 0.66 s replan, worst-20 % 15.7 vs 55.2), where Daytona / Photon (iMessage, SMS join, voice) / the AI are used, how we evaluate (eval 46/51, e2e 71/71, unit tests), real vs synthetic, what is not verified live, climate adaptation, run it; screenshot placeholder for docs/img/. DEMO.md cut to 3:00 (framing, household rescue, power loss, multiplayer QR, Daytona, 15 s proactive call) with changeable numbers marked †; QA.md follows the 3-tab UI and QR card; HANDOFF says integration is on main; Devpost outline gets "Who built what" with blank lessons and its stale sponsor numbers corrected. Removed the root duplicate plan, the internal track memo and the unused web/public/diorama/test.json (nothing loads it); .claude/ gitignored. New CI: engine and residents tests, web build.
+Files: README.md, .gitignore, .github/workflows/ci.yml (new), docs/{HANDOFF.md,DEMO.md,QA.md,DECISIONS.md,devpost/README.md}, EMBER-hackharvard-2026-plan.md + EMBER-track-ratings-and-improvements.md + web/public/diorama/test.json (deleted)
+Run: cd engine && uv sync --extra dev && uv run pytest -q; cd residents && EMBER_LOCAL_POOL=1 GEOCODE=0 uv run pytest -q; cd web && npm ci && npm run build
+Interfaces: none changed.
+Status: done, pushed. engine 102, residents 279, web tsc + build pass locally; CI not yet seen green on GitHub.
+Next: every † number in DEMO/QA/README re-measured after the fix round; screenshots into docs/img/; each teammate writes their Lesson line in docs/devpost/README.md.
