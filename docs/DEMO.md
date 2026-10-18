@@ -10,38 +10,33 @@ D104 fixes an online staging-comparison omission. **Large stress test** now requ
 ## Who holds what
 | Who | Holds | Does |
 |---|---|---|
-| **Aryaman** | demo laptop (website `/?live` full-screen at 1920×1080; terminal with § Replay) | drives the clock, narrates |
-| **Judge** | **resident phone**: an opted-in team phone, unlocked on the EMBER thread | is household **#10296** (River St at Memorial Dr) |
-| **Soham** | **operator phone** (opted in) = Mount Auburn Hospital facilities | sends the operator text; watches the backend log |
-| Arnav / Anshuman | second laptop + a phone for the call beat | runs § Replay if a phone or the model fails; times the talk |
-
-Photon shared lines work only after the tester texts first; no group chats. Check `GET /phones` (both `opted_in`) before going on.
-**Judge timing:** keep the clock **paused at 5:00** until the judge's reply has produced a new plan (Generator 1 passes their corner at about minute 12).
+| **Aryaman** | demo laptop: website `/?live` full-screen at 1920×1080; terminal running `ember-drill` (below) | drives the clock, narrates |
+| **Judges** | their own phones | call the number on the join card and become households |
+| **Soham** | **operator phone** (opted in) = Mount Auburn Hospital facilities | sends the operator text |
+| Arnav / Anshuman | second laptop | § Replay if a phone or the model fails; times the talk |
 
 ## Before going on stage (T−15 min)
-1. The backend machine has both key files: `engine/.env` (Daytona, `EMBER_DAYTONA_WORKERS=90`) and `residents/.env`
-   (Photon, Anthropic, ElevenLabs). Never commit them.
-2. `cd engine && uv run ember daytona-snapshot` prints "ready" (current code: `ember-engine-1892f8194d`; this snapshot has not yet been rebuilt during the takeover).
-3. Start (HANDOFF § Run, Photon on, `VOICE_MAX_CONCURRENT=1`, `MAX_PLAYERS=25`); the join card registers phones itself (`POST /join`).
-4. `curl localhost:8000/health` → `mode: engine`, `extraction: on`, `photon: enabled`, listener connected.
-5. Leave the clock at **0:00** for the pre-season beat. The resident phone shows EMBER's question for #10296 (plan v1 asks it); if not, `POST /replan` once.
-   After any `/dev/reset`, wait ~5 s: players who already texted are placed again with their own replan, and a stress test
-   that overlaps a replan is dropped as "superseded" (press it again).
+1. ElevenLabs has credits (a call stops mid-sentence with "exceeds your quota limit" otherwise). Both key files present:
+   `engine/.env` (Daytona, `EMBER_DAYTONA_WORKERS=90`), `residents/.env` (Photon, Anthropic/Chalk, ElevenLabs). Never commit them.
+2. Quit everything else on the laptop (a busy Mac makes the 10,000-world run take 30 s instead of ~6 s).
+3. `cd engine && uv run ember daytona-snapshot` prints "ready".
+4. Start the backend with calls (one process: API on :8000 for the web, the voice endpoint behind a cloudflared tunnel, the ElevenLabs agent pointed at it):
+   `cd residents && PHOTON_ENABLED=1 EXTRACT_ENABLED=1 VOICE_MAX_CONCURRENT=3 MAX_PLAYERS=25 uv run ember-drill --voice --crowded --operator <soham>@mt-auburn`
+   It prints "voice: residents can call +13465660512". Then the web: `cd web && VITE_API_BASE=http://127.0.0.1:8000 npm run dev`.
+5. `curl localhost:8000/health` → `mode: engine`, `extraction: on`, `voice_number: "+13465660512"`. The join card shows **Call (346) 566-0512** and its QR.
+6. One test call from a team phone (`call r1` in the console, or dial the number) and hang up: confirms the tunnel, the agent and the credits.
 
 ## The beats (3:00)
 | # | Time | Clock | What we do | What the room sees | Say |
 |---|---|---|---|---|---|
-| 0 | 0:00–0:20 | 0:00 paused | Framing on the stage view: the Treehouse, the water, Mount Auburn, Cottage Farm, the score card. | Plan v1 vs the incident-by-incident baseline on the score card: 78 reached before the water (baseline 58), 0 m³ sewage, **2,317 m³ kept out of the Charles**. | "Flood response is our first demonstration; adaptive coordination is the product. People report, the AI reads, a simulator-scored planner decides, everyone gets their own instruction. Households and timings are synthetic; the streets are real." |
-| 1 | 0:20–0:50 | 0:00 paused | **Pre-season stress test (Daytona).** Proof tab → **Large stress test**. | The clock pauses, the heading identifies the pool, and all runs stream into the scatter. Read the actual total (2,000 paired worlds per plan, up to 12,000 runs), timing and worst-20% verdict. Keep the forecast plan unless an alternative gains at least one person. | "Before storm season, we test each candidate on the same thousands of perturbed storms: slower roads, an earlier flood, a van failing. We stage the plan that holds up when things go wrong." |
-| 2 | 0:50–1:30 | scrub to **5:00**, paused | **Household rescue by text.** The judge replies on the resident phone, e.g. *"2 of us, one is in a wheelchair, River St is blocked"*. | Feed: text in → fact → new plan in ~0.7 s (plus the model's read); River St replans in ~0.7 s. The latest-change strip leads with the judge: **Judge → Accessible Van 3, pickup in 95 min**; River St turns red, **Generator 1 rerouted, ETA 14 → 25 min**. The judge's phone gets its instruction; the score card moves (reached 80, **5,167 m³ kept out**). | "The AI only reads your text. The van, the route and the time come from the simulator. You got the only accessible van, and the generator three streets away was rerouted because of your road." |
-| 3 | 1:30–2:00 | scrub to **15:00** | **Infrastructure power loss.** Soham texts: *"Mount Auburn facilities: we lost grid power, we're on backup and it has about 10 minutes left."* | New plan in ~0.7 s: **Mount Auburn Hospital → Generator 1**, outage 13 min vs 27 for the baseline; the rationale states the cost: **Cottage Farm overflow 0 → 9,600 m³**; the sewage tile keeps **5,167 m³ kept out, before the hospital call**. | "The hospital outranks sewage, and EMBER says what that costs in m³ instead of hiding it. People first. For scale, Cottage Farm really released 80,700 m³ into the Charles in one storm in January 2024." |
-| 4 | 2:00–2:30 | 15:00 | **Multiplayer.** A judge types their number into the join card (iPhone only) → **Join** → scans the QR it shows → iMessage opens with `JOIN EMBER` to the shared line → send. | Each phone becomes Player N on a flood-zone household; the card confirms "Player N joined: you're household #… on <street>", the roster fills and one replan places a burst of joins (~0.8 s). EMBER calls new players with the head-count and care-needs question. Cap 25 (Photon free-plan seats). | "Every one of you is now a household in this flood, and the plan has to save you." **Skip if no phone joins within 15 s.** |
-| 5 | 2:30–2:55 | 15:00 | **EMBER calls first.** Live: `POST /calls` to the second-laptop phone on speaker, or a player's phone shows the **on call** pill. Fallback: read Maria's first-contact excerpt from `docs/voice_transcripts.md`. | On the first call, ElevenLabs opens "This is EMBER, an automated assistant in a live flood simulation.", asks the combined head-count and care-needs question, and says the computed instruction. A "From our call:" text follows. | "EMBER calls at the moments that matter: first contact, a changed pickup, and two minutes before the vehicle arrives. Nobody has to keep replying yes or done." |
-| 6 | 2:55–3:00 | | Close. | | "Every decision on screen has a computed reason." |
+| 0 | 0:00–0:15 | 0:00 paused | The stage: the Treehouse, the river, Mount Auburn, Cottage Farm, the score card. | Plan v1 vs handling calls one at a time: **78 reached before the water (baseline 58)**, 2,317 m³ of sewage kept out of the Charles. | "In a flood the plan is made once and it's wrong in ten minutes. Watch what happens when the people in it can talk back. The streets are real; households and timings are synthetic." |
+| 1 | 0:15–0:30 | 0:00 → **5:00**, paused | **Everyone joins.** Point at the join card: "Call this number." Judges scan the QR or dial **(346) 566-0512**. | Each caller becomes Player N on a real flood-zone home; the roster fills; one replan per join (~0.8 s). | "Any phone. You're now a household in this flood, and the plan has to save you." |
+| 2 | 0:30–1:30 | 5:00 paused | **Live agents (the wow).** EMBER talks to up to 3 judges at once: where the water reaches them and "How many people are with you, and does anyone need a wheelchair or medical help?" One says *"4 of us, my mom's in a wheelchair"*; another *"River St is flooded"*. | Answers in ~1 s. The wheelchair household gets **Accessible Van 3** while still on the line; River St turns red; another player's pickup changes and EMBER calls them with why ("Your pickup changed: …"). Feed: words → fact → new plan; each call ends "I'll text you all of this now. Take care." and a text follows. | "The AI only understands; a simulator decides. Your words just moved a stranger's rescue." |
+| 3 | 1:30–2:00 | scrub to **15:00** | **The hospital loses power.** Soham texts: *"Mount Auburn facilities: we lost grid power, we're on backup and it has about 10 minutes left."* | New plan in ~0.8 s: **Generator 1 → Mount Auburn**, outage 13 min vs 27 for the baseline; the rationale states the cost: **Cottage Farm overflow 0 → 9,600 m³**. | "People first, and EMBER says what it costs instead of hiding it. Cottage Farm really released 80,700 m³ into the Charles in one storm in 2024." |
+| 4 | 2:00–2:35 | 15:00 | **Is it still safe? (Daytona).** Proof tab → **Large stress test**. | 10,000 worlds (2,000 per plan) on **90 Daytona sandboxes, ~5 s fan-out**; the throughput tile shows the laptop's ~24 s; the worst-20 % verdict. | "We changed the plan five times in two minutes. Daytona replays tonight 10,000 ways in five seconds and keeps the plan that holds up when things go wrong." |
+| 5 | 2:35–3:00 | | Close. | | "Photon carries the calls and texts, ElevenLabs the voices, Chalk routes the model that reads them, Daytona stress-tests the plan. Every decision on screen has a computed reason." |
 
-Video: the same beats; record after the run-through. Beat 4 becomes a pre-recorded phone scan.
-We do not press Optimize at 15:00 on stage: there it picks c04 over c00 (18.7 vs 21.4 in the worst 20 % of 250 worlds) and
-moves the judge's Van 3 pickup 85 → 111 min (deadline 165), which is correct but costs a sentence to explain.
+Video: the same beats; record after the run-through.
 
 ## Fallbacks (decide in 5 s)
 | Fails | Do |
@@ -50,8 +45,8 @@ moves the judge's Van 3 pickup 85 → 111 min (deadline 165), which is correct b
 | Model (no plan change after an inbound) | Structured report (§ Replay 2c / 3c): same replan, no model. |
 | Daytona (`pool: local-fallback`, heading says "this laptop") | Press **Pre-season stress test** (50 worlds per plan) instead of the large batch. Read the actual worker pool and measured timing; do not present a local run as Daytona. |
 | Stress test says "superseded" | A text or join replanned during the run; press it again. |
-| Join (no player appears) | `POST /join` then `POST /dev/inbound` with that `handle` and `JOIN EMBER` (§ Replay 4), or skip beat 4. A phone that never texts the line is never placed. |
-| Call (no ring in 10 s) | Read the transcript excerpt. |
+| Join (no one gets through on the number) | Console `call r1` to a team phone on speaker; or the iMessage join under the QR; or § Replay 4. |
+| Call (no ring in 10 s, or it stops mid-sentence) | ElevenLabs credits or the tunnel: read Maria's call from `docs/voice_transcripts.md`. |
 | Website stops updating | Reload `/?live`. Backend crash: restart with `RESET_ON_START=1`, then § Replay. |
 
 ## Replay (every beat by curl; also the QA script)
