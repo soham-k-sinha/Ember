@@ -28,7 +28,10 @@ COUNT = re.compile(r"\b" + _N + r"\s+(of us|people|persons|adults|in total|total
 ALONE = re.compile(r"\b(just me|only me|myself|i'?m alone|i am alone|just one)\b")
 PAIR = re.compile(r"\b(me and my|my (?!house|home|place|apartment|room)\w+ and (i|me))\b")
 CHAIR = re.compile(r"\b(wheel ?chair|walker|can'?t walk|cannot walk|bed ?ridden|mobility|crutches|accessible|stuck|can'?t get out)\b")
-MEDICAL = re.compile(r"\b(oxygen|dialysis|insulin|medical|injur\w*|medication)\b")
+MEDICAL = re.compile(r"\b(oxygen|dialysis|insulin|medical|injur\w*|medications?|hurt|bleeding|broken|needle)\b")
+# "nobody's hurt", "no one needs a wheelchair": the answer to first contact's question (D99) names what isn't there
+NONE_OF = re.compile(r"\b(no ?one|nobody|none of us|not|isn'?t|aren'?t|no)\b(\W+\w+){0,3}\W+(hurt|injur\w*|medical|"
+                     r"medications?|oxygen|wheel ?chair|walker|bleeding)\b")
 STREET = re.compile(r"\b([a-z]+(?: [a-z]+)? (?:st|street|ave|avenue|rd|road|dr|drive|pl|place|sq|square|bridge))\b")
 BLOCKED = re.compile(r"\b(flooded|blocked|closed|under water|impassable)\b")
 GREETING = re.compile(r"^(hi|hello|hey|hiya|good (morning|afternoon|evening))\b")
@@ -96,10 +99,11 @@ def parse(text: str, role: str = "resident") -> Extraction | None:
             n = mins and (int(mins[1]) if mins[1].isdigit() else NUM[mins[1]])
             facts.append(_fact("facility_status", facility_state=state,
                                endurance_min=(n * 60 if mins and mins[2].startswith("h") else n) if mins else None))
-    people, chair, med = _people(t), bool(CHAIR.search(t)), bool(MEDICAL.search(t))
+    said = NONE_OF.sub(" ", t)  # what they say someone needs, without what they say nobody needs
+    people, chair, med = _people(t), bool(CHAIR.search(said)), bool(MEDICAL.search(said))
     if role != "operator" and (people or chair or med):
         facts.append(_fact("need", people=people, mobility=True if chair else None,
-                           accessible_vehicle=True if re.search("wheel|accessible", t) else None, medical=True if med else None))
+                           accessible_vehicle=True if re.search("wheel|accessible", said) else None, medical=True if med else None))
     if (street := _street(t)) and BLOCKED.search(t) and not QUESTION.search(t):
         facts.append(_fact("closure_report", road_hint=street))
     if not facts:

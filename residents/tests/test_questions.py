@@ -9,10 +9,11 @@ import pytest
 from residents.briefing import BRING, SAFETY, TOPICS
 from residents.drill import Drill
 from residents.intake import ESCALATED
+from residents.outbound import ASK_NEEDS
 from tests.helpers import GREEN, PUTNAM, R1, R2, Tap, clock, ex, fact, outcome, place, register, text, thread_of
 
 BARE = "We've passed your question to the coordinators."
-ASKS = "Please tell us: How many people are with you"
+ASKS = ASK_NEEDS
 Q = {
     "what's the plan?": ex(fact("question", question_topic="plan"), confidence=0.75),
     "what to do?": ex(fact("question", question_topic="plan"), confidence=0.75),
@@ -71,7 +72,7 @@ def test_whats_the_plan_outside_the_flood_before_details(qd):
     assert tap.outs(R1)[-1].startswith("How many people are with you")
     for msg in ("what's the plan?", "what to do?"):
         [r] = ask(c, tap, msg)
-        assert BARE not in r and r.startswith("Your street is outside this drill's forecast flood area, so no pickup is "
+        assert BARE not in r and r.startswith("Your street is outside the forecast flood area, so no pickup is "
                                               "planned: stay where you are, above the ground floor if you can."), r
         assert ASKS in r and r.endswith("(plan v2)"), r
 
@@ -93,25 +94,21 @@ def test_in_the_flood_before_details_says_when_the_water_comes(qd):
     register(c)
     place(c, tap, R1, PUTNAM)
     [r] = ask(c, tap, "what's the plan?")
-    assert r.startswith("In this drill's flood forecast, water reaches your street in about "), r
-    assert "so we're planning to pick you up; we need a few details" in r and ASKS in r
+    assert r.startswith("The river reaches your street in about "), r
+    assert "so we're planning to pick you up." in r and ASKS in r
 
 
-def test_offered_then_confirmed_then_on_a_step(qd):
+def test_on_a_pickup_the_plan_is_the_step_they_are_on(qd):
     c, tap = qd
     register(c)
     place(c, tap, R1, PUTNAM)
     text(c, R1, "2 of us")
     [r] = ask(c, tap, "what's the plan?")
-    assert " is assigned to pick you up, arriving " in r and "Reply YES to confirm." in r and "Please tell us" not in r, r
-    text(c, R1, "yes")
-    [r] = ask(c, tap, "what to do?")
-    assert r.startswith("Your pickup is confirmed: ") and " Right now: Step 1 of 4: Pack medications" in r, r
-    assert "Confirmed:" not in r.split("Right now:")[1]  # step 1 without its "Confirmed: …" lead
+    assert " picks you up in about " in r and "Reply" not in r and ASKS not in r, r   # the instruction, no ask
     assert r.count("(plan v") == 1 and r.endswith(")")
-    text(c, R1, "done")          # auto clock: the vehicle arrives, step 2 is texted
-    [r] = ask(c, tap, "what's the plan?")
-    assert " Right now: Step 2 of 4: " in r and "Reply DONE once everyone is aboard" in r, r
+    c.post("/clock", json={"t_s": c.portal.call(c.app.state.guide.next_event_t)})   # the vehicle is 2 minutes away
+    [r] = ask(c, tap, "what to do?")
+    assert " is 2 minutes away. Go to the corner of " in r, r
 
 
 def test_eta_before_any_vehicle_is_the_situation_not_the_coordinators(qd):
@@ -120,10 +117,9 @@ def test_eta_before_any_vehicle_is_the_situation_not_the_coordinators(qd):
     place(c, tap, R1, PUTNAM)
     for msg in ("how long until pickup?", "where do I go?"):
         [r] = ask(c, tap, msg)
-        assert r.startswith("In this drill's flood forecast") and ASKS in r, (msg, r)
+        assert r.startswith("The river reaches your street") and ASKS in r, (msg, r)
     assert ask(c, tap, "where will you take us?") == [  # the shelter, then what we still need to know
-        "Everyone we pick up goes to David Rubenstein Treehouse (drill shelter). How many people are with you, and does "
-        "anyone need a wheelchair-accessible vehicle?"]
+        f"Everyone we pick up goes to David Rubenstein Treehouse. {ASK_NEEDS}"]
     assert c.get("/questions").json() == []  # answered: nothing for a coordinator
 
 
@@ -133,12 +129,12 @@ def test_flood_question(qd):
     register(c)
     place(c, tap, R1, GREEN)
     [r] = ask(c, tap, "where is the flood happening")
-    assert r.startswith("Your street is outside this drill's forecast flood area. The river flood reaches these "
+    assert r.startswith("Your street is outside the forecast flood area. The river flood reaches these "
                         "corners first: Flagg Street and Memorial Drive (in about "), r
     register(c, R2)
     place(c, tap, R2, PUTNAM)
     [r] = ask(c, tap, "where is the flood happening", R2)
-    assert r.startswith("In this drill's flood forecast, water reaches your street in about "), r
+    assert r.startswith("The river reaches your street in about "), r
 
 
 def test_roads_questions(qd):
@@ -179,9 +175,9 @@ def test_two_topics_falling_back_send_the_situation_once(qd):
     register(c)
     place(c, tap, R1, PUTNAM)
     [r] = ask(c, tap, "when, and where do we go?")  # no vehicle yet: both fall back to the same answer
-    assert r.startswith("In this drill's flood forecast")
+    assert r.startswith("The river reaches your street")
     new = ask(c, tap, "what now and can I bring my cat?")
-    assert len(new) == 1 and new[0].startswith("In this drill's flood forecast"), new  # plan first, cat → queue only
+    assert len(new) == 1 and new[0].startswith("The river reaches your street"), new  # plan first, cat → queue only
     assert [q["text"] for q in c.get("/questions").json()] == ["what now and can I bring my cat?"]
 
 
@@ -190,7 +186,7 @@ def test_a_need_with_a_question_gets_the_offer_and_the_answer(qd):
     register(c)
     place(c, tap, R1, PUTNAM)
     new = ask(c, tap, "2 of us, what should we bring?")
-    assert " will pick you up at " in new[0] and new[-1] == BRING, new
+    assert " picks you up in about " in new[0] and new[-1] == BRING, new
 
 
 def test_missing_details_with_a_question_asks_once(qd):
@@ -220,7 +216,7 @@ def test_neighbours_who_fit_one_van_hear_they_share_the_trip(qd):
     text(c, R1, "me and my dad, he uses a wheelchair")
     q = [a for a in c.get("/plan/current").json()["assignments"] if a["resource_id"] == "van-3" and a["task"] == "rescue"]
     assert len(q) == 2 and any("shares the trip with household #" in a["rationale"] for a in q), [a["rationale"] for a in q]
-    offers = [next(x for x in reversed(tap.outs(h)) if "will pick you up" in x) for h in (R1, R2)]
+    offers = [next(x for x in reversed(tap.outs(h)) if "is coming to your door" in x) for h in (R1, R2)]
     assert any("you share the trip with 1 other household: it collects you both before the drop-off." in o for o in offers), offers
     for h in (R1, R2):
         [r] = ask(c, tap, "is anyone near me?", h)

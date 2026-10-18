@@ -8,6 +8,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from residents.app import create_app
+from residents.messaging import DISCLOSURE
+from residents.outbound import ASK_NEEDS
 from residents.outbound import MATERIAL_ETA_S, Outbound
 from tests.helpers import JUDGE, SCENARIO, FakeLLM, ex, fact, judge_need
 
@@ -30,10 +32,10 @@ def test_judge_gets_one_instruction_with_version_and_assignment(oc):
     st = oc.get("/state").json()
     [m] = outs(oc, {"household_id": JUDGE})
     a = next(x for x in st["plan"]["assignments"] if x["id"] == m["assignment_id"])
-    assert a["target"] == {"household_id": JUDGE} and a["status"] == "offered"
+    assert a["target"] == {"household_id": JUDGE} and a["status"] == "confirmed"  # it reached them: we proceed (D99)
     assert m["plan_version"] == st["plan_version"] == 2
-    assert m["text"].startswith("[EMBER drill] Accessible Van 3 will pick you up") and "(plan v2)" in m["text"]
-    assert "Reply YES" in m["text"]
+    assert m["text"].startswith(f"{DISCLOSURE} Accessible Van 3 is coming to your door") and "(plan v2)" in m["text"]
+    assert "Reply" not in m["text"]
 
 
 def test_no_text_when_nothing_material_changed(oc):
@@ -43,12 +45,12 @@ def test_no_text_when_nothing_material_changed(oc):
     assert len(outs(oc, {"household_id": JUDGE})) == 1
 
 
-def test_offered_status_survives_the_next_replan(oc):
+def test_confirmed_status_survives_the_next_replan(oc):
     oc.post("/reports", json=judge_need())
     aid = outs(oc, {"household_id": JUDGE})[0]["assignment_id"]
     oc.post("/replan")
     a = next(x for x in oc.get("/state").json()["plan"]["assignments"] if x["id"] == aid)
-    assert a["status"] in ("offered", "en_route", "working", "done")  # not back to "proposed"
+    assert a["status"] in ("confirmed", "en_route", "working", "done")  # not back to "proposed"
 
 
 def test_phone_less_households_get_nothing(oc):
@@ -75,7 +77,8 @@ def test_material_change_rules(oc):
     [m] = run(view([rescue(eta=6000 + MATERIAL_ETA_S + 60)]))                # big ETA move: tell them
     assert "in about" in m["text"]
     [m] = run(view([rescue(aid="a-van-1-10296", res="van-1")]))              # different vehicle
-    assert m["text"].startswith("[EMBER drill] Van 1") and m["assignment_id"] == "a-van-1-10296"
+    assert m["text"].startswith("Your pickup changed because ") and " Van 1 picks you up " in m["text"]
+    assert m["assignment_id"] == "a-van-1-10296"
     [m] = run(view([rescue(aid="a-van-1-10296", res="van-1", status="cancelled")]))  # no longer coming
     assert "no longer coming" in m["text"]
     assert run(view([])) == []                                               # and we don't repeat it
@@ -86,7 +89,7 @@ def test_generator_instruction_goes_to_the_operator(oc):
     gen = {"id": "a-gen-1-mt-auburn", "resource_id": "gen-1", "task": "protect", "target": {"facility_id": "mt-auburn"},
            "eta_s": 6000.0, "status": "proposed", "dropoff_facility_id": None}
     [m] = oc.portal.call(ob.sync, view([gen]))
-    assert m["thread"] == {"facility_id": "mt-auburn"} and m["text"].startswith("[EMBER drill] Generator 1 (500 kW, camlock) is on its way")
+    assert m["thread"] == {"facility_id": "mt-auburn"} and m["text"].startswith(f"{DISCLOSURE} Generator 1 (500 kW, camlock) is on its way")
 
 
 def test_info_request_asked_once_after_hi(settings, bridge):
@@ -94,9 +97,9 @@ def test_info_request_asked_once_after_hi(settings, bridge):
     s = replace(settings, scenario=SCENARIO, extract_enabled=True)
     with TestClient(create_app(s, bridge=bridge, llm=llm)) as c:
         c.post("/phones", json={"role": "resident", "handle": "6175550120"})
-        q = next(q for q in c.get("/state").json()["plan"]["info_requests"] if q["to"] == {"household_id": JUDGE})
+        assert any(q["to"] == {"household_id": JUDGE} for q in c.get("/state").json()["plan"]["info_requests"])
         c.post("/dev/inbound", json={"role": "resident", "text": "hi"})
-        assert [m["text"] for m in outs(c, {"household_id": JUDGE})] == [f"[EMBER drill] {q['question']}"]
+        assert [m["text"] for m in outs(c, {"household_id": JUDGE})] == [f"{DISCLOSURE} {ASK_NEEDS}"]
         c.post("/dev/inbound", json={"role": "resident", "text": "hello?"})
         assert len(outs(c, {"household_id": JUDGE})) == 1                    # not asked twice
         c.post("/dev/reset")

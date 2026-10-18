@@ -1,15 +1,14 @@
 """A text message → the same words, said on a phone call (D74). Deterministic rewrites only: the call says
-exactly what the thread would text, minus what only makes sense on a screen.
+exactly what the thread would text, minus what only makes sense on a screen. At most two short sentences a turn
+is the aim (D99): the texts are written that way, and this drops what a call has no time for.
 
-- the "[EMBER drill]" prefix, "Welcome to the EMBER flood drill." and "(plan vN)" tags (the call opens by saying who
-  is calling, once);
-- what a call has no time for (D80): examples in parentheses ("(e.g. 125 Western Ave)"), an offer's out-by time
-  and the plan's reasons behind it ("It picks up 8 other households first; you share the trip with ..."), the
-  "Step 1 of 4" labels and packing lists (the follow-up text has them), a pickup's destination, an ETA said twice, and
-  asides like "or tell us what changed" or, before a new offer in the same turn, "tell me if you change your mind";
-- asks, as a person would make them: "Reply YES to confirm." → "Can you be ready?", "Reply DONE when you're there." →
-  "Tell me when you're outside.", "Reply DONE when / once …" → "Tell me when / once …"; any other "Reply YES / NO" →
-  "Say yes / no", "reply with / send your" → "tell me", "we'll text you" → "we'll let you know", "text us" → "tell us";
+- the texts' one-line simulation notice and "(plan vN)" tags (a call says who is calling itself, D99);
+- what a call has no time for (D80): examples in parentheses ("(e.g. 125 Western Ave)"), the plan's reasons behind a
+  pickup ("Accessible Van 3 is the only wheelchair-accessible vehicle that fits 4 people; it picks up 8 other households
+  first; you share the trip with ..."), how long the walk takes, the full packing list of a question's answer and a
+  pickup's destination (the follow-up text has them);
+- asks, as a person would make them: "reply with / send your" → "tell me", "Reply YES / NO" → "Say yes / no",
+  "we'll text you" → "we'll let you know", "text us" → "tell us";
 - "Utility truck" → "the utility truck";
 - street suffixes ("Western Ave" → "Western Avenue", "N Harvard St" → "North Harvard Street");
 - units ("12 min" → "12 minutes", "120 m" → "120 meters", "m³"), "#10296" → "number 10296", "911" → "9 1 1"
@@ -19,6 +18,8 @@ exactly what the thread would text, minus what only makes sense on a screen.
 from __future__ import annotations
 
 import re
+
+from .messaging import DISCLOSURE
 
 _SUFFIX = {"St": "Street", "Ave": "Avenue", "Av": "Avenue", "Rd": "Road", "Dr": "Drive", "Pl": "Place",
            "Blvd": "Boulevard", "Sq": "Square", "Pkwy": "Parkway", "Ct": "Court", "Ln": "Lane", "Ter": "Terrace"}
@@ -30,27 +31,16 @@ def _case(word: str, like: str) -> str:
 
 
 _RULES: list[tuple[re.Pattern, object]] = [
-    (re.compile(r"\[EMBER drill\]\s*"), ""),
-    (re.compile(r"Welcome to the EMBER flood drill\.\s*"), ""),
+    (re.compile(re.escape(DISCLOSURE) + r"\s*"), ""),
     (re.compile(r"\s*\(e\.g\.[^)]*\)"), ""),
-    (re.compile(r"\s*\b(?:It picks up|You share the trip)\b[^.]*\."), ""),
+    (re.compile(r"\s*\b[A-Z][\w ]*? is the only [\w-]+ ?vehicle that fits [^.;]*[.;]"), ""),
+    (re.compile(r"\s*\b(?:It picks up|it picks up|You share the trip|you share the trip)\b[^.]*\."), ""),
     (re.compile(r";\s*(?:it picks up|you share the trip)\b[^.]*"), ""),
-    (re.compile(r"\s*Plan to be out within about \d+ min, before the water reaches your street\."), ""),
     (re.compile(r"\s*\(plan v\d+\)"), ""),
-    (re.compile(r"\bStep \d+ of \d+: "), ""),
-    (re.compile(r"Pack medications, ID, your phone and charger, then (\w)"), lambda m: m[1].upper()),
-    (re.compile(r"\s*Get medications, ID, [^.]*\."), ""),
+    (re.compile(r"\s*\(about \d+ min on foot\)"), ""),
     (re.compile(r"Bring medications \(and prescriptions\), [^.]*\."), "Bring medications, ID and your phone."),
-    (re.compile(r"Confirmed: (.+?) is coming to you\. (?=.*\b\1 gets there)"), "Confirmed. "),
-    (re.compile(r"(\b([A-Z][\w ]*?) is arriving (in about \d+ min)\b.*?)\s*\2 gets there \3\."), r"\1"),
     (re.compile(r" and take you to [^.]+(?=\.)"), ""),
-    (re.compile(r"; we need a few details to send the right vehicle|Please tell us: |, or tell us what changed"), ""),
     (re.compile(r": 6 inches of moving water [^.]*\."), "."),
-    (re.compile(r"\s*Reply here if you change your mind\.(?=.*\bReply YES\b)"), ""),
-    (re.compile(r"Reply YES to confirm someone will meet it\."), "Can someone meet it?"),
-    (re.compile(r"Reply YES to confirm\."), "Can you be ready?"),
-    (re.compile(r"Reply DONE when you're there\."), "Tell me when you're outside."),
-    (re.compile(r"Reply DONE (when|once)\b"), r"Tell me \1"),
     (re.compile(r"\b([Rr])eply (YES|NO|DONE)\b"), lambda m: _case("say", m[1]) + " " + m[2].lower()),
     (re.compile(r"\b(YES|NO|DONE)\b"), lambda m: m[1].lower()),
     (re.compile(r"\b([Rr])eply (?:with|here)\b"), lambda m: _case("tell me", m[1])),

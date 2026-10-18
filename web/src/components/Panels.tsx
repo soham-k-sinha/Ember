@@ -184,7 +184,7 @@ function Feed(props: { state: StateSnapshot; plans: PlanSnapshot[]; playback: Pl
         </details>
       ) : null}
       {items.length === 0 ? (
-        <p className="empty">Nothing yet. When someone texts the drill line, their words, the fact EMBER takes from them and the new plan appear here.</p>
+        <p className="empty">Nothing yet. When someone calls or texts EMBER, their words, the fact EMBER takes from them and the new plan appear here.</p>
       ) : (
         <ol className="feed">
           {items.map((item) => (

@@ -1,4 +1,4 @@
-"""A whole drill in one process, driven by text messages: `uv run ember-drill` (from residents/).
+"""A whole run in one process, by calls and texts: `uv run ember-drill` (from residents/).
 
     uv run ember-drill --resident 6175550101                       # your phone is a resident (Photon on)
     uv run ember-drill --resident 6175550101 --resident 6175550102 --operator 6175550103@mt-auburn
@@ -6,10 +6,10 @@
     uv run ember-drill --crowded ...                               # + the scenario's 40 synthetic households
 
 It starts the backend (planner + Photon listener + the HTTP/WS API on :8000, so the web map can watch),
-starts the run from scratch (unless --keep), registers the phones, and prints every text in and out.
-Residents text where they are, answer EMBER's questions, reply YES to an offer and DONE after each step.
-The sim clock moves one step at a time: when everyone EMBER is waiting on has replied DONE, it jumps to
-the next event (the vehicle arriving, the pickup, the drop-off). Console commands: `help`.
+starts the run from scratch (unless --keep), registers the phones, and prints every text and call turn.
+Residents say where they are and answer EMBER's one question; the pickup instruction and every later step come by
+themselves (D99: nobody has to say YES or DONE). The sim clock moves with `next` / `+N` (or the web's playback), and
+each step goes out when the clock reaches it. Console commands: `help`.
 Phones also come from residents/.env: DRILL_RESIDENTS=6175550101,6175550102 and
 DRILL_OPERATORS=6175550103@mt-auburn (keep real numbers out of git).
 """
@@ -37,7 +37,7 @@ HELP = """commands:
                         what they say with @r1 …)
   calls                 calls placed this run and the ones in progress
   questions             questions the plan couldn't answer (each already got the person's situation)
-  tell r1 <text>        reply to r1 as the coordinator (texted as written, with the drill prefix)
+  tell r1 <text>        reply to r1 as the coordinator (texted as written)
   reset                 start over from scratch (everyone texts their location again)
   help | quit"""
 
@@ -68,7 +68,8 @@ class Drill:
         s = Settings()
         return replace(s, db_path=Path(self.args.db), reset_on_start=not self.args.keep,
                        photon_enabled=not self.args.dry, drill_solo=not self.args.crowded,
-                       auto_clock=not self.args.manual_clock, dev_endpoints=True, start_t_s=0.0)
+                       auto_clock=True, dev_endpoints=True, start_t_s=0.0,
+                       elevenlabs_api_key="" if self.args.dry else s.elevenlabs_api_key)  # --dry never dials
 
     def check(self, s: Settings) -> list[str]:
         problems = []
@@ -163,7 +164,7 @@ class Drill:
                 where, _, cross = address.partition(" and ")
                 found = await st.locator.places.locate(where.strip(), cross.strip() or None, st.locator.geocoder)
                 if not hasattr(found, "lon"):
-                    print(f"  {name}: couldn't place {address!r} in the drill area; not called")
+                    print(f"  {name}: couldn't place {address!r} in the area; not called")
                     continue
                 st.voice.open(handle)  # what placing them would text goes into the call instead
                 self._quiet = True     # (and isn't printed: the call opens with the situation below)
@@ -181,22 +182,22 @@ class Drill:
                     st.voice.end(handle, reason="outside the flood")
                     print(f"  {name} at {found.label}: outside the forecast flood, so not called")
                     continue
-                await st.messenger.send_message(thread, f"We have you at {found.label}.", st.store.meta().get("plan_version"))
-                await st.voice.say_situation(handle)  # then what the plan says for them (the call opens with both)
+                await self.call(name, "first_contact")  # where they are, when the water comes, the one question
+                continue
             await self.call(name)
 
-    async def call(self, name: str) -> None:
+    async def call(self, name: str, reason: str = "console") -> None:
         st = self.app.state
         handle = next((h for h, n in self.names.items() if n == name), None)
         if handle is None:
             print(f"usage: call r1  (participants: {', '.join(self.names.values())})")
             return
         if self.args.dry:
-            print(f"\n[pretend call to {name}] EMBER: {await st.voice.opening(handle, 'console')}")
+            print(f"\n[pretend call to {name}] EMBER: {await st.voice.opening(handle, reason)}")
             st.voice.sessions[handle].outbox.clear()
             return
         try:
-            rec = await st.voice.call(handle, reason="console")
+            rec = await st.voice.call(handle, reason=reason)
             print(f"calling {name} … (conversation {rec.get('conversation_id')})")
         except (RuntimeError, ValueError) as e:
             print(f"call to {name} failed: {e}")
@@ -274,9 +275,9 @@ class Drill:
         if not self.args.dry and any(not p["opted_in"] for *_, p in rows):
             print("\nEach phone that isn't ready: text HI to its number above (Photon only lets EMBER reply"
                   " after you text first).")
-        print("\nResidents: EMBER asks where you are → answer its questions → reply YES to the offer → "
-              "reply DONE after each step.\nOperators: tell EMBER your power status (e.g. 'on backup, about "
-              "40 minutes left').")
+        print("\nResidents: EMBER asks where you are and one question (how many, anyone hurt or in a wheelchair) → the "
+              "pickup instruction and each step come by themselves (`next` moves the clock).\nOperators: tell EMBER your "
+              "power status (e.g. 'on backup, about 40 minutes left').")
         corners = self.app.state.planner.bridge.flood_corners(4)
         if corners:
             print("To be evacuated, be somewhere the flood reaches (elsewhere EMBER says to shelter in place), e.g.:")
@@ -298,7 +299,7 @@ class Drill:
         if name is None:
             return  # a household without a phone: the dashboard shows it
         t = _fmt_t(float(self.app.state.store.meta().get("t_s", 0.0)))
-        text = ev["text"].removeprefix("[EMBER drill] ")
+        text = ev["text"]
         if ev["direction"] == "in":
             print(f"\n[{t}] {name} → EMBER: {text}", flush=True)
         elif ev["delivery"] == "voice":
@@ -376,7 +377,7 @@ class Drill:
             g = guide.state(store_key(thread))
             if g:
                 line += (f"\n      step {g['sent'] + 1} of {g['steps']}"
-                         + (" (finished)" if g["finished"] else " · waiting for DONE" if guide.awaiting_done(thread) else ""))
+                         + (" (finished)" if g["finished"] else ""))
             print(line)
         nxt = await guide.next_event_t()
         if nxt is not None:
@@ -532,7 +533,6 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--crowded", action="store_true",
                     help="also the scenario's 40 synthetic households, competing for the same vehicles (default: only the drill's people)")
     ap.add_argument("--keep", action="store_true", help="continue the last drill instead of starting from scratch")
-    ap.add_argument("--manual-clock", action="store_true", help="the clock moves only with next / +N")
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--db", default=str(PKG_ROOT / "drill.db"), help="its own DB (default residents/drill.db)")
     args = ap.parse_args(argv)

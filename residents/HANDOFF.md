@@ -22,7 +22,11 @@ residents/  Photon ⇄ phones · ElevenLabs ⇄ calls · HTTP + WS /ws ⇄ web/ 
 ```
 
 ## Rules enforced here (beyond CLAUDE.md)
-- Every outbound text starts with **`[EMBER drill]`** and carries its `plan_version`. Offers stay provisional until YES.
+- Calls first (D99): first contact, the pickup, a changed pickup and "2 minutes away" are calls; a short text follows.
+  The first text a phone gets in a run starts with "EMBER flood simulation, live demo, not a real emergency." and the
+  first call with "This is EMBER, an automated assistant in a live flood simulation."; nothing else says "drill".
+  Every outbound text carries its `plan_version`. No YES or DONE is ever required: an instruction that reaches them is
+  `confirmed`, steps go out on the plan's clock.
 - Replies are worded by the model but decided by the planner: the guard in `reply.py` rejects any number, vehicle,
   facility or street not in the computed messages and falls back to the computed text.
 - Secrets live only in `residents/.env` (gitignored). Never commit keys or real phone numbers (tests use 555 numbers).

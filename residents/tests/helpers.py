@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from residents.app import create_app
 from residents.config import REPO_ROOT
 from residents.extract import Extraction, Fact, to_outcome
+from residents.messaging import plain
 from residents.photon import parse_inbound
 
 SCENARIO = REPO_ROOT / "scenarios" / "allston_flood_v1" / "scenario.json"
@@ -82,7 +83,7 @@ def deliver(client, obj):
 
 
 class Tap:
-    """Every text in/out, per phone handle (what the drill console prints)."""
+    """Every text in/out, per phone handle (what the drill console prints), without the one-time notice."""
 
     def __init__(self, c):
         self.c, self.events = c, []
@@ -97,7 +98,7 @@ class Tap:
                 p = phone_for_thread(self.c.app.state.store, who)
                 who = p["handle"] if p else None
             if who == handle and e["direction"] == "out":
-                out.append(e["text"].removeprefix("[EMBER drill] "))
+                out.append(plain(e["text"]))  # without the first text's simulation notice (D99)
         return out
 
 

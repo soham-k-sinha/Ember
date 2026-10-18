@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from residents.app import create_app
 from residents.db import Store
+from residents.outbound import ASK_NEEDS
 from residents.photon import parse_inbound
 from tests.fake_photon import FakePhoton, received
 from tests.helpers import JUDGE, SCENARIO, FakeLLM, deliver, ex, fact
@@ -63,7 +64,7 @@ def test_ask_before_opt_in_does_not_consume_question(multi):
     assert fp.sends() == []
     deliver(c, received("first-a", PHONE_A, "hi"))
     assert c.get("/phones").json()[0]["opted_in"] is True
-    assert any(question["question"] in s["content"]["text"] for s in fp.sends())
+    assert question["id"] and any(ASK_NEEDS in s["content"]["text"] for s in fp.sends())
 
 
 def test_targeted_ask_and_inbound_are_isolated(multi):
@@ -181,27 +182,27 @@ def test_confirm_and_reject_only_affect_the_senders_household(multi):
                    and m["thread"] == {"household_id": JUDGE} and m["assignment_id"])
     offer_b = next(m for m in reversed(state["messages"]) if m["direction"] == "out"
                    and m["thread"] == {"household_id": other} and m["assignment_id"])
-    deliver(c, received("yes-b", PHONE_B, "yes"))
+    deliver(c, received("yes-b", PHONE_B, "yes"))  # understood, never needed (D99)
     state = c.get("/state").json()
-    # Snapshot statuses describe travel progress (e.g. en_route at t=0). The raw
-    # plan preserves the person's confirmation independently of that progress.
+    # Snapshot statuses describe travel progress (e.g. en_route at t=0). The raw plan keeps the backend's status:
+    # each instruction is confirmed once it reached its own phone (silence means we proceed).
     raw = c.get(f"/plan/{state['plan_version']}").json()
     assignments = {a["id"]: a for a in raw["assignments"]}
-    assert assignments[offer_b["assignment_id"]]["status"] == "confirmed"
-    assert assignments[offer_a["assignment_id"]]["status"] != "confirmed"
-    deliver(c, received("no-a", PHONE_A, "no"))    # the only accessible van: "reply NO to decline anyway" (D57)
+    assert assignments[offer_b["assignment_id"]]["status"] == assignments[offer_a["assignment_id"]]["status"] == "confirmed"
+    assert not any(r["kind"] == "confirm" for r in state["reports"])
+    deliver(c, received("no-a", PHONE_A, "no"))    # the only accessible van: "say no again to decline it" (D57)
     assert c.app.state.store.kv_get(f"rejected:household:{JUDGE}") is None
     deliver(c, received("no-a2", PHONE_A, "no"))
     state = c.get("/state").json()
-    confirm = next(r for r in state["reports"] if r["kind"] == "confirm")
-    reject = next(r for r in state["reports"] if r["kind"] == "reject")
-    assert confirm["household_id"] == other and confirm["assignment_id"] == offer_b["assignment_id"]
+    reject = [r for r in state["reports"] if r["kind"] == "reject"][-1]
     assert reject["household_id"] == JUDGE and reject["assignment_id"] == offer_a["assignment_id"]
+    raw = c.get(f"/plan/{state['plan_version']}").json()
+    assert next(a for a in raw["assignments"] if a["id"] == offer_b["assignment_id"])["status"] == "confirmed"
     assert c.app.state.store.kv_get(f"rejected:household:{other}") is None
     assert c.app.state.store.kv_get(f"rejected:household:{JUDGE}")
 
 
-def test_unsent_offer_is_not_confirmed_by_first_yes(multi):
+def test_an_instruction_that_never_reached_them_is_not_confirmed(multi):
     c, fp, _ = multi
     register(c, PHONE_A, JUDGE)
     r = c.post("/dev/inbound", json={"role": "resident", "household_id": JUDGE, "text": "two with wheelchair"})
@@ -210,11 +211,12 @@ def test_unsent_offer_is_not_confirmed_by_first_yes(multi):
     store = c.app.state.store
     assert store.kv_get(f"instr:household:{JUDGE}") is None
     assert store.last_outbound_plan_version(f"household:{JUDGE}") is None
+    assert not any(a["status"] == "confirmed" for a in store.current_plan()["assignments"])  # they don't have it yet
     deliver(c, received("yes-before-offer", PHONE_A, "yes"))
     state = c.get("/state").json()
-    assert not any(r["kind"] == "confirm" for r in state["reports"])
-    assert not any(a["status"] == "confirmed" for a in state["plan"]["assignments"])
-    assert fp.sends() and "Reply YES" in fp.sends()[-1]["content"]["text"]
+    assert not any(r["kind"] == "confirm" for r in state["reports"])   # a yes to nothing confirms nothing
+    assert fp.sends() and "Accessible Van 3 is coming to your door" in fp.sends()[-1]["content"]["text"]  # now they have it
+    assert "Reply" not in fp.sends()[-1]["content"]["text"]
 
 
 def test_reset_keeps_both_opt_ins_and_targets(multi):
@@ -244,7 +246,7 @@ def test_legacy_instruction_marker_keeps_offer_without_resending(multi):
     before = len(fp.sends())
     result = c.post("/replan").json()
     raw = c.get(f"/plan/{result['plan_version']}").json()
-    assert next(a for a in raw["assignments"] if a["id"] == marker["assignment_id"])["status"] == "offered"
+    assert next(a for a in raw["assignments"] if a["id"] == marker["assignment_id"])["status"] == "confirmed"
     assert len(fp.sends()) == before
 
 

@@ -271,9 +271,10 @@ class Store:
                 db.execute("UPDATE phones SET thread_key = NULL WHERE handle = ?", (handle,))
             db.execute("DELETE FROM kv WHERE key = 'extra_households'")
             # per-run conversation memory: half-answered questions, last instruction texted, questions asked,
-            # step-by-step directions, where located phones were placed, pre-placement chat, when we last called
+            # step-by-step directions, where located phones were placed, pre-placement chat, when we last called, the call
+            # waiting for a retry, and the one-time simulation notice by text and by call (D99: once per phone per run)
             for prefix in ("pending:", "instr:", "asked:", "rejected:", "guide:", "located:", "lobby:", "welcomed:", "keep:",
-                           "question:", "call:"):
+                           "question:", "call:", "retry:", "disclosed:", "voiced:"):
                 db.execute("DELETE FROM kv WHERE key LIKE ?", (prefix + "%",))
 
     def apply_snapshot(self, state: dict) -> None:
@@ -429,7 +430,7 @@ class Store:
             elif r["delivery"] in ("sent", "dev", "failed"):
                 text = r["said"] if r["said"] is not None else m["text"]
                 if text:
-                    out.append({"from": "EMBER", "text": text.removeprefix("[EMBER drill] ")})
+                    out.append({"from": "EMBER", "text": text})
         return out[-n:]
 
     def delivered_outbound(self, key: str) -> list[dict]:

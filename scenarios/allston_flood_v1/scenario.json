@@ -500,7 +500,7 @@
   {
    "id": "treehouse-shelter",
    "type": "shelter",
-   "name": "David Rubenstein Treehouse (drill shelter)",
+   "name": "David Rubenstein Treehouse",
    "node": 382400901,
    "synthetic": true,
    "capacity_people": 200,

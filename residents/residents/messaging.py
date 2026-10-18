@@ -1,7 +1,9 @@
 """Conversation threads: inbound texts → stored messages (+ hooks), outbound instructions → Photon.
 
 Rules enforced here, not left to callers:
-- every outbound text starts with "[EMBER drill]" and carries the plan_version it was generated from;
+- every outbound text carries the plan_version it was generated from, and the first text a phone gets in a run
+  starts with the one-line notice that this is a simulation (D99: real phones, strangers included, must never
+  mistake it for an official alert; everything after it is in-world);
 - a shared iMessage line may only reply to a tester who texted it first (opt-in): until then the
   message is stored and shown on the dashboard with delivery "not_opted_in", never sent;
 - inbound messages are deduped by Photon message id (socket redelivery + polling overlap);
@@ -27,9 +29,9 @@ from .threads import ROLES, normalize_handle, player, resolve_thread, phone_thre
 
 log = logging.getLogger("residents.messaging")
 
-DRILL = "[EMBER drill]"
+DISCLOSURE = "EMBER flood simulation, live demo, not a real emergency."  # the first text only (D99)
 RUN_STARTED_KEY = "run_started_at"  # wall-clock UTC ISO of the last bootstrap (startup reseed / reset)
-FULL = "Thanks for joining! The EMBER flood drill is full right now; watch it on the big screen."
+FULL = "Thanks for joining! The EMBER flood simulation is full right now; watch it on the big screen."
 # POST /join with Photon off (dev, tests): the line a registered player would text. Fictional (555-01xx).
 DEV_LINE = "+16175550100"
 IPHONE_ONLY = "iPhone (iMessage) only: an Android phone texts by SMS, which never reaches this line."
@@ -49,9 +51,9 @@ LobbyHook = Callable[[dict, str], Awaitable[Any]]
 Tap = Callable[[dict], Any]
 
 
-def with_drill_prefix(text: str) -> str:
-    text = text.strip()
-    return text if text.startswith(DRILL) else f"{DRILL} {text}"
+def plain(text: str) -> str:
+    """A text without the first-contact notice (for the reply writer and the model's history)."""
+    return text.removeprefix(DISCLOSURE).strip()
 
 
 def new_message_id() -> str:
@@ -70,6 +72,8 @@ class Messenger:
         # send the computed messages as they are. None (tests, no API key): every message goes out as computed.
         self.writer = None
         self._turns: dict[str, dict] = {}  # handle → {"said": text, "drafts": [...]} while its text is handled
+        self.revising: set[str] = set()  # handles whose call turn revises the one before (voice.py, D99)
+        self.texting: set[str] = set()  # handles whose inbound message is being handled right now
         self._registration_lock = asyncio.Lock()
         # Freeze the old role-only registrations to the existing scenario before a reset.
         for phone in self.store.phones():
@@ -299,14 +303,25 @@ class Messenger:
 
     # ---------- one reply per turn (D76) ----------
     async def _in_turn(self, handle: str, said: str, work):
-        """Run the handling of one inbound text; what it would send that phone is held and goes out as one reply."""
-        if self.writer is None or handle in self._turns:
-            return await work
-        self._turns[handle] = {"said": said, "drafts": []}
+        """Run the handling of one inbound text; what it would send that phone is held and goes out as one reply.
+        While it runs the phone is `texting`: someone texting us is answered by text, not called (D99)."""
+        first = handle not in self.texting
+        self.texting.add(handle)
         try:
-            return await work
+            if self.writer is None or handle in self._turns:
+                return await work
+            self._turns[handle] = {"said": said, "drafts": []}
+            try:
+                return await work
+            finally:
+                await self._end_turn(handle)
         finally:
-            await self._end_turn(handle)
+            if first:
+                self.texting.discard(handle)
+
+    def revising_thread(self, thread: dict) -> bool:
+        phone = phone_for_thread(self.store, thread)
+        return phone is not None and phone["handle"] in self.revising
 
     def _held(self, handle: str | None) -> dict | None:
         return self._turns.get(handle) if handle else None
@@ -326,7 +341,9 @@ class Messenger:
                 log.exception("reply writer failed")
                 reply = None
         if reply:
-            text = with_drill_prefix(reply)
+            text = plain(reply)
+            if any(d["text"].startswith(DISCLOSURE) for d in live):  # the writer rewrites the words, never the notice
+                text = f"{DISCLOSURE} {text}"
             delivery = live[-1]["delivery"]
             if on_call:
                 self.voice.capture(handle, text)
@@ -387,6 +404,14 @@ class Messenger:
             return "no_phone"
         return "photon" if self.opted_in(phone) else "not_opted_in"
 
+    def _disclose(self, handle: str | None, text: str, route: str) -> str:
+        """The first text a phone gets in a run starts with the simulation notice (D99); a call says its own."""
+        text = text.strip()
+        if handle is None or route not in ("photon", "dev") or self.store.kv_get(f"disclosed:{handle}"):
+            return text
+        self.store.kv_set(f"disclosed:{handle}", "1")
+        return f"{DISCLOSURE} {text}"
+
     def lobby_log(self, handle: str) -> list[dict]:
         return json.loads(self.store.kv_get(f"lobby:{handle}") or "[]")
 
@@ -405,10 +430,10 @@ class Messenger:
 
     async def send_to_phone(self, handle: str, text: str) -> str:
         """Text a phone that has no household yet (the Locator's questions). Same rules as send_message
-        (drill prefix, opt-in); kept in the lobby log. Returns delivery."""
+        (first-text notice, opt-in); kept in the lobby log. Returns delivery."""
         phone = self.store.phone(handle=handle)
-        text = with_drill_prefix(text)
         route = self._route(phone)
+        text = self._disclose(handle, text, route)
         turn = self._held(handle)
         if turn is not None:  # part of this turn's reply (D76)
             delivery = "sent" if route in ("voice", "photon") else route
@@ -476,10 +501,11 @@ class Messenger:
                            assignment_id: str | None = None) -> tuple[dict, str]:
         """Store + broadcast an outbound message, then deliver it if this thread has an opted-in phone.
         Returns (message, delivery)."""
-        msg = {"id": new_message_id(), "thread": thread, "direction": "out", "text": with_drill_prefix(text),
-               "t_s": self._t_s(), "plan_version": plan_version, "assignment_id": assignment_id, "report_id": None}
         phone = phone_for_thread(self.store, thread)
         route = self._route(phone)
+        msg = {"id": new_message_id(), "thread": thread, "direction": "out",
+               "text": self._disclose(phone["handle"] if phone else None, text, route),
+               "t_s": self._t_s(), "plan_version": plan_version, "assignment_id": assignment_id, "report_id": None}
         turn = self._held(phone["handle"] if phone else None)
         if turn is not None:  # part of this turn's reply (D76): recorded now, delivered at the end of the turn
             delivery = "sent" if route in ("voice", "photon") else route

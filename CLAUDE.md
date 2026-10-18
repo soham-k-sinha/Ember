@@ -18,6 +18,7 @@ A city-scale disaster simulation around the David Rubenstein Treehouse (Harvard,
 8. **Daytona sandboxes cannot reach the internet on Tier 1/2.** Results come back as the `run_code` return value. Bake data into the snapshot. Always pass `timeout=`.
 9. **Photon:** use Beta (Photon 2.0, `api.photon.codes/v1`). Shared iMessage lines: tester must text first; no group chats; no calls on shared lines.
 10. **Label what's synthetic.** Household counts, behavior parameters, hazard timing: say it in the UI and the write-up.
+11. **Calls first, one notice, nothing official (D99).** Residents hear the moments that matter on a call (first contact, the pickup, a changed pickup, "2 minutes away"); texts are the written follow-up. These reach real phones, strangers included: the first call opens "This is EMBER, an automated assistant in a live flood simulation." and the first text "EMBER flood simulation, live demo, not a real emergency."; everything after is in-world. Never impersonate an official authority. Never ask for a YES or a DONE.
 
 ## The build plan and the team
 `docs/TECHNICAL.md` is the execution plan (architecture, models, allocator, API, UI, timeline, git protocol). Each person has a self-contained brief in `docs/team/<name>.md` and an append-only feature log in `docs/log/<name>.md`. **Every session starts by reading all of `docs/log/*.md` and `docs/DECISIONS.md`, and ends each feature by appending to its own log.**
