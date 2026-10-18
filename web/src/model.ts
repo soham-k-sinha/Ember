@@ -7,9 +7,7 @@ import type {
   HouseholdStatus,
   JudgeClosure,
   LngLat,
-  PlanSnapshot,
   ScenarioKeyframe,
-  Selection,
   StateFacility,
   StateHousehold,
   StateResource,
@@ -139,10 +137,6 @@ export function resourceById(state: StateSnapshot, id: string): StateResource | 
   return state.resources.find((resource) => resource.id === id);
 }
 
-export function assignmentsOf(plan: PlanSnapshot | null): Assignment[] {
-  return plan?.assignments ?? [];
-}
-
 export function assignmentById(state: StateSnapshot, id: string | null): Assignment | undefined {
   if (!id || !state.plan) return undefined;
   return state.plan.assignments.find((assignment) => assignment.id === id);
@@ -160,16 +154,14 @@ export function assignmentForTarget(state: StateSnapshot, target: Target): Assig
   });
 }
 
-export function positionForTarget(
-  state: StateSnapshot,
-  target: Target,
-): [number, number] | null {
+/** A thread or target as the projector names it: "Judge", "Player 2", a facility's name, else "#id". */
+export function targetName(state: StateSnapshot, target: Target): string {
   if ("household_id" in target) {
     const household = householdById(state, target.household_id);
-    return household ? [household.lon, household.lat] : null;
+    if (household?.judge) return "Judge";
+    return household?.label && !/^household/i.test(household.label) ? household.label : `#${target.household_id}`;
   }
-  const facility = facilityById(state, target.facility_id);
-  return facility ? [facility.lon, facility.lat] : null;
+  return facilityById(state, target.facility_id)?.name ?? target.facility_id;
 }
 
 export function closureFor(
@@ -177,9 +169,4 @@ export function closureFor(
   edgeId: number,
 ): Closure | undefined {
   return closures.find((closure) => closure.edge_id === edgeId);
-}
-
-export function isSameSelection(a: Selection | null, b: Selection | null): boolean {
-  if (a == null || b == null) return a === b;
-  return a.kind === b.kind && a.id === b.id;
 }

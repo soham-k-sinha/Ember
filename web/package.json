@@ -8,15 +8,16 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0 --port 43123",
     "check:closures": "node --experimental-strip-types scripts/check-closures.ts",
-    "check:crowd": "node --experimental-strip-types scripts/check-crowd.ts"
+    "check:crowd": "node --experimental-strip-types scripts/check-crowd.ts",
+    "check:ws": "node --experimental-strip-types scripts/check-ws.ts",
+    "test": "npm run check:ws && npm run check:closures && npm run check:crowd"
   },
   "dependencies": {
     "@deck.gl/core": "9.4.0",
+    "@deck.gl/extensions": "9.4.0",
     "@deck.gl/geo-layers": "9.4.0",
     "@deck.gl/layers": "9.4.0",
     "@deck.gl/maplibre": "9.4.0",
-    "@deck.gl/react": "9.4.0",
-    "deck.gl": "9.4.0",
     "maplibre-gl": "4.7.1",
     "pixi.js": "8.6.6",
     "qrcode-generator": "2.0.4",

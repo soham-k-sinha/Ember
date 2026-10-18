@@ -11,7 +11,8 @@ import type { Projector } from "./project";
 import type { FloodGeometry, ScenarioKeyframe } from "../types";
 
 const RAMP_S = 600; // seconds over which a new flood stage spreads in
-const DEPTH = [0x5d8aa6, 0x4c7c9b, 0x3f6e8e, 0x335f80, 0x2a5372]; // shallow → deep
+// floodwater is a light cyan, apart from the dark river it spills out of: shallow → deep
+const DEPTH = [0x7fdcef, 0x6ccde4, 0x5abcd8, 0x4aaaca, 0x3d98bb];
 
 type Layer = { t: number; polys: number[][][]; fill: Graphics; edge: Graphics };
 
@@ -66,7 +67,7 @@ export class FloodWater {
         for (const hole of holes) fill.poly(hole).cut();
         // wet band just outside the water, then a foam line on the edge
         edge.poly(outer).stroke({ width: 3.2, color: 0x1d2a30, alpha: 0.22 });
-        edge.poly(outer).stroke({ width: 0.9, color: 0xeaf6ff, alpha: 0.85 });
+        edge.poly(outer).stroke({ width: 1.6, color: 0xeafcff, alpha: 0.95 });
       }
       this.layers.push({ t: frames[i].t_s, polys, fill, edge });
       this.root.addChild(fill);

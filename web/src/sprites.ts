@@ -207,5 +207,3 @@ export function atlas(): Atlas {
   cached = { url: canvas.toDataURL("image/png"), mapping };
   return cached;
 }
-
-export const VEHICLE_KINDS = Object.keys(CARS);
