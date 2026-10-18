@@ -265,6 +265,7 @@ export function Sources(props: { synthetic: string[]; onClose: () => void }) {
           <li>household names and members are generated from ids</li>
           <li>drill players get a real town building in the forecast flood zone, chosen by us; their needs are what they text</li>
           <li>neighbours on foot, people gathering at doors and passers-by are illustrative (not simulated, not in any metric)</li>
+          <li>everyday street traffic and the traffic-light timing are illustrative; the signal locations are OpenStreetMap's, and the evacuation traffic the vans feel is the engine's staged-evacuation run</li>
           <li>vehicles, pickups, deadlines, facility states and overflow come from the engine's simulation of {scenario.scenario_id}</li>
         </ul>
       </article>

@@ -77,6 +77,7 @@ export class FloodWater {
   private maskSprite!: Sprite;
   private ripples!: TilingSprite;
   private key = "";
+  private on = false;
   private fallback: Array<{ t: number; fill: Graphics; edge: Graphics }> = [];
 
   constructor(private p: Projector, keyframes: ScenarioKeyframe[], data: Diorama | null) {
@@ -276,6 +277,7 @@ export class FloodWater {
     }
     const { level, env } = this.surface(t);
     const on = env != null && level > -Infinity;
+    this.on = on;
     this.sprite.visible = this.ripples.visible = on;
     if (!on) return;
     const key = `${Math.round(level / STEP_M)}|${this.env.indexOf(env)}`;
@@ -284,6 +286,16 @@ export class FloodWater {
       this.recompute(level, env);
     }
     this.ripples.tilePosition.set((now * 6) % 1e4, (now * 2.2) % 1e4);
+  }
+
+  /** Whether stage point (a, b) is under the flood right now (the river itself is not). */
+  wetAt(a: number, b: number): boolean {
+    if (!this.grid || !this.on) return false;
+    const { a0, b0 } = this.p.bounds;
+    const x = Math.floor((a - a0) / this.grid.cell);
+    const y = Math.floor((b - b0) / this.grid.cell);
+    if (x < 0 || y < 0 || x >= this.grid.w || y >= this.grid.h) return false;
+    return this.wet[y * this.grid.w + x] === 1;
   }
 
   /** Surface height now (m above the datum), for labels and debugging. */

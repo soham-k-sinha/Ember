@@ -11,6 +11,7 @@ import { agentWorld, buildAgents, setScene, waitLonLat, type AgentWorld } from "
 import { Crowd } from "./crowd";
 import { FloodWater } from "./water";
 import { TrafficCars } from "./traffic";
+import { AmbientTraffic } from "./ambient";
 import { Fleet } from "./fleet";
 import { TrafficSignals } from "./signals";
 import { StaticSnapshot } from "./snapshot";
@@ -88,6 +89,7 @@ type Ctx = {
   crowd: Crowd;
   crowdBudget: CrowdBudget;
   traffic: TrafficCars;
+  ambient: AmbientTraffic;
   fleet: Fleet;
   signals: TrafficSignals;
   camWas: { x: number; y: number; s: number };
@@ -155,6 +157,7 @@ export function IsoView(props: IsoProps) {
       const traffic = new TrafficCars(app.renderer, scene.objects, p, scene.depthFor);
       const fleet = new Fleet(app.renderer, scene.objects, p);
       const signals = new TrafficSignals(data, p, scene.objects, scene.depthFor, scene.lit);
+      const ambient = new AmbientTraffic(data, p, signals, (a, b) => flood.wetAt(a, b));
       const snapshot = new StaticSnapshot(app.renderer);
       const statics = [...scene.buildings.map((r) => r.holder), ...scene.cullables.map((c) => c.node)];
       world.addChildAt(snapshot.sprite, world.getChildIndex(scene.objects));
@@ -170,7 +173,7 @@ export function IsoView(props: IsoProps) {
       const cam = fitStage(app, scene.slab, el);
       const s = cam.s;
       const ctx: Ctx = {
-        app, data, p, scene, world, dyn, flood, floodTint: 0xffffff, closed, trails, decals, marks, top, crowd, crowdBudget: new CrowdBudget(), traffic, fleet, signals, camWas: { ...cam }, camStill: 0, userMoved: false, snapshot, statics, staticSet: new Set(statics), aw, awFor: propsRef.current.playback, lastT: propsRef.current.t, lastNow: performance.now() / 1000, vehicles: new Map(), lightKey: "", fitS: s, focusKey: 0, target: null, overlay, haze, hits, pills: new Map(), pillLayer,
+        app, data, p, scene, world, dyn, flood, floodTint: 0xffffff, closed, trails, decals, marks, top, crowd, crowdBudget: new CrowdBudget(), traffic, ambient, fleet, signals, camWas: { ...cam }, camStill: 0, userMoved: false, snapshot, statics, staticSet: new Set(statics), aw, awFor: propsRef.current.playback, lastT: propsRef.current.t, lastNow: performance.now() / 1000, vehicles: new Map(), lightKey: "", fitS: s, focusKey: 0, target: null, overlay, haze, hits, pills: new Map(), pillLayer,
         closedKey: "", cam, drag: { on: false, moved: false, x: 0, y: 0 },
       };
       ctxRef.current = ctx;
@@ -455,8 +458,11 @@ function frame(ctx: Ctx, props: IsoProps) {
   mark("drawPeople");
   {
     const view = { x0: -cam.x / cam.s, y0: -cam.y / cam.s, x1: (ctx.app.screen.width - cam.x) / cam.s, y1: (ctx.app.screen.height - cam.y) / cam.s };
-    // the background traffic is the same for every plan; the fixture ships it once, with EMBER's replay
-    ctx.traffic.update(props.playback?.traffic ?? fixturePlaybacks.ember.traffic, t, view, ctx.scene.light.tint);
+    // everyday cars (illustrative, wall clock) and the evacuation traffic: the same for every plan, so the
+    // fixture ships it once, with EMBER's replay
+    ctx.ambient.step(now - ctx.lastNow, now, t, view);
+    mark("ambient");
+    ctx.traffic.update(props.playback?.traffic ?? fixturePlaybacks.ember.traffic, t, view, ctx.scene.light.tint, ctx.ambient.cars, { now, camS: cam.s, lights: ctx.scene.light.lights });
     mark("traffic");
     ctx.signals.update(now, ctx.scene.light.lights, view, cam.s);
     mark("signals");

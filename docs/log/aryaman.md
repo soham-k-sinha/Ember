@@ -383,3 +383,9 @@ Run: cd web && npm run build && npm test; open /?perf (fps readout), /?live for 
 Interfaces: no contract change (stage.json gains elev and signals; web is its only consumer).
 Status: web tsc + build + npm test pass; engine 103; residents 290; e2e 75/75 (keyless backend). Steady state under 16.7 ms at every zoom measured at 1440×900 and 1920×1080 on an M3 Pro (hidden-pane timings are noisy; ?perf is the check on a visible screen).
 Next: verify fps with ?perf on the projector machine; vehicle sprites stop for nothing (the traffic run has no signals).
+
+## 2026-10-18 · Everyday traffic and readable traffic lights (D98)
+What: the roads were empty until the evacuation's first car (t = 2,800 s) and the signals were hidden below zoom 0.7 and tiny above it. Added `web/src/iso/ambient.ts`: illustrative everyday cars on the OSM road graph that follow each other, stop at the real signalised junctions' red and amber, turn back at the flood and thin out as the evacuation runs. Signals keep a minimum on-screen size, one per junction from afar, with a mast arm up close. Cars keep a minimum size and get brake lights and headlights. Sources panel line added; `FloodWater.wetAt`.
+Interfaces: no contract change.
+Status: web tsc + build + npm test (ws, closures, crowd, traffic) pass; `ambient.step` about 0.2 ms; checked in headless Chromium at district, mid and close zoom and late in the flood (no cars in water).
+Next: push/PR on approval.
