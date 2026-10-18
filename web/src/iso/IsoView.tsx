@@ -41,13 +41,16 @@ export type IsoProps = {
   onSelect: (selection: Selection | null) => void;
   onFollow: (selection: Selection | null) => void;
   /** camera presets (Treehouse, Judge's corner…): ease the stage camera to a place */
-  focus?: { lon: number; lat: number; zoom: number; key: number } | null;
+  focus?: { lon: number; lat: number; zoom: number; key: number; household?: number } | null;
+  /** a vehicle to ring and name, e.g. the one that just reached a player */
+  spotlight: string | null;
   onFallback: () => void;
 };
 
 const KIND: Record<string, { color: number; label: string }> = {
   van: { color: 0x2f6fe0, label: "Van" },
   accessible_van: { color: 0x8a4fe0, label: "Accessible van" },
+  ambulance: { color: 0xd62828, label: "Ambulance" },
   truck: { color: 0xe0782f, label: "Truck" },
   crew: { color: 0x22a06b, label: "Crew" },
   generator: { color: 0xe8b51e, label: "Generator" },
@@ -107,6 +110,8 @@ type Ctx = {
   lightKey: string;
   fitS: number;
   focusKey: number;
+  /** the world point and zoom the last focus asked for, kept until the user takes the camera */
+  focusAt: { x: number; y: number; s: number } | null;
   target: { x: number; y: number; s: number } | null;
   overlay: Graphics;
   haze: Sprite;
@@ -178,7 +183,7 @@ export function IsoView(props: IsoProps) {
       const cam = fitStage(app, scene.slab, el);
       const s = cam.s;
       const ctx: Ctx = {
-        app, data, p, scene, world, dyn, flood, floodTint: 0xffffff, closed, trails, decals, marks, top, crowd, crowdBudget: new CrowdBudget(), traffic, ambient, fleet, signals, camWas: { ...cam }, camStill: 0, userMoved: false, snapshot, statics, staticSet: new Set(statics), aw, awFor: propsRef.current.playback, lastT: propsRef.current.t, lastNow: performance.now() / 1000, vehicles: new Map(), lightKey: "", fitS: s, focusKey: 0, target: null, overlay, haze, hits, pills: new Map(), pillLayer,
+        app, data, p, scene, world, dyn, flood, floodTint: 0xffffff, closed, trails, decals, marks, top, crowd, crowdBudget: new CrowdBudget(), traffic, ambient, fleet, signals, camWas: { ...cam }, camStill: 0, userMoved: false, snapshot, statics, staticSet: new Set(statics), aw, awFor: propsRef.current.playback, lastT: propsRef.current.t, lastNow: performance.now() / 1000, vehicles: new Map(), lightKey: "", fitS: s, focusKey: 0, focusAt: null, target: null, overlay, haze, hits, pills: new Map(), pillLayer,
         closedKey: "", cam, drag: { on: false, moved: false, x: 0, y: 0 },
       };
       ctxRef.current = ctx;
@@ -197,6 +202,7 @@ export function IsoView(props: IsoProps) {
         if (Math.abs(dx) + Math.abs(dy) > 3) {
           ctx.drag.moved = true;
           ctx.target = null;
+          ctx.focusAt = null;
           ctx.userMoved = true;
           if (propsRef.current.follow) propsRef.current.onFollow(null);
         }
@@ -221,6 +227,7 @@ export function IsoView(props: IsoProps) {
         (event) => {
           event.preventDefault();
           ctx.target = null;
+          ctx.focusAt = null;
           ctx.userMoved = true;
           const rect = app.canvas.getBoundingClientRect();
           const mx = event.clientX - rect.left;
@@ -236,13 +243,16 @@ export function IsoView(props: IsoProps) {
       );
 
       app.ticker.add(() => frame(ctx, propsRef.current));
-      // refit when the map area changes size (window, panels), unless the user has taken the camera
+      // the map area changes size with the window and with the view's panel: resize the canvas, then refit, or
+      // keep a focused home in the middle, unless the user has taken the camera
       const refit = new ResizeObserver(() => {
-        if (ctx.userMoved) return;
         requestAnimationFrame(() => {
-          const fit = fitStage(app, scene.slab, el);
-          Object.assign(ctx.cam, fit);
-          ctx.fitS = fit.s;
+          app.resize();
+          if (!ctx.userMoved) {
+            const fit = fitStage(app, scene.slab, el);
+            Object.assign(ctx.cam, fit);
+            ctx.fitS = fit.s;
+          } else if (ctx.focusAt) ctx.target = aim(ctx, ctx.focusAt);
         });
       });
       refit.observe(el);
@@ -340,45 +350,65 @@ function snapshotBake(ctx: Ctx) {
   };
 }
 
-/** Camera that fits the whole stage into the part of the canvas the score card does not cover. */
+/** An overlay's box when it covers part of the stage (host box `h`), else null. */
+function overlay(h: DOMRect, sel: string): DOMRect | null {
+  const el = document.querySelector(sel);
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  const overlaps = r.width > 0 && r.right > h.left && r.left < h.right && r.bottom > h.top && r.top < h.bottom;
+  return overlaps ? r : null;
+}
+
+/** The camera that puts world point (x, y) at zoom s in the middle of the free part of the stage. */
+function aim(ctx: Ctx, at: { x: number; y: number; s: number }): { x: number; y: number; s: number } {
+  const [cx, cy] = freeMiddle(ctx);
+  return { s: at.s, x: cx - at.x * at.s, y: cy - at.y * at.s };
+}
+
+/** The middle of the stage the overlays leave free across: right of the score card, left of the drawer or ticker. */
+function freeMiddle(ctx: Ctx): [number, number] {
+  const host = ctx.app.canvas.parentElement;
+  const W = ctx.app.screen.width;
+  if (!host) return [W * 0.5, ctx.app.screen.height * 0.5];
+  const h = host.getBoundingClientRect();
+  const left = Math.max(0, (overlay(h, ".scorecard")?.right ?? h.left) - h.left);
+  const right = Math.min(W, ...[".drawer", ".ticker"].map((sel) => (overlay(h, sel)?.left ?? h.right) - h.left));
+  return [right - left > 200 ? (left + right) / 2 : W * 0.5, ctx.app.screen.height * 0.55];
+}
+
+/** Camera that fits the whole stage into the part of the canvas the score card and the right column do not cover. */
 function fitStage(app: Application, slab: Graphics, host: HTMLElement | null): { s: number; x: number; y: number } {
-  // fit the whole stage inside the part of the map the overlays leave free: right of the score card, below the
-  // latest-change strip, left of the join card where it overlaps
+  // fit the whole stage inside the part of the map the overlays leave free: right of the score card, left of
+  // the decisions ticker, and left of (or above) the join badge where it overlaps
   const b = slab.getLocalBounds();
   const W = app.screen.width;
   const H = app.screen.height;
   let left = 0;
-  let right = 0;
-  let top = 0;
+  let column = 0; // the ticker's column, top to bottom
+  let corner = 0; // the join badge's width from the right edge
   let bottom = 0;
   if (host) {
     const h = host.getBoundingClientRect();
-    const rect = (sel: string) => {
-      const el = document.querySelector(sel);
-      if (!el) return null;
-      const r = el.getBoundingClientRect();
-      const overlaps = r.width > 0 && r.right > h.left && r.left < h.right && r.bottom > h.top && r.top < h.bottom;
-      return overlaps ? r : null;
-    };
+    const rect = (sel: string) => overlay(h, sel);
     const card = rect(".scorecard");
     if (card) left = Math.max(0, card.right - h.left + 16);
-    const join = rect(".join");
+    const ticker = rect(".ticker");
+    if (ticker) column = Math.max(0, h.right - ticker.left + 12);
+    const join = rect(".join-badge");
     if (join) {
-      right = Math.max(0, h.right - join.left + 12);
+      corner = Math.max(0, h.right - join.left + 12);
       bottom = Math.max(0, h.bottom - join.top + 12);
     }
-    const strip = rect(".latest");
-    if (strip) top = Math.max(0, strip.bottom - h.top + 8);
   }
-  // the join card sits in a corner: lose either a column to its left or a band above it, whichever costs less
+  // the join badge sits in a corner: lose either a column to its left or a band above it, whichever costs less
   const fit = (x0: number, y0: number, x1: number, y1: number) => {
     const fw = Math.max(200, x1 - x0);
     const fh = Math.max(200, y1 - y0);
     const sc = Math.min(fw / (b.width * 1.03), fh / (b.height * 1.06));
     return { s: sc, x: x0 + fw / 2 - (b.x + b.width / 2) * sc, y: y0 + fh / 2 - (b.y + b.height / 2) * sc };
   };
-  const beside = fit(left, top, W - right, H);
-  const above = fit(left, top, W, H - bottom);
+  const beside = fit(left, 0, W - Math.max(column, corner), H);
+  const above = fit(left, 0, W - column, H - bottom);
   return beside.s >= above.s ? beside : above;
 }
 
@@ -427,12 +457,15 @@ function frame(ctx: Ctx, props: IsoProps) {
     if (props.focus.zoom <= 14.4) {
       // the district preset: the whole stage, fitted beside the overlays; the camera is the app's again
       ctx.target = fitStage(ctx.app, ctx.scene.slab, ctx.app.canvas.parentElement);
+      ctx.focusAt = null;
       ctx.userMoved = false;
     } else {
       ctx.userMoved = true;
       const s = Math.min(9, ctx.fitS * 2 ** (props.focus.zoom - 14.3));
-      const [x, y] = p.lonlat(props.focus.lon, props.focus.lat);
-      ctx.target = { s, x: ctx.app.screen.width * 0.5 - x * s, y: ctx.app.screen.height * 0.5 - y * s };
+      const home = props.state.households.find((item) => item.household_id === props.focus!.household);
+      const [x, y] = p.lonlat(...(home ? waitLonLat(ctx.aw, home) : [props.focus.lon, props.focus.lat] as const));
+      ctx.focusAt = { x, y, s };
+      ctx.target = aim(ctx, ctx.focusAt);
     }
   }
   if (ctx.target && !followAt) {
@@ -650,7 +683,7 @@ function drawPeople(ctx: Ctx, props: IsoProps, t: number, now: number) {
 }
 
 function drawVehicles(ctx: Ctx, props: IsoProps, now: number) {
-  const selected = props.selection?.kind === "resource" ? props.selection.id : props.follow?.kind === "resource" ? props.follow.id : null;
+  const selected = props.selection?.kind === "resource" ? props.selection.id : props.follow?.kind === "resource" ? props.follow.id : props.spotlight;
   ctx.fleet.update(props.state.resources, { now, selected, lights: lightAt(props.t).lights, tint: ctx.scene.light.tint, depthFor: ctx.scene.depthFor });
 }
 
@@ -853,7 +886,7 @@ function drawOverlay(ctx: Ctx, props: IsoProps, _now: number, pulse: number) {
   for (const r of props.state.resources) {
     if (!p.inside(r.lon, r.lat)) continue;
     const [x, y] = toScreen(ctx, ...p.lonlat(r.lon, r.lat, 8));
-    const picked = (props.selection?.kind === "resource" && props.selection.id === r.id) || (props.follow?.kind === "resource" && props.follow.id === r.id);
+    const picked = (props.selection?.kind === "resource" && props.selection.id === r.id) || (props.follow?.kind === "resource" && props.follow.id === r.id) || props.spotlight === r.id;
     // a vehicle's tag: always when selected; zoomed in, for vehicles on a job
     if (picked || (zoomed && r.status !== "available")) {
       const color = KIND[r.kind]?.color ?? 0x888888;

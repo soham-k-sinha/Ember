@@ -441,3 +441,10 @@ Files: residents/residents/{talk,voice,intake,fallback,speech,reply,briefing,mes
 Run: residents full suite, ruff; sim_calls re-run; 27 real model calls to tune the prompt (0.7–1.6 s, median 1.0 s).
 Interfaces: none (no contract change). New create_app(talker=) for tests.
 Next: live call check of the police / hurt-leg / dog questions; merge with the D112 (arrival pause) and D113 (web) branches.
+
+## 2026-10-18 · Ops dashboard: four views and arrival alerts (D113) · branch aryaman/ops-dashboard
+What: the web is four views (1 Live, 2 Photon · multiplayer, 3 Impact, 4 Daytona) with the stage always mounted; text cut to numbers, icons and short labels. Live keeps the stage, score card, a decisions ticker and a call-to-join badge. Photon draws phones → Photon → AI reads → planner → told with pulses, the join card and per-player cards (vehicle, ETA, on-call words, Show). Impact: three big numbers vs baseline, sewage to scale against Cottage Farm 2024, plan-version steps. Daytona: worlds, sandboxes, fan-out vs laptop, a lit cell per sandbox, verdict, scatter. Arrival alerts pause the clock and zoom on Show (WS `arrival`, /health.hold, /clock held_by, or the replay/status); ambulance art.
+Files: web/src/{App.tsx,arrivals.ts,live.ts,types.ts,styles.css,opening.ts (state 0.3),layers.ts,sprites.ts}, web/src/components/{Photon,Impact,Daytona,Icon,Hud,Panels,MapView}.tsx, web/src/iso/{IsoView,fleet}.ts, web/scripts/check-ws.ts.
+Run: web tsc + build + npm test (ws incl. arrival parse/detect, closures, crowd, traffic). Keyless backend on :8077 (players via /join + JOIN EMBER, Replay beats 2–3, real Daytona: 250 and 10,000 worlds on 90 sandboxes, 2.0–3.8 s); also against aryaman/arrival-pause: hold at 15:00, Resume, next hold at 16:00. Screens at 1920×1080 and 1512×945. Stage frame cost ~6 ms of JS at 1920×1080 (?perf showed 24 fps only because the built-in pane throttles frames).
+Interfaces: none changed; reads the D112 arrival event, /health.auto_hold/hold and /clock held_by.
+Next: check ?perf at full speed in real Chrome on the demo Mac; rehearse an arrival with a real call (hold clears when the call ends).

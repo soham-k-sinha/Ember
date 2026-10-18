@@ -1,12 +1,13 @@
-/** What floats over the stage: the score card, the latest change, toasts, the join card, and the sources drawer. */
+/** What floats over the stage and the workspace: the score card, the decisions ticker, arrival alerts, toasts, and the sources drawer. */
 
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import qrcode from "qrcode-generator";
+import { useCallback, useState } from "react";
 import { scenario } from "../fixtures";
-import { postJson } from "../live";
-import { formatNumber, keptBeforeTradeoff, maskHandle, phoneLabel, planDiff, planTiming, reporterJob, shortName, statusLabel, tradedFacility } from "../format";
-import { facilityById, peopleCount, resourceById, streetAt } from "../model";
-import type { Calls, Phone, PlanMetrics, PlanSnapshot, StateSnapshot } from "../types";
+import { formatNumber, formatSim, keptBeforeTradeoff, planTiming, shortName, tradedFacility } from "../format";
+import { facilityById, peopleCount, resourceById } from "../model";
+import type { Playback } from "../playback";
+import type { Arrival, PlanMetrics, PlanSnapshot, Selection, StateSnapshot } from "../types";
+import { feedItems, type FeedItem } from "./Panels";
+import { Icon } from "./Icon";
 
 const WAITING = new Set(["needs", "unknown", "assigned", "confirmed"]);
 
@@ -28,7 +29,7 @@ function Score(props: { label: string; value?: number; baseline?: number; unit?:
       </strong>
       {delta == null ? null : (
         <em className={delta === 0 ? "" : good ? "good" : "bad"}>
-          {delta === 0 ? "same as baseline" : `${delta > 0 ? "+" : "−"}${formatNumber(Math.abs(delta))} vs baseline`}
+          {delta === 0 ? "= baseline" : `${delta > 0 ? "+" : "−"}${formatNumber(Math.abs(delta))} vs baseline`}
         </em>
       )}
       {props.sub ? <i>{props.sub}</i> : null}
@@ -36,13 +37,7 @@ function Score(props: { label: string; value?: number; baseline?: number; unit?:
   );
 }
 
-export function ScoreCard(props: {
-  plan: PlanSnapshot | null;
-  projected?: PlanMetrics;
-  baseline?: PlanMetrics;
-  state: StateSnapshot;
-  onSources: () => void;
-}) {
+export function ScoreCard(props: { plan: PlanSnapshot | null; projected?: PlanMetrics; baseline?: PlanMetrics; state: StateSnapshot }) {
   const { plan, projected, baseline, state } = props;
   const minutes = (s?: number) => (s == null ? undefined : Math.round(s / 60));
   // the plan ranks people, then the hospital, then sewage: once it trades the overflow away it says so in
@@ -51,7 +46,7 @@ export function ScoreCard(props: {
   const kept = keptBeforeTradeoff(plan);
   const moved = traded ? plan?.assignments.find((item) => item.task === "protect" && item.status !== "cancelled") : undefined;
   const tradeOff = moved && "facility_id" in moved.target
-    ? `${shortName(resourceById(state, moved.resource_id)?.name ?? moved.resource_id)} moved to ${shortName(facilityById(state, moved.target.facility_id)?.name ?? moved.target.facility_id)}: people first; ${formatNumber(projected?.overflow_m3)} m³ accepted, stated`
+    ? `${shortName(resourceById(state, moved.resource_id)?.name ?? moved.resource_id)} → ${shortName(facilityById(state, moved.target.facility_id)?.name ?? moved.target.facility_id)} · ${formatNumber(projected?.overflow_m3)} m³ accepted`
     : undefined;
   return (
     <section className="scorecard" aria-label="Outcome of the current plan">
@@ -66,45 +61,76 @@ export function ScoreCard(props: {
         better="higher"
         sub={state.metrics.people_reached_before_deadline != null ? `${state.metrics.people_reached_before_deadline} so far` : undefined}
       />
-      <Score label="People still at home now" value={waitingPeople(state)} better="lower" />
+      <Score label="Still at home now" value={waitingPeople(state)} better="lower" />
       <Score label="Hospital outage" value={minutes(projected?.hospital_outage_s)} baseline={minutes(baseline?.hospital_outage_s)} unit="min" better="lower" />
       {kept != null ? (
-        <Score
-          label="Kept out of the Charles"
-          value={kept}
-          unit="m³"
-          better="higher"
-          sub={traded ? ["before the hospital call", tradeOff].filter(Boolean).join(" · ") : `sewage overflow ${formatNumber(projected?.overflow_m3)} m³ · baseline ${formatNumber(baseline?.overflow_m3)} m³`}
-        />
+        <Score label="Kept out of the Charles" value={kept} unit="m³" better="higher" sub={traded ? ["before the hospital call", tradeOff].filter(Boolean).join(" · ") : undefined} />
       ) : (
         <Score label="Sewage overflow" value={projected?.overflow_m3} baseline={baseline?.overflow_m3} unit="m³" better="lower" sub={tradeOff} />
       )}
-      <p>Projected to the end of the flood · baseline: incident by incident</p>
-      <button className="chip" onClick={props.onSources}>Real streets · synthetic households, flood timing &amp; fleet</button>
     </section>
   );
 }
 
-/** The newest change, pinned over the map: what came in, what the plan did, and how fast. */
-export function Latest(props: { plan?: PlanSnapshot; state: StateSnapshot }) {
-  const { plan, state } = props;
-  if (!plan) return null;
+const TICKER_ICON: Record<FeedItem["kind"], string> = { in: "phone", fact: "read", plan: "route", out: "send" };
+const TICKER_ROWS = 5;
+
+/** The newest decisions, one line each: heard → fact → plan change → who was told. A row zooms to who it is about. */
+export function Ticker(props: { state: StateSnapshot; plans: PlanSnapshot[]; playback: Playback | null; t: number; onSelect: (selection: Selection) => void }) {
+  const items = feedItems(props.state, props.plans, props.playback, props.t).slice(0, TICKER_ROWS);
   return (
-    <p className="latest" key={plan.version}>
-      {plan.version > 1 && reporterJob(plan, state) ? (
-        <>
-          <b>{planDiff(plan, state)}</b> <span>· {plan.trigger} · v{plan.version} {planTiming(plan)}</span>
-        </>
-      ) : plan.version > 1 ? (
-        <>
-          <b>{plan.trigger}</b> → {planDiff(plan, state) || "no assignment changed"} <span>· v{plan.version} {planTiming(plan)}</span>
-        </>
-      ) : (
-        <>
-          <b>Plan v1 from the forecast</b> <span>· every text from here on becomes a new plan</span>
-        </>
-      )}
-    </p>
+    <section className="ticker" aria-label="Decisions">
+      <h3>Decisions</h3>
+      {items.length === 0 ? <p className="hint">Waiting for the first call</p> : null}
+      <ol>
+        {items.map((item) => (
+          <li key={item.key} className={item.kind}>
+            <button
+              disabled={!item.target}
+              onClick={() => item.target && props.onSelect("household_id" in item.target ? { kind: "household", id: item.target.household_id } : { kind: "facility", id: item.target.facility_id })}
+            >
+              <Icon name={TICKER_ICON[item.kind]} />
+              <b>{item.kind === "plan" ? item.title.split(" ")[0] : item.title.replace(/^EMBER /, "")}</b>
+              <span>{item.kind === "in" ? `“${item.text}”` : item.text}</span>
+              <time>{formatSim(item.t_s)}</time>
+            </button>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+/** "Accessible Van 3 reached Player 2": Show zooms the stage onto them; the held one resumes the clock. */
+export function ArrivalAlerts(props: {
+  alerts: Arrival[];
+  hold: Arrival | null;
+  who: (arrival: Arrival) => string;
+  onShow: (arrival: Arrival) => void;
+  onDismiss: (arrival: Arrival) => void;
+  onResume: () => void;
+}) {
+  const held = props.hold;
+  const list = held && !props.alerts.some((item) => item.household_id === held.household_id) ? [held, ...props.alerts] : props.alerts;
+  if (list.length === 0) return null;
+  return (
+    <ol className="arrivals" aria-live="assertive">
+      {list.slice(0, 3).map((arrival) => {
+        const holding = held?.household_id === arrival.household_id;
+        return (
+          <li key={arrival.household_id} className={holding ? "held" : ""}>
+            <Icon name="van" size={26} />
+            <p>
+              <b>{shortName(arrival.resource_name)}</b> reached <b>{props.who(arrival)}</b>
+              <span>{formatSim(arrival.t_s)}{arrival.call ? " · calling…" : ""}{holding ? " · clock paused" : ""}</span>
+            </p>
+            <button className="primary" onClick={() => props.onShow(arrival)}>Show</button>
+            {holding ? <button className="ghost" onClick={props.onResume}>Resume ▶</button> : null}
+            <button className="close" aria-label="Dismiss" onClick={() => props.onDismiss(arrival)}>×</button>
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
@@ -131,128 +157,6 @@ export function Toasts(props: { toasts: Toast[] }) {
         </li>
       ))}
     </ol>
-  );
-}
-
-function QrCode(props: { text: string; label: string }) {
-  const { size, path } = useMemo(() => {
-    const qr = qrcode(0, "M");
-    qr.addData(props.text);
-    qr.make();
-    const n = qr.getModuleCount();
-    let d = "";
-    for (let row = 0; row < n; row++) for (let col = 0; col < n; col++) if (qr.isDark(row, col)) d += `M${col + 2} ${row + 2}h1v1h-1z`;
-    return { size: n + 4, path: d };
-  }, [props.text]);
-  return (
-    <svg className="qr" viewBox={`0 0 ${size} ${size}`} role="img" aria-label={props.label} shapeRendering="crispEdges">
-      <rect width={size} height={size} fill="#fff" />
-      <path d={path} fill="#0b0e14" />
-    </svg>
-  );
-}
-
-type Joined = { handle: string; player: number; assigned_number: string };
-
-/** Multiplayer: call the EMBER number and join by voice, any phone (D100); or, by iMessage (D89), enter a number here
- * first (POST /join), then text JOIN EMBER to the line it returns; that first text places them. */
-export function JoinCard(props: { apiBase: string | null; phones: Phone[]; calls: Calls; state: StateSnapshot; max: number; voiceNumber: string | null; reader: string | null }) {
-  const [open, setOpen] = useState(true);
-  const [handle, setHandle] = useState("");
-  const [joined, setJoined] = useState<Joined | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const players = props.phones.filter((phone) => phone.player != null).sort((a, b) => a.player! - b.player!);
-  const onCall = new Map(props.calls.live.map((call) => [call.handle, call]));
-  const reset = () => {
-    setJoined(null);
-    setHandle("");
-  };
-  // their first text placed them: say where they live for 5 s, then the card is ready for the next phone
-  const placed = joined ? props.phones.find((phone) => phone.handle === joined.handle)?.household_id ?? null : null;
-  const home = props.state.households.find((item) => item.household_id === placed);
-  const street = home ? streetAt(home.node) : undefined;
-  useEffect(() => {
-    if (placed == null) return;
-    const timer = window.setTimeout(reset, 5000);
-    return () => window.clearTimeout(timer);
-  }, [placed]);
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!props.apiBase || !handle.trim()) return;
-    setBusy(true);
-    setError(null);
-    try {
-      setJoined((await postJson(`${props.apiBase}/join`, { handle: handle.trim() }, 15000)) as Joined);
-    } catch (err) {
-      const text = err instanceof Error ? err.message : "Join failed";
-      setError(text.startsWith("409") && text.includes("full") ? "The simulation is full." : text.startsWith("422") ? "Enter a mobile number, e.g. +1 617 555 0123." : text);
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <section className={open ? "join open" : "join"}>
-      <button className="join-head" onClick={() => setOpen(!open)} aria-expanded={open}>
-        <strong>Join the flood</strong>
-        <span>{players.length}/{props.max}</span>
-      </button>
-      {open ? (
-        <div className="join-body">
-          {joined && placed != null ? (
-            <p className="join-done">
-              Player {joined.player} joined: you're household #{placed}{street ? ` on ${street}` : ""}.
-            </p>
-          ) : joined ? (
-            <div className="join-qr">
-              <QrCode text={`sms:${joined.assigned_number}?&body=JOIN%20EMBER`} label="QR code: text JOIN EMBER to the EMBER line" />
-              <p>
-                Player {joined.player}: from your iPhone (iMessage), text <b>JOIN EMBER</b> to {joined.assigned_number} and EMBER calls you. You get a real home in the flood zone, and the plan has to save you.
-                <button className="join-again" onClick={reset}>Another phone</button>
-              </p>
-            </div>
-          ) : props.apiBase ? (
-            <>
-            {props.voiceNumber ? (
-              <div className="join-qr">
-                <QrCode text={`tel:${props.voiceNumber}`} label={`QR code: call ${phoneLabel(props.voiceNumber)}`} />
-                <p>Call <b>{phoneLabel(props.voiceNumber)}</b> from any phone. EMBER answers, gives you a real home in the flood zone, and the plan has to save you.</p>
-              </div>
-            ) : null}
-            <form className="join-form" onSubmit={submit}>
-              <input type="tel" inputMode="tel" autoComplete="tel" placeholder="Your mobile, e.g. +1 617 555 0123" value={handle} onChange={(event) => setHandle(event.target.value)} aria-label="Your mobile number" />
-              <button type="submit" disabled={busy || !handle.trim()}>{busy ? "…" : "Join"}</button>
-              <p className="join-note">{props.voiceNumber ? "Or by iMessage: your number, then text JOIN EMBER" : "iPhone (iMessage) only"}</p>
-              {error ? <p className="join-error">{error}</p> : null}
-            </form>
-            </>
-          ) : (
-            <p className="muted">Switch to Live to join from your phone.</p>
-          )}
-          {players.length > 0 ? (
-            <ol className="roster">
-              {players.map((phone) => {
-                const household = props.state.households.find((item) => item.household_id === phone.household_id);
-                const call = onCall.get(phone.handle);
-                return (
-                  <li key={phone.handle}>
-                    <b>Player {phone.player}</b>
-                    <span>{maskHandle(phone.handle)}</span>
-                    {household ? <span className={`pill ${household.status}`}>{statusLabel(household.status)}</span> : <span className="muted">waiting for text</span>}
-                    {call ? <span className="pill call">on call</span> : null}
-                    {call?.heard ? <q className="heard">{call.heard}</q> : null}
-                    {call?.said ? <q className="said">EMBER: {call.said}</q> : null}
-                  </li>
-                );
-              })}
-            </ol>
-          ) : null}
-          {props.reader ? (
-            <p className="powered">Calls &amp; texts: Photon · voice: ElevenLabs · words read by {props.reader} · stress test: Daytona</p>
-          ) : null}
-        </div>
-      ) : null}
-    </section>
   );
 }
 
