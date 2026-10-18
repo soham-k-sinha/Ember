@@ -27,6 +27,7 @@ def kinds(t, role="resident"):
     ("no thanks", [("reject", None, None, None, None, None)]),
     ("We're on the second floor, we'll be okay.", [("question", None, None, None, "safety", None)]),  # not a decline
     ("done", [("done", None, None, None, None, None)]),
+    ("We're outside.", [("done", None, None, None, None, None)]),                   # "Tell me when you're outside."
     ("I'm not ready", []),
     ("2 of us", [("need", 2, None, None, None, None)]),
     ("three people", [("need", 3, None, None, None, None)]),

@@ -820,8 +820,8 @@ def test_an_undelivered_text_becomes_a_call(lobby):
     [body] = seen
     assert body["to_number"] == h
     first = body["conversation_initiation_client_data"]["conversation_config_override"]["agent"]["first_message"]
-    assert first == "Hi, it's EMBER from the flood drill, calling because our text to you didn't go through. " \
-                    "Is anyone with you on oxygen?", first
+    assert first == "Hi, this is EMBER, an automated assistant for the flood drill, calling because our text to you didn't go " \
+                    "through. Is anyone with you on oxygen?", first
     assert c.get("/calls").json()["live"][0]["reason"] == "undelivered"
     c.portal.call(v.hang_up, h)                                             # nobody answered
     c.post("/ask", json={"role": "resident", "household_id": hid, "question": "Are you still at home?"})

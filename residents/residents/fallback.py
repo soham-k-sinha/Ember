@@ -21,7 +21,7 @@ YES = re.compile(r"^((oh|um+|uh+|well) )*(yes|yeah|yep|yup|sure|ok|okay|confirm(
 ACK = re.compile(r"^((oh|um+|uh+|well) )*(ok|okay)\b")  # "okay, what changed?": a nod, then the question
 NO = re.compile(r"^(no|nope|nah|cancel|decline|don'?t|do not)\b")
 STAY = re.compile(r"\b(stay(ing)? (put|here|home)|(we|i)'?re staying|(we|i)'?ll be (ok|okay|fine|alright))\b")
-DONE = re.compile(r"\b(done|ready|we'?re here|i'?m here|we are here|i am here|at the corner|on the (van|truck|bus)|"
+DONE = re.compile(r"\b(done|ready|(we'?re|i'?m|we are|i am) (here|outside)|at the corner|on the (van|truck|bus)|"
                   r"aboard|on board|arrived|checked in|it'?s connected|connected)\b")
 COUNT = re.compile(r"\b" + _N + r"\s+(of us|people|persons|adults|in total|total)\b")
 ALONE = re.compile(r"\b(just me|only me|myself|i'?m alone|i am alone|just one)\b")

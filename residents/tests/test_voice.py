@@ -63,25 +63,29 @@ def spoken(r) -> str:
 # ---------- speech ----------
 @pytest.mark.parametrize("text,want", [
     ("[EMBER drill] Van 2 will pick you up in about 12 min. Reply YES to confirm, or tell us what changed. (plan v3)",
-     "Van 2 will pick you up in about 12 minutes. Say yes to confirm."),
+     "Van 2 will pick you up in about 12 minutes. Can you be ready?"),
     ("Walk to the corner of Putnam Ave and N Harvard St, about 120 m north of you (about 1 min on foot). Reply DONE when you're there.",
-     "Walk to the corner of Putnam Avenue and North Harvard Street, about 120 meters north of you (about 1 minute on foot). Say done when you're there."),
+     "Walk to the corner of Putnam Avenue and North Harvard Street, about 120 meters north of you (about 1 minute on foot). Tell me when you're outside."),
     ("Welcome to the EMBER flood drill. Where are you right now? Reply with your street address (e.g. 125 Western Ave) "
      "or the nearest intersection.", "Where are you right now? Tell me your street address or the nearest intersection."),
     ("Van 2 will pick you up at the corner of Memorial Drive and River St in about 64 min and take you to the Treehouse. "
      "Plan to be out within about 110 min, before the water reaches your street. It picks up 8 other households first; "
      "you share the trip with 1 other household: it collects you both before the drop-off. Reply YES to confirm. (plan v4)",
-     "Van 2 will pick you up at the corner of Memorial Drive and River Street in about 64 minutes. Say yes to confirm."),
+     "Van 2 will pick you up at the corner of Memorial Drive and River Street in about 64 minutes. Can you be ready?"),
     # lists, step labels and an ETA said twice: the follow-up text has them
     ("Confirmed: Van 2 is coming to you. Step 1 of 4: Pack medications, ID, your phone and charger, then go out to "
      "Flagg Street. Van 2 gets there in about 9 min. Reply DONE when you're there.",
-     "Confirmed. Go out to Flagg Street. Van 2 gets there in about 9 minutes. Say done when you're there."),
+     "Confirmed. Go out to Flagg Street. Van 2 gets there in about 9 minutes. Tell me when you're outside."),
     ("Your pickup is confirmed: Van 2 is arriving in about 9 min. Right now: Step 1 of 4: Walk to Flagg Street. "
      "Van 2 gets there in about 9 min. Reply DONE when you're there.",
-     "Your pickup is confirmed: Van 2 is arriving in about 9 minutes. Right now: Walk to Flagg Street. Say done when you're there."),
+     "Your pickup is confirmed: Van 2 is arriving in about 9 minutes. Right now: Walk to Flagg Street. Tell me when you're outside."),
     ("Understood, we won't send Van 1. Reply here if you change your mind. Van 2 will pick you up in about 5 min. "
-     "Reply YES to confirm.", "Understood, we won't send Van 1. Van 2 will pick you up in about 5 minutes. Say yes to confirm."),
+     "Reply YES to confirm.", "Understood, we won't send Van 1. Van 2 will pick you up in about 5 minutes. Can you be ready?"),
     ("Reply YES to keep it, or NO to decline anyway.", "Say yes to keep it, or no to decline anyway."),
+    ("Utility truck is outside now. Reply DONE once everyone is aboard. Understood, we won't send Utility truck.",
+     "The utility truck is outside now. Tell me once everyone is aboard. Understood, we won't send the utility truck."),
+    ("Generator 1 is on its way to you, arriving in about 8 min. Reply YES to confirm someone will meet it.",
+     "Generator 1 is on its way to you, arriving in about 8 minutes. Can someone meet it?"),
     ("Accessible Van 3 is the only wheelchair-accessible vehicle that fits 1 person; it picks up 2 other households first.",
      "Accessible Van 3 is the only wheelchair-accessible vehicle that fits 1 person."),
     ("Bring ID (and prescriptions), e.g. a charger.", "Bring ID (and prescriptions), for example, a charger."),
@@ -137,7 +141,7 @@ def test_a_call_says_what_the_thread_would_text(settings, solo_bridge, tmp_path)
         assert any(m["direction"] == "in" and m["text"] == "2 of us" for m in rows)  # the call is in the thread
     assert [w.replace(f" {PROMISE}", "") for w in by_call] == by_text, list(zip(FLOW, by_text, by_call))
     assert by_call[0].startswith("Got it: we have you at Putnam Avenue and Western Avenue.")
-    assert "Say yes to confirm" in by_call[1] and by_call[3].startswith("Confirmed. ") and by_call[3].endswith(PROMISE)
+    assert "Can you be ready?" in by_call[1] and by_call[3].startswith("Confirmed. ") and by_call[3].endswith(PROMISE)
 
 
 def test_after_the_call_it_texts_again(vd):
@@ -208,7 +212,7 @@ def test_call_opens_with_the_situation(vd):
     assert live == {"handle": R1, "household_id": thread_of(c, R1)["household_id"], "reason": "console",
                     "started_t_s": 0.0, "turns": 0}
     # their answer on the call → the offer, said on the call
-    assert "Say yes to confirm" in spoken(say(c, "2 of us", caller=OURS, called=R1))
+    assert "Can you be ready?" in spoken(say(c, "2 of us", caller=OURS, called=R1))
 
 
 def test_call_without_override_says_the_opening_on_the_first_turn(vd):
@@ -305,7 +309,7 @@ def test_calls_a_wheelchair_user_who_hasnt_said_yes(vd, monkeypatch):
     at(c, 2)
     [(to, first)] = dials(c)
     assert to == R1 and first.startswith(f"{OPENER}, calling about your wheelchair-accessible pickup. Accessible Van"), first
-    assert first.endswith("Say yes to confirm.")
+    assert first.endswith("Can you be ready?")
     assert spoken(say(c, "yes", caller=OURS, called=R1, conv="conv_9")).endswith(PROMISE)
     at(c, 4)
     assert len(dials(c)) == 1  # the call is still on
@@ -352,7 +356,7 @@ def test_calls_when_the_pickup_changed_and_they_havent_written_since(vd):
                                  "payload": {"people": 2, "mobility": True, "accessible_vehicle": True}})
     assert r.status_code == 200 and r.json()["replanned"]
     [(to, first)] = dials(c)
-    assert first.startswith(f"{OPENER}, calling because your pickup has changed. Accessible Van"), first
+    assert first.startswith(f"{OPENER}, calling with a new pickup for you, because your household's needs changed. Accessible Van"), first
     assert c.get("/calls").json()["live"][0]["reason"] == "pickup_changed"
 
 
@@ -415,3 +419,4 @@ def test_a_frightened_caller_hears_a_calm_word_first(vd):
     text(vd, R1, PUTNAM)
     vd.app.state.intake.llm = None  # the keyword parser
     assert spoken(say(vd, "Oh my god, is the water coming? What do I do?")).startswith(f"{CALM} In this drill's flood forecast")
+    assert CALM not in spoken(say(vd, "Two of us, please hurry"))       # once a call

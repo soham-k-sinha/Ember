@@ -62,7 +62,7 @@ PEOPLE = [
 FLOODED = "Callender St"  # a neighbour reports it flooded at 0:05: Sam's van has to go around
 HEADER = """# EMBER on the phone: simulated calls
 
-Written by `residents/scripts/sim_calls.py` (D80, D85): the real planner on the Allston drill (40 scenario households
+Written by `residents/scripts/sim_calls.py` (D80, D85, D92): the real planner on the Allston drill (40 scenario households
 plus six people who text in), the clock moved 5 min at a time; EMBER decides whom to call and why. Each turn goes through
 ElevenLabs' endpoint and says what the thread would text, shortened for speech (lists and steps follow by text).
 **Synthetic:** the people, their words, the flood timing, the fleet. No model: the keyword parser reads every reply.
