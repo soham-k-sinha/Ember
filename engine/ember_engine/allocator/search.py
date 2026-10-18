@@ -5,7 +5,7 @@
 
 1. Candidates from priority rules (deadline-first, least-slack, largest-household, mobility-first,
    nearest-first) × reserve held/released × generator policy (dependency-first, critical-first, none)
-   × keeping the accessible van for mobility needs. On a replan: work already under way is kept
+   × keeping the accessible van for mobility needs; a medical need rides the ambulance when it is on time (D114). On a replan: work already under way is kept
    (cancelled only if new facts make it infeasible) and variants that move a generator are added.
 2. Each candidate is simulated; the lexicographically best is improved by a seeded local search
    (relocate / swap / reorder / insert / drop pickups), every move scored by the simulator.
@@ -21,16 +21,18 @@ from dataclasses import dataclass, replace
 
 from ..models.facilities import compatible
 from ..sim.plan_sim import cut_at, simulate
-from .context import VEHICLES, Context
+from .context import AMBULANCE, VEHICLES, Context
 
 PROTECT_TYPES = ("pumping_station", "hospital", "clinic")
 
 
-def objective(m: dict, churn: int = 0) -> tuple:
+def objective(m: dict, churn: int = 0, off_ambulance: int = 0) -> tuple:
     """Lexicographic: people unreached ↓, hospital outage ↓, overflow ↓, people reached ↑,
-    changed assignments vs the previous plan ↓ (every change is a message to a person), fuel+km ↓, reserve kept ↑."""
+    changed assignments vs the previous plan ↓ (every change is a message to a person),
+    medical needs not on an ambulance that could carry them ↓ (D114), fuel+km ↓, reserve kept ↑."""
     return (m["people_unreached"], round(m["hospital_outage_s"]), round(m["overflow_m3"], 1),
-            -m["people_reached_before_deadline"], churn, round(m["fuel_l"] + m["vehicle_km"], 1), -m["reserve_remaining"])
+            -m["people_reached_before_deadline"], churn, off_ambulance, round(m["fuel_l"] + m["vehicle_km"], 1),
+            -m["reserve_remaining"])
 
 
 @dataclass(frozen=True)
@@ -205,18 +207,21 @@ def construct(ctx: Context, carry: Carry, pol: Policy) -> tuple[dict, list, dict
             queues[s.rid].append(hid)
             s.free_at, s.node = ctx.rescue_cycle(s, hid)[1], ctx.after_rescue(hid)
             continue
+        d = ctx.deadline.get(hid)
         best = None
         for s in slots.values():
             if not s.available or s.rid in held or not ctx.eligible(s.spec, hid):
                 continue
             arrive, free = ctx.rescue_cycle(s, hid)
-            score = arrive + (600.0 if pol.keep_accessible and s.spec.get("accessible") and not mob else 0.0)
+            amb = s.spec["kind"] == AMBULANCE
+            # a medical need takes an ambulance that is on time over anything else (D114)
+            score = (bool(need.get("medical")) and not (amb and (d is None or arrive <= d)),
+                     arrive + (600.0 if pol.keep_accessible and s.spec.get("accessible") and not mob and not amb else 0.0))
             if arrive != float("inf") and (best is None or score < best[0]):
                 best = (score, s, arrive, free)
         if best is None:
             continue
         _, s, arrive, free = best
-        d = ctx.deadline.get(hid)
         if pol.feasible_only and d is not None and arrive > d:
             continue
         queues[s.rid].append(hid)
@@ -318,7 +323,7 @@ def search(world, scn: dict, reports=(), t_now: float = 0.0, prev: dict | None =
 
     def score(plan_assign, q):
         r = simulate(world, scn, {"assignments": plan_assign}, reports=reports, record=False)
-        return objective(r.metrics, churn(q)), r
+        return objective(r.metrics, churn(q), ctx.off_ambulance(q)), r
 
     cands = []
     seen = set()

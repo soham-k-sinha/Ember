@@ -24,7 +24,7 @@ from ..models.resources import Mover
 from ..models.wastewater import Wastewater
 from ..scenario import deadlines, flood_keyframes
 
-VEHICLES = {"van", "accessible_van", "truck"}
+VEHICLES = {"van", "accessible_van", "ambulance", "truck"}
 UNLOAD_S = 120.0
 ABANDON_S = 900.0   # no open route to the target for this long → give up and take the next assignment
 POOL_DETOUR_S = 180.0   # after a pickup, a vehicle with seats collects its next household first if it is this close

@@ -1,5 +1,5 @@
 {
- "version": "0.2",
+ "version": "0.4",
  "scenario_id": "allston_flood_v1",
  "name": "Charles River flood, Allston-Riverside reach (drill)",
  "description": "A 3-hour Charles River flood in the reach between the Anderson and River St bridges, next to the David Rubenstein Treehouse. Real roads, facilities and household ids; flood extents, timing, fleet and needs are synthetic (assumptions.md); real facts in sources.md.",
@@ -8,7 +8,7 @@
   "Cottage Farm wastewater numbers except storage_max_m3",
   "substation trip time and all facility dependencies",
   "backup endurance, power and connector values",
-  "fleet: vans, truck, crew, generators, fuel",
+  "fleet: vans, ambulance, truck, crew, generators, fuel",
   "which households are assisted, their needs and the judge",
   "EMS Station 14 as response base; the Treehouse as shelter"
  ],
@@ -537,6 +537,17 @@
    "accessible": true,
    "fuel_l": 60,
    "fuel_l_per_km": 0.18,
+   "service_s": 600
+  },
+  {
+   "id": "amb-1",
+   "kind": "ambulance",
+   "name": "Ambulance 1",
+   "at_facility": "ems14",
+   "capacity_people": 2,
+   "accessible": true,
+   "fuel_l": 80,
+   "fuel_l_per_km": 0.2,
    "service_s": 600
   },
   {

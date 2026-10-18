@@ -23,7 +23,7 @@ from starlette.concurrency import run_in_threadpool
 from .db import Store, thread_key
 from .threads import phone_for_thread
 
-VEHICLES = ("van", "accessible_van", "truck")
+VEHICLES = ("van", "accessible_van", "ambulance", "truck")
 NEAR_M = 300.0          # "near you": other households of this run within this distance
 WALK_MPS = 1.2          # an adult walking with a bag
 WALK_DETOUR = 1.3       # street distance ≈ straight line × 1.3
@@ -124,12 +124,14 @@ class Briefing:
         return min(own, key=lambda a: a["eta_s"]) if own else None
 
     def fits(self, thread: dict) -> list[dict]:
-        """Every vehicle in the fleet that could carry this household (capacity + wheelchair access)."""
+        """Every vehicle in the fleet that could carry this household (capacity + wheelchair access; the ambulance only
+        for a medical need, as the engine's allocator, D114)."""
         n = self.needs(thread)
         people = n.get("people") or 1
         chair = bool(n.get("mobility") or n.get("accessible_vehicle"))
         return [r for r in self._resources().values() if r["kind"] in VEHICLES
-                and (r.get("capacity_people") or 0) >= people and (r.get("accessible") or not chair)]
+                and (r.get("capacity_people") or 0) >= people and (r.get("accessible") or not chair)
+                and (r["kind"] != "ambulance" or bool(n.get("medical")))]
 
     def alternatives(self, thread: dict, without: str) -> list[dict]:
         """Vehicles that fit, other than `without` and the ones they already declined."""
