@@ -19,7 +19,7 @@ How one call works:
   yes / no in them doesn't count twice). Nothing moves a step on but the plan's clock, so a re-sent "done" can't skip one.
 
 When EMBER calls (D100, replacing D80's "no reply" calls; never a call just to get a yes):
-- first contact: a player who joins is called with the simulation notice, where they live and when the water comes,
+- first contact: a player who joins is called with the one-line notice, where they live and when the water comes,
   then the one combined question (how many people; anyone needing a wheelchair or medical help);
 - the pickup instruction, a pickup that changed, and "the vehicle is 2 minutes away, come to the door now".
 Each of those `ring`s the phone: the call is queued and what the thread says meanwhile waits in its outbox. `check`
@@ -27,7 +27,9 @@ Each of those `ring`s the phone: the call is queued and what the thread says mea
 once. Not answered: one retry after RETRY_S, then the same news by text (time-critical news by text at once). Answered:
 one short text follows with the instruction in writing. Anyone can call the voice number: an unknown caller becomes the
 next player (D89's placement, same MAX_PLAYERS cap) with no texting needed. A phone's first call opens with the one
-simulation notice; later calls just say who's calling (D100: no "drill" talk, nothing official).
+notice; later calls just say who's calling (D100: no "drill" talk, nothing official). After the notice everything is in the
+flood (D111): a question, a worry or a hurt caller gets a two-sentence answer from what EMBER knows (talk.py), never
+"I can't"; the one line that steps outside it is REAL_911, said alone when a caller says this is a real emergency.
 """
 
 from __future__ import annotations
@@ -47,16 +49,17 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from .briefing import ASK_NEEDS
 from .db import PhoneConflict
-from .fallback import NUM
+from .fallback import NUM, answers
 from .messaging import DrillFull
 from .photon import PhotonError
 from .speech import render, render_all
+from .talk import REAL, REAL_911
 from .threads import normalize_handle, phone_thread, unplaced
 
 log = logging.getLogger("residents.voice")
 
 ELEVENLABS = "https://api.elevenlabs.io"
-DISCLOSURE = "This is EMBER, an automated assistant in a live flood simulation."  # a phone's first call only (D100)
+DISCLOSURE = "Hi, this is EMBER, an automated flood-response assistant for this live demo."  # first call only (D100, D111)
 HI = "Hi, it's EMBER."                                                             # every call after that
 INBOUND = f"{DISCLOSURE} How can I help?"   # the agent's first message when someone calls us
 UNDELIVERED = "Our text to you didn't go through, so I'm calling with it."
@@ -74,15 +77,11 @@ ACK = re.compile(r"\b(ok(ay)?|sounds good|got it|alright|all right|perfect|great
                  r"thank you|yes|yeah|sure|done|coming|on (my|our) way)\b", re.I)
 BYE = "I'll text you all of this now. Take care."
 STILL_THERE = "Are you still there?"
-# asking us to send help that a simulation can't send: say so first, every time
-EMERGENCY = re.compile(r"\b(police|cops?|911|ambulance|paramedics?|fire ?(fighters?|department|truck)|"
-                       r"send (someone|somebody|help)|real emergency)\b", re.I)
-NOT_REAL = "This is a simulation, so I can't send anyone. If anyone is in real danger, hang up and call 911."
 FOLLOW_UP = "From our call:"
 MISSED = "We just tried to call you."
 WHERE = "Where are you right now? Tell me your street address or the nearest intersection."
-CLOSED = "This line is for people taking part in the EMBER flood simulation. Goodbye."
-FULL_CALL = "Thanks for calling. The flood simulation is full right now; you can watch it on the big screen. Goodbye."
+CLOSED = "This line is for people taking part in the EMBER live demo. Goodbye."
+FULL_CALL = "Thanks for calling. The EMBER live demo is full right now; you can watch it on the big screen. Goodbye."
 BUSY = "Sorry, I couldn't add you just now. Please call again in a minute."
 FILLER = "One moment... "        # ElevenLabs' advice for slow turns: an ellipsis + space, said while we work
 FILLER_AFTER_S = 1.2
@@ -98,7 +97,6 @@ VOICEMAIL = re.compile(r"\b(?:voice ?mail(?:box)? (?:that )?(?:has not|hasn['’
                        r"(?:at|after) (?:the |a )?(?:beep|tone).{0,45}(?:leave|record) (?:a |your )?message|"
                        r"when you have finished recording.{0,35}hang up|"
                        r"your call has been forwarded to.{0,30}voice ?mail)\b", re.I)
-WHO_WE_ARE = f"{DISCLOSURE} It's not a real emergency."
 # someone frightened gets a calm word before the plan (once a call)
 PANIC = re.compile(r"\b(oh my god|omg|scared|terrified|panick?ing|hurry|help me|what do i do)\b", re.I)
 CALM = "I'm here with you."
@@ -346,14 +344,17 @@ class Voice:
             await self.locator.join_now(self.store.phone(handle=handle))  # where, when, then the plan's question
             log.info("caller %s joined by voice", handle)
             joined = True
-            if GREETING.match(text) or ("join" in text.lower() and not _answers(text)):
+            if GREETING.match(text) or ("join" in text.lower() and not answers(text)):
                 text = ""  # a greeting/join request is answered by the introduction; keep any supplied needs
         sim = _similar(text, s.last_said) if text and s.last_said else 0.0
-        if sim >= ECHO_EXACT or (sim >= ECHO_SIMILAR and not _answers(text)):
+        if sim >= ECHO_EXACT or (sim >= ECHO_SIMILAR and not answers(text)):
             log.info("call %s: ignored our own echo %r", handle, text[:60])
             return None  # say nothing
-        greeted = bool(s.outbox) and s.outbox[0].startswith((DISCLOSURE, HI))  # an opening ElevenLabs didn't say
-        intro = (WHO_WE_ARE if SCREENING.search(text) and s.screened < 2 else HI if s.turns == 1 and not greeted
+        if REAL.search(text):  # the one line that ever steps outside the flood, alone; what's queued waits (D111)
+            s.last, s.last_said = time.monotonic(), render(REAL_911)
+            return [REAL_911]
+        greeted =bool(s.outbox) and s.outbox[0].startswith((DISCLOSURE, HI))  # an opening ElevenLabs didn't say
+        intro = (DISCLOSURE if SCREENING.search(text) and s.screened < 2 else HI if s.turns == 1 and not greeted
                  and s.reason != "inbound" and (GREETING.match(text) or AGAIN.match(text)) else None)
         if intro:  # who we are, then the one thing we need from them
             s.screened += 1
@@ -371,9 +372,6 @@ class Voice:
                 if phone and phone.get("assigned_number"):
                     goodbye += f" For a written copy, send JOIN EMBER by iMessage to {phone['assigned_number']}."
             s.outbox.append(("You're welcome. " if "thank" in text.lower() else "Great. ") + goodbye)
-        elif text and EMERGENCY.search(text) and not _answers(text):
-            await self.say_situation(handle, brief=True)
-            s.outbox.insert(0, NOT_REAL)
         elif text:
             if revision:
                 self.messenger.revising.add(handle)
@@ -381,8 +379,6 @@ class Voice:
                 await self.messenger.phone_inbound(handle, text)
             finally:
                 self.messenger.revising.discard(handle)
-            if EMERGENCY.search(text) and not any("911" in t for t in s.outbox):
-                s.outbox.insert(0, NOT_REAL)
             if ACK.search(text) and len(_words(text)) <= 6 and "?" not in text and self._settled(handle):
                 s.outbox.append(BYE)
                 s.closing = True
@@ -411,6 +407,15 @@ class Voice:
         if s is not None and s.arrived <= arrived:
             s.outbox[:0] = texts
 
+    def restate(self, handle: str, texts: list[str], instead: str) -> None:
+        """A turn's computed messages, said as one reply instead (talk.py, D111), where the first of them was."""
+        s = self.live(handle)
+        if s is None:
+            return
+        at = next((i for i, t in enumerate(s.outbox) if t in texts), len(s.outbox))
+        s.outbox = [t for t in s.outbox if t not in texts]
+        s.outbox.insert(at, instead)
+
     async def say_situation(self, handle: str, lead: str = "", brief: bool = False) -> None:
         """What the thread would say right now: said on the call while one is live (captured), else texted."""
         phone = self.store.phone(handle=handle)
@@ -425,7 +430,7 @@ class Voice:
 
     # ---------- outbound calls ----------
     def hello(self, handle: str, reason: str) -> str:
-        """Who is calling: the simulation notice on a phone's first call (D100), "Hi, it's EMBER." after that. First
+        """Who is calling: the notice on a phone's first call (D100), "Hi, it's EMBER." after that. First
         contact adds where they live and when the water comes."""
         parts = [HI if self.store.kv_get(f"voiced:{handle}") else DISCLOSURE]
         hid = self._household_id(handle)
@@ -619,13 +624,6 @@ def _similar(a: str, b: str) -> float:
     return sum(w in wb for w in wa) / len(wa) if len(wa) >= 6 else 0.0
 
 
-def _answers(text: str) -> bool:
-    """Does it carry an answer (yes / no / done / a need / a street)? Then it's the caller, never an echo."""
-    from . import fallback
-    ex = fallback.parse(text)
-    return bool(ex and any(f.kind not in ("question", "other") for f in ex.facts)) or bool(fallback.STREET.search(text.lower()))
-
-
 # ---------- the voice app: the only thing reachable through the tunnel ----------
 def _content(m: dict) -> str:
     c = m.get("content")
@@ -668,7 +666,7 @@ def create_voice_app(get_voice, token: str) -> FastAPI:
         cid = f"chatcmpl-{secrets.token_hex(6)}"
         if handle is None:
             log.error("voice turn without a caller id; is the agent's system prompt set? (%r)", system[:120])
-            reply_now = "Sorry, I can't tell which phone this is. Please call again later."
+            reply_now = "Sorry, this line couldn't tell which phone is calling. Please call again later."
             task = None
         else:
             task = asyncio.create_task(voice.turn(handle, conv, said, arrived))

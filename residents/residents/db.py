@@ -272,7 +272,7 @@ class Store:
             db.execute("DELETE FROM kv WHERE key = 'extra_households'")
             # per-run conversation memory: half-answered questions, last instruction texted, questions asked,
             # step-by-step directions, where located phones were placed, pre-placement chat, when we last called, the call
-            # waiting for a retry, and the one-time simulation notice by text and by call (D100: once per phone per run)
+            # waiting for a retry, and the one-time notice by text and by call (D100: once per phone per run)
             for prefix in ("pending:", "instr:", "asked:", "rejected:", "guide:", "located:", "lobby:", "welcomed:", "keep:",
                            "question:", "call:", "retry:", "disclosed:", "voiced:"):
                 db.execute("DELETE FROM kv WHERE key LIKE ?", (prefix + "%",))

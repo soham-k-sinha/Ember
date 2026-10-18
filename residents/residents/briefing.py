@@ -23,7 +23,7 @@ from starlette.concurrency import run_in_threadpool
 from .db import Store, thread_key
 from .threads import phone_for_thread
 
-VEHICLES = ("van", "accessible_van", "truck")
+VEHICLES = ("van", "accessible_van", "truck", "ambulance")
 NEAR_M = 300.0          # "near you": other households of this run within this distance
 WALK_MPS = 1.2          # an adult walking with a bag
 WALK_DETOUR = 1.3       # street distance ≈ straight line × 1.3
@@ -35,9 +35,8 @@ BRING = ("Bring medications (and prescriptions), ID, your phone and charger, gla
          "needs, like a walker or oxygen. Bring pets too, in a carrier or on a leash. One small bag each; leave "
          "everything else.")
 # Fixed, vetted wording (Ready.gov flood guidance), never generated: the one answer that must be right every time.
-SAFETY = ("In a real emergency, call 911. Don't walk or drive through floodwater: 6 inches of moving water can knock "
-          "you down and 1 foot can sweep a car away. If water comes inside, go to a higher floor (not a closed attic), "
-          "and stay away from downed power lines.")
+SAFETY = ("Don't walk or drive through floodwater: 6 inches of moving water can knock you down and 1 foot can sweep a car "
+          "away. If water comes inside, go to a higher floor (not a closed attic), and stay away from downed power lines.")
 
 
 # the one question first contact asks (D100): the planner asks a household for its needs; this is how we word it
