@@ -276,3 +276,10 @@ Run: cd residents && uv run python scripts/sim_calls.py --out ../docs/voice_tran
 Interfaces: GET /calls is now `{live: [{handle, household_id, reason, started_t_s, turns}], recent: [{handle, household_id, reason, outcome, turns, ended_t_s}]}` (was `{calls, live}`); POST /calls reason "console". configure_agent also sets the agent's first message for calls in. Tests blank ELEVENLABS_API_KEY in conftest so no test can dial.
 Status: done. Residents 269/269, engine 100/100. Sim: 7 calls (6 people; Sam twice, one per pickup change), every turn answered in < 1 s (replans 0.7–0.8 s); 5 end confirmed, 2 informed.
 Next: web: show live calls (badge + reason) from GET /calls; a live check with a real phone once the tunnel is up (VOICE_MAX_CONCURRENT=0 turns proactive calls off for the stage if needed).
+
+## 2026-10-17 · residents: simulator-graded eval of the text → fact step, Chalk router seam (D83) · branch aryaman/sim-eval
+What: `residents/scripts/eval_sim.py` plans and simulates the gold and the extracted reading of every samples.json message from one seeded plan. It scores each one on reached-before-deadline with an eligible vehicle, regret (unreached / hospital outage / overflow) and asked-instead-of-guessing, and prints a table and a pass rate (`--extractor fallback` by default, `--extractor llm` not run). The eval found two D75 parser bugs ("my house and I" read as 2 people with no mobility need; "accessible vehicle" dropped); both are fixed with test cases. The Chalk AI Router is an opt-in seam (`anthropic_client` in extract.py, used by both model calls) with a fake-transport test. samples.json: `gold` for #32.
+Files: residents/scripts/eval_sim.py (new), residents/tests/test_eval_sim.py (new), residents/residents/{extract,reply,fallback}.py, residents/tests/{test_extract,test_fallback}.py, residents/tests/samples.json, docs/eval.md (new), docs/DECISIONS.md
+Run: cd residents && uv run python scripts/eval_sim.py; uv run pytest -q
+Interfaces: env CHALK_ROUTER_KEY + CHALK_ENV_ID (optional). No contract change.
+Status: done. Fallback parser 46/51 pass, 4 ask, 1 fail (#32 "Welch's"), 98 % safe. The live Chalk router hasn't been called.

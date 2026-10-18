@@ -34,6 +34,8 @@ def kinds(t, role="resident"):
     ("me and my mom, she uses a wheelchair", [("need", 2, True, True, None, None)]),
     ("just me", [("need", 1, None, None, None, None)]),
     ("we need a wheelchair", [("need", None, True, True, None, None)]),
+    ("I'm stuck in my house and I can't get out", [("need", None, True, None, None, None)]),  # D83: was 2 people
+    ("we need an accessible vehicle", [("need", None, True, True, None, None)]),  # D83: was dropped
     ("what's the plan?", [("question", None, None, None, "plan", None)]),
     ("how long?", [("question", None, None, None, "eta", None)]),
     ("is River St open?", [("question", None, None, None, "roads", "river st")]),

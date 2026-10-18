@@ -1,14 +1,17 @@
 """Extraction: the deterministic code around the one LLM call (fake model), and the intake pipeline
 end to end through the app with the real allocator on allston_flood_v1."""
+import json
 from dataclasses import replace
 
+import anthropic
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
 from residents.app import create_app
 from residents.contracts import validate_report
 from residents.engine_bridge import normalize_street, street_matches
-from residents.extract import Extraction, Fact, to_outcome
+from residents.extract import Extraction, Fact, make_llm, to_outcome
 from residents.intake import SORRY
 from tests.test_engine import JUDGE, SCENARIO, bridge  # noqa: F401  (session fixture)
 
@@ -224,3 +227,34 @@ def test_chatter_does_nothing(make_client):
         c.post("/dev/inbound", json={"role": "resident", "text": "hi"})
         st = c.get("/state").json()
         assert st["plan_version"] == 1 and st["reports"] == [] and st["messages"][-1]["direction"] == "in"
+
+
+# ---------- Chalk's AI Router (D83): the same structured-output call, another endpoint ----------
+@pytest.mark.parametrize("chalk, url, model, key", [
+    (False, "https://api.anthropic.com/v1/messages?beta=true", "claude-sonnet-5-5", "sk-direct"),
+    (True, "https://api.chalk.ai/v1/router/v1/messages?beta=true", "anthropic/claude-sonnet-5-5", "chalk-key"),
+])
+async def test_llm_direct_or_through_chalk(monkeypatch, chalk, url, model, key):
+    sent = []
+
+    def handler(req: httpx2.Request) -> httpx2.Response:
+        sent.append(req)
+        return httpx2.Response(200, json={"id": "msg_1", "type": "message", "role": "assistant", "model": model,
+                                          "content": [{"type": "text", "text": ex(fact("need", people=2)).model_dump_json()}],
+                                          "stop_reason": "end_turn", "stop_sequence": None,
+                                          "usage": {"input_tokens": 1, "output_tokens": 1}})
+
+    for name, value in (("CHALK_ROUTER_KEY", "chalk-key"), ("CHALK_ENV_ID", "env-1")):
+        if chalk:
+            monkeypatch.setenv(name, value)
+        else:
+            monkeypatch.delenv(name, raising=False)
+    real = anthropic.AsyncAnthropic
+    monkeypatch.setattr(anthropic, "AsyncAnthropic",
+                        lambda **kw: real(**kw, http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler))))
+    out = await make_llm("sk-direct", model="claude-sonnet-5-5")("system", "we are 2")
+    [req] = sent
+    body = json.loads(req.content)
+    assert (str(req.url), body["model"], req.headers["x-api-key"]) == (url, model, key)
+    assert req.headers.get("x-chalk-env-id") == ("env-1" if chalk else None)
+    assert body["output_config"]["format"]["type"] == "json_schema" and out.facts[0].people == 2

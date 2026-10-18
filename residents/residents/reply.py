@@ -23,6 +23,8 @@ import re
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
+from .extract import anthropic_client
+
 log = logging.getLogger("residents.reply")
 
 MODEL = os.environ.get("REPLY_MODEL", "claude-haiku-5-5")
@@ -45,13 +47,11 @@ Writer = Callable[[str, str], Awaitable[str | None]]  # (system, user) → reply
 
 
 def make_writer(api_key: str, model: str = MODEL, timeout_s: float = TIMEOUT_S) -> Writer:
-    import anthropic
-
-    client = anthropic.AsyncAnthropic(api_key=api_key, timeout=timeout_s, max_retries=1)
+    client, prefix = anthropic_client(api_key, timeout=timeout_s, max_retries=1)
 
     async def write(system: str, user: str) -> str | None:
         resp = await client.messages.create(
-            model=model, max_tokens=600, output_config={"effort": "low"},
+            model=prefix + model, max_tokens=600, output_config={"effort": "low"},
             system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": user}],
         )
