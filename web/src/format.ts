@@ -58,14 +58,14 @@ export function replanSeconds(plan: PlanSnapshot): number | null {
 }
 
 /** Where the robust fan-out ran: "90 Daytona sandboxes", "8 local workers". */
-export function poolLabel(robust: RobustSummary): string {
+function poolLabel(robust: RobustSummary): string {
   return `${robust.workers ?? "?"} ${robust.pool === "daytona" ? "Daytona sandboxes" : `${robust.pool} workers`}`;
 }
 
 /** How a version was made: "replanned in 0.7 s", or after Optimize "robust pick · 250 worlds · 2.1 s on 90 Daytona sandboxes". */
 export function planTiming(plan: PlanSnapshot): string {
   const robust = robustOf(plan);
-  if (robust) return `robust pick · ${robust.jobs} worlds · ${robust.fanout_wall_s?.toFixed(1) ?? "?"} s on ${poolLabel(robust)}`;
+  if (robust) return `robust pick · ${formatNumber(robust.jobs)} worlds · ${robust.fanout_wall_s?.toFixed(1) ?? "?"} s on ${poolLabel(robust)}`;
   const seconds = replanSeconds(plan);
   return seconds == null ? "" : `replanned in ${seconds.toFixed(1)} s`;
 }

@@ -351,6 +351,8 @@ export type RobustSummary = {
   workers?: number;
   fanout_wall_s?: number;
   startup_s?: number;
+  /** the same worlds' fan-out on this laptop, when the backend measured it */
+  laptop_s?: number;
   rule: string;
   chosen: string;
   nominal_best: string;

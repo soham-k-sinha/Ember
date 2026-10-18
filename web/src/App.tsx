@@ -558,16 +558,17 @@ export function App() {
     }
   }
 
-  async function optimize() {
+  /** 50 seeds × 5 plans = 250 worlds by default; the stress test sends 2000 seeds = 10,000 worlds. */
+  async function optimize(seeds?: number) {
     dispatch({ type: "tab", tab: "proof" });
     if (!live) {
       toast("Optimize runs on the backend (Daytona, or the local pool): switch to Live in settings.");
       return;
     }
-    dispatch({ type: "busy", busy: "optimize" });
+    dispatch({ type: "busy", busy: seeds ? "stress" : "optimize" });
     try {
       try {
-        await postJson(`${root}/optimize`, {}, 15000);
+        await postJson(`${root}/optimize${seeds ? `?seeds=${seeds}` : ""}`, {}, 15000);
       } catch (error) {
         // 409 = one is already running: watch that one instead of failing
         if (!(error instanceof Error && error.message.startsWith("409"))) throw error;
@@ -750,7 +751,7 @@ export function App() {
           onUndoClosure={(edgeId) => dispatch({ type: "undo", edgeId })}
           onReplan={() => void replan()}
           onCompare={() => void compare()}
-          onOptimize={() => void optimize()}
+          onOptimize={(seeds) => void optimize(seeds)}
         />
       </main>
       {sources ? <Sources synthetic={model.snapshot.synthetic ?? scenario.synthetic ?? []} onClose={() => setSources(false)} /> : null}

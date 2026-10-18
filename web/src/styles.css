@@ -311,7 +311,12 @@ figure { margin: 0; }
 .versions header span { color: var(--muted); font-size: 13px; }
 .versions header .pill { margin-left: auto; color: var(--accent); }
 
+.actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.actions button { padding: 6px 12px; font-size: 13.5px; }
 .throughput { font-size: 14px; color: #c9d3e1; font-variant-numeric: tabular-nums; }
+.throughput.tile { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; padding: 8px 10px; border-radius: 8px; background: var(--panel-2); border-left: 3px solid var(--accent); }
+.throughput.tile strong { font-size: 20px; }
+.throughput.tile b { color: var(--accent); }
 .verdict { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
 .verdict li { padding: 7px 8px; border-radius: 8px; background: var(--panel-2); border-top: 3px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
 .verdict span { font-size: 12px; color: var(--muted); }
