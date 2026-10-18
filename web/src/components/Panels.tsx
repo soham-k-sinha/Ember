@@ -3,6 +3,7 @@ import {
   formatNeeds,
   formatNumber,
   formatSim,
+  keptBeforeTradeoff,
   planDiff,
   planTiming,
   poolLabel,
@@ -10,6 +11,7 @@ import {
   reporterJob,
   statusLabel,
   targetLabel,
+  tradedFacility,
 } from "../format";
 import {
   assignmentById,
@@ -671,6 +673,7 @@ const PROOF_METRICS: Array<{ metric: "people_reached_before_deadline" | "people_
 ];
 
 function Proof(props: {
+  plans: PlanSnapshot[];
   robust: RobustSummary | null;
   comparison: Comparison | null;
   nominal: { ember?: PlanMetrics; baseline?: PlanMetrics };
@@ -688,6 +691,8 @@ function Proof(props: {
       ? { metric, label, unit, baseline: row.baseline_mean * scale, ember: row.ember_mean * scale, spread: `EMBER − baseline: ${formatNumber(row.diff_min * scale)} to ${formatNumber(row.diff_max * scale)}` }
       : { metric, label, unit, baseline: (props.nominal.baseline?.[metric] ?? 0) * scale, ember: (props.nominal.ember?.[metric] ?? 0) * scale, spread: "" };
   });
+  const plan = props.plans[props.plans.length - 1];
+  const kept = tradedFacility(plan) ? keptBeforeTradeoff(plan) : undefined;
   const points = props.scatter;
   const robust = props.robust;
   const result = robust && (points.length === 0 || robust.batch_id === points[0].batchId) ? robust : null;
@@ -714,6 +719,7 @@ function Proof(props: {
                 <td>
                   {row.label}
                   {row.spread ? <span>{row.spread}</span> : null}
+                  {row.metric === "overflow_m3" && kept != null ? <span>{formatNumber(kept)} m³ kept out before the hospital call</span> : null}
                 </td>
                 <td>{formatNumber(row.baseline, 0)} {row.unit}</td>
                 <td><strong>{formatNumber(row.ember, 0)}</strong> {row.unit}</td>

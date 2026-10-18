@@ -70,6 +70,16 @@ export function planTiming(plan: PlanSnapshot): string {
   return seconds == null ? "" : `replanned in ${seconds.toFixed(1)} s`;
 }
 
+/** Sewage kept out of the Charles before the hospital call, as the backend froze it (undefined on a backend without it). */
+export function keptBeforeTradeoff(plan: PlanSnapshot | null | undefined): number | undefined {
+  return plan?.metrics?.kept_before_tradeoff_m3 ?? (plan?.search as { kept_before_tradeoff_m3?: number } | undefined)?.kept_before_tradeoff_m3;
+}
+
+/** The plan gave up a facility (the overflow, for the hospital) and says so in `unresolved`. */
+export function tradedFacility(plan: PlanSnapshot | null | undefined): boolean {
+  return plan?.unresolved.some((item) => "facility_id" in item.target) ?? false;
+}
+
 /** A name without its spec in brackets: "Generator 1 (500 kW, camlock)" → "Generator 1". */
 export function shortName(name: string): string {
   return name.replace(/ \([^)]*\)$/, "");

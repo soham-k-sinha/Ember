@@ -221,6 +221,8 @@ export type PlanMetrics = {
   hospital_outage_s?: number;
   service_outage_s_total?: number;
   overflow_m3?: number;
+  /** m³ kept out of the Charles vs the baseline, frozen before the plan traded the overflow for the hospital */
+  kept_before_tradeoff_m3?: number;
   fuel_l?: number;
   vehicle_km?: number;
   infeasible_assignments?: number;

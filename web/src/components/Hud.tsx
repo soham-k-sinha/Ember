@@ -1,15 +1,14 @@
 /** What floats over the stage: the score card, the latest change, toasts, the join card, and the sources drawer. */
 
-import { useCallback, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useMemo, useState, type FormEvent } from "react";
 import qrcode from "qrcode-generator";
 import { scenario } from "../fixtures";
 import { postJson } from "../live";
-import { formatNumber, maskHandle, planDiff, planTiming, reporterJob, shortName, statusLabel } from "../format";
+import { formatNumber, keptBeforeTradeoff, maskHandle, planDiff, planTiming, reporterJob, shortName, statusLabel, tradedFacility } from "../format";
 import { facilityById, peopleCount, resourceById } from "../model";
 import type { Calls, Phone, PlanMetrics, PlanSnapshot, StateSnapshot } from "../types";
 
 const WAITING = new Set(["needs", "unknown", "assigned", "confirmed"]);
-const FACTS = new Set(["need", "closure_report", "facility_status"]);
 
 /** People still waiting for help at this moment. */
 function waitingPeople(state: StateSnapshot): number {
@@ -47,13 +46,10 @@ export function ScoreCard(props: {
   const { plan, projected, baseline, state } = props;
   const minutes = (s?: number) => (s == null ? undefined : Math.round(s / 60));
   // the plan ranks people, then the hospital, then sewage: once it trades the overflow away it says so in
-  // `unresolved`, and the tile keeps what EMBER kept out of the river before that call (read only while every
-  // fact is planned for, so a baseline that already saw the next report is never compared with the old plan)
-  const cost = plan?.unresolved.find((item) => "facility_id" in item.target);
-  const settled = !cost && !state.reports.some((report) => FACTS.has(report.kind) && !report.resolved);
-  const kept = useRef<number>();
-  if (settled && projected?.overflow_m3 != null && baseline?.overflow_m3 != null) kept.current = baseline.overflow_m3 - projected.overflow_m3;
-  const moved = cost ? plan?.assignments.find((item) => item.task === "protect" && item.status !== "cancelled") : undefined;
+  // `unresolved`, and the tile shows what EMBER kept out of the river before that call
+  const traded = tradedFacility(plan);
+  const kept = keptBeforeTradeoff(plan);
+  const moved = traded ? plan?.assignments.find((item) => item.task === "protect" && item.status !== "cancelled") : undefined;
   const tradeOff = moved && "facility_id" in moved.target
     ? `${shortName(resourceById(state, moved.resource_id)?.name ?? moved.resource_id)} moved to ${shortName(facilityById(state, moved.target.facility_id)?.name ?? moved.target.facility_id)}: people first; ${formatNumber(projected?.overflow_m3)} m³ accepted, stated`
     : undefined;
@@ -72,13 +68,13 @@ export function ScoreCard(props: {
       />
       <Score label="People still at home now" value={waitingPeople(state)} better="lower" />
       <Score label="Hospital outage" value={minutes(projected?.hospital_outage_s)} baseline={minutes(baseline?.hospital_outage_s)} unit="min" better="lower" />
-      {kept.current != null ? (
+      {kept != null ? (
         <Score
           label="Kept out of the Charles"
-          value={kept.current}
+          value={kept}
           unit="m³"
           better="higher"
-          sub={tradeOff ?? `sewage overflow ${formatNumber(projected?.overflow_m3)} m³ · baseline ${formatNumber(baseline?.overflow_m3)} m³`}
+          sub={traded ? ["before the hospital call", tradeOff].filter(Boolean).join(" · ") : `sewage overflow ${formatNumber(projected?.overflow_m3)} m³ · baseline ${formatNumber(baseline?.overflow_m3)} m³`}
         />
       ) : (
         <Score label="Sewage overflow" value={projected?.overflow_m3} baseline={baseline?.overflow_m3} unit="m³" better="lower" sub={tradeOff} />
