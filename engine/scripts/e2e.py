@@ -227,7 +227,8 @@ async def main(base: str, skip_optimize: bool) -> int:
               f"{last and last.get('error')} in {time.time() - t0:.1f}s")
         rob = (last or {}).get("robust") or {}
         print(f"      pool={rob.get('pool')} workers={rob.get('workers')} startup={rob.get('startup_s')}s fan-out={rob.get('fanout_wall_s')}s "
-              f"chosen={rob.get('chosen')} nominal={rob.get('nominal_best')}")
+              f"chosen={rob.get('chosen')} nominal={rob.get('nominal_best')} "
+              f"worst20_unreached={ {r_['candidate']: r_['worst20_people_unreached'] for r_ in rob.get('ranking', [])} }")
         await asyncio.sleep(0.5)
         pts = ev.since(n, "scatter_point")
         check(rob.get("pool") == "daytona" and rob.get("startup_s") is not None, "the runs go to the Daytona pool, startup reported",

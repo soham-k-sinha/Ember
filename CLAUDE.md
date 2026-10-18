@@ -9,7 +9,7 @@ A city-scale disaster simulation around the David Rubenstein Treehouse (Harvard,
 
 ## Hard rules
 1. **Contracts are the interface.** `contracts/*.schema.json` + `contracts/fixtures/`. Engine, residents and web build against fixtures; nobody blocks on anyone. Changing a contract = bump `version`, update the fixture, say so in `docs/DECISIONS.md`.
-2. **No LLM in the tick loop.** The simulation and the planner are deterministic numpy. The only LLM call is in `residents/` (free text ↔ structured need). Routes, times, assignments are always computed, never generated.
+2. **No LLM in the tick loop: the AI talks, the planner decides (D76).** The simulation and the planner are deterministic numpy. LLMs live only in `residents/`: one call understands a text (free text → structured fact), one words the reply from the computed messages (a guard rejects any number, vehicle, place or street they don't contain). Routes, times, assignments are always computed, never generated.
 3. **Agents are rows, not personas.** A household is attributes + a behavior rule. Responders (if the allocation variant ships) are resources in a ledger. No role-play agents.
 4. **Time** is seconds since simulation start (`t_s`, float32-safe). **Coordinates** are `[lon, lat]` in GeoJSON order everywhere. Distances in meters, speeds in m/s inside the engine.
 5. **Hazards implement one interface:** `polygon_at(t_s)` and `closed_edges_at(t_s)`. Fire, flood, crowd-capacity all plug in here. The engine never knows what a fire is.
