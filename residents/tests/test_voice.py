@@ -958,3 +958,12 @@ def test_a_real_emergency_gets_only_the_911_line(two):
 def test_what_counts_as_saying_it_is_real(words, real):
     from residents.talk import REAL
     assert bool(REAL.search(words)) is real
+
+
+def test_talking_on_after_okay_keeps_the_call_open(vd):
+    """Live 2026-10-18 07:11: "Okay." then a question in the same breath ended the call without a goodbye."""
+    join(vd, R1)
+    say(vd, "We are four, and one needs a wheelchair.", conv="conv_9")
+    assert spoken(say(vd, "Okay.", conv="conv_9")).endswith(BYE)
+    say(vd, "Um, what else can we do? What is the plan right now?", conv="conv_9")
+    assert not vd.app.state.voice.sessions[R1].closing
