@@ -23,7 +23,7 @@ from .extract import LLM, make_llm
 from .guide import Guide
 from .intake import Intake
 from .locate import Locator
-from .outbound import Outbound
+from .outbound import ASK_NEEDS, Outbound
 from .messaging import DrillFull, Messenger
 from .photon import PhotonClient, PhotonError, PhotonListener
 from .planner import Planner, ReportError
@@ -31,8 +31,7 @@ from .threads import normalize_handle
 
 log = logging.getLogger("residents")
 
-DEFAULT_ASK = {"operator": "How many hours of backup power do you have left on site?",
-               "resident": "How many people are with you, and does anyone need a wheelchair-accessible vehicle?"}
+DEFAULT_ASK = {"operator": "How many hours of backup power do you have left on site?", "resident": ASK_NEEDS}
 if not logging.getLogger().handlers:  # uvicorn only configures its own loggers; make ours visible too
     logging.basicConfig(level=logging.INFO, format="%(levelname)s:     [%(name)s] %(message)s")
 
@@ -155,7 +154,7 @@ def turn_writer(app: FastAPI, write):
         st = app.state
         store = st.store
         history = store.conversation(thread_key(thread), 8) if thread else [
-            {"from": "them" if m["direction"] == "in" else "EMBER", "text": m["text"].removeprefix("[EMBER drill] ")}
+            {"from": "them" if m["direction"] == "in" else "EMBER", "text": m["text"]}
             for m in st.messenger.lobby_log(handle)[-8:]]
         facts = []
         view = store.plan_view()
@@ -200,7 +199,7 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
             app.state.outbound = Outbound(app.state.store, app.state.messenger, app.state.planner.bridge)
             app.state.planner.plan_hooks.append(app.state.outbound.on_plan)
             # after outbound: a changed instruction is texted before the next step of the old one
-            app.state.guide = Guide(app.state.store, app.state.messenger, app.state.planner, settings.auto_clock)
+            app.state.guide = Guide(app.state.store, app.state.messenger, app.state.planner)
             app.state.planner.plan_hooks.append(app.state.guide.on_plan)
             app.state.planner.clock_hooks.append(app.state.guide.tick)
             app.state.outbound.guide = app.state.guide  # "what do I do?" includes the step they're on
@@ -219,7 +218,8 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
             app.state.planner.plan_hooks.append(app.state.locator.on_plan)
         from .voice import Voice
         app.state.voice = Voice(app.state.store, app.state.messenger, app.state.outbound, settings)
-        if app.state.planner is not None:  # last: a call opens with what the other hooks just decided (D80)
+        app.state.voice.locator = app.state.locator  # someone who calls the voice number joins by voice (D100)
+        if app.state.planner is not None:  # last: a call opens with what the other hooks just decided (D80, D100)
             app.state.planner.plan_hooks.append(app.state.voice.check)
             app.state.planner.clock_hooks.append(app.state.voice.check)
         if app.state.planner is not None and settings.reply_enabled and (writer is not None or (
@@ -244,6 +244,16 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
                     except Exception:  # noqa: BLE001 - keep retrying
                         log.exception("retry loop")
             retry_task = asyncio.create_task(retry_loop())
+        poll_task = None
+        if app.state.planner is not None and app.state.voice.configured() and settings.voice_poll_s > 0:
+            async def voice_poll() -> None:  # calls that ended, retries due, queued calls (D100), even with the clock paused
+                while True:
+                    await asyncio.sleep(settings.voice_poll_s)
+                    try:
+                        await app.state.voice.check()
+                    except Exception:  # noqa: BLE001 - keep polling
+                        log.exception("voice poll")
+            poll_task = asyncio.create_task(voice_poll())
         if app.state.planner is not None:
             async def warm_pool() -> None:  # sandboxes up before the first /optimize (D82)
                 try:
@@ -254,8 +264,9 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         try:
             yield
         finally:
-            if retry_task is not None:
-                retry_task.cancel()
+            for task in (retry_task, poll_task):
+                if task is not None:
+                    task.cancel()
             if app.state.listener is not None:
                 await app.state.listener.stop()
             if photon is not None:
@@ -378,7 +389,7 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
         q = None
         if body.question is None and app.state.outbound is not None and view:
             q = app.state.outbound.next_info_request(view, thread)
-        text = body.question or (q["question"] if q else DEFAULT_ASK[body.role])
+        text = body.question or (Outbound.ask(q) if q else DEFAULT_ASK[body.role])
         msg, delivery = await messenger().send_message(thread, text, store().meta().get("plan_version"))
         if q and delivery in ("sent", "dev", "failed"):
             store().kv_set(f"asked:{q['id']}", str(view["version"]))
@@ -452,8 +463,9 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
 
     @app.post("/join")
     async def post_join(body: JoinIn) -> dict:
-        """Multiplayer (D89): register a phone as a drill player on the shared iMessage line. The phone must then
-        text anything (the QR pre-fills "JOIN EMBER") to `assigned_number`; that first text places it as Player N.
+        """Multiplayer (D89): register a phone as a player on the shared iMessage line. The phone must then
+        text anything (the QR pre-fills "JOIN EMBER") to `assigned_number`; that first text places it as Player N, and
+        EMBER calls it (D100). Anyone can also just call the voice number and join by voice.
         Idempotent per handle; 409 when the drill is full (MAX_PLAYERS) or the phone is a team phone."""
         try:
             return await messenger().register_player(body.handle)
@@ -468,7 +480,8 @@ def create_app(settings: Settings | None = None, photon_client: PhotonClient | N
 
     @app.post("/messages")
     async def post_message(body: MessageIn) -> dict:
-        """Send a message on a thread (operator console / scripted prompts). Text gets the drill prefix."""
+        """Send a message on a thread (operator console / scripted prompts), as written (a phone's first text in a run
+        gets the one-line simulation notice, D100)."""
         msg, delivery = await messenger().send_message(body.thread.as_thread(), body.text, body.plan_version, body.assignment_id)
         return {"message": msg, "delivery": delivery, **messenger().delivery_details(msg["thread"], delivery)}
 

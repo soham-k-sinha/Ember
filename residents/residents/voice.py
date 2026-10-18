@@ -1,5 +1,6 @@
-"""Phone calls (D74): ElevenLabs runs the call (speech-to-text, text-to-speech, turn-taking, the Photon SIP
-number); EMBER's backend is its "Custom LLM", so every sentence on the call is ours, never generated.
+"""Phone calls (D74), the primary channel since D100: in a disaster people answer a ringing phone, not a text.
+ElevenLabs runs the call (speech-to-text, text-to-speech, turn-taking, the Photon SIP number); EMBER's backend is its
+"Custom LLM", so every sentence on the call is ours, never generated.
 
 How one call works:
 - ElevenLabs posts each caller turn to `/{token}/v1/chat/completions` (OpenAI-compatible, streamed) on the
@@ -12,13 +13,21 @@ How one call works:
   returned as the reply. Steps or plan changes that happen between turns wait in the call's outbox and are
   said on the next turn. The call and the texts are one thread: what was said on the call is in the
   thread's history when the conversation moves back to text.
-- Outbound calls (`call(handle, reason)`): the first message says who is calling and why in one sentence, then the
-  one thing the thread most needs from them now (the step, the offer, or our question); ElevenLabs dials with it.
-- Proactive calls (D80, `check`, on every new plan and clock move): EMBER calls the most at-risk residents itself,
-  earliest deadline first, at most VOICE_MAX_CONCURRENT at once, at most once per (phone, reason) per COOLDOWN_S:
-  no reply to an open offer / step / question while the water is close, a mobility or medical need not yet
-  confirmed, or a pickup that changed since they last wrote (one call per wait, one per change). When a call is
-  over the thread texts them where things stand, so the conversation carries on by text.
+- ElevenLabs re-sends a turn while its speech-to-text revises it ("I'm done." ×3, "A walker." → "A walker. I need my
+  needle."). Per call, at the turn boundary: the same words again within REPEAT_S get the same reply without being
+  processed again; words that extend or mostly repeat the last turn within REVISE_S replace it (their facts count, a
+  yes / no in them doesn't count twice). Nothing moves a step on but the plan's clock, so a re-sent "done" can't skip one.
+
+When EMBER calls (D100, replacing D80's "no reply" calls; never a call just to get a yes):
+- first contact: a player who joins is called with the simulation notice, where they live and when the water comes,
+  then the one combined question (how many people; anyone hurt, in a wheelchair, needing oxygen or medication);
+- the pickup instruction, a pickup that changed, and "the vehicle is 2 minutes away, come to the door now".
+Each of those `ring`s the phone: the call is queued and what the thread says meanwhile waits in its outbox. `check`
+(every plan, clock move and VOICE_POLL_S) dials queued calls earliest deadline first, at most VOICE_MAX_CONCURRENT at
+once. Not answered: one retry after RETRY_S, then the same news by text (time-critical news by text at once). Answered:
+one short text follows with the instruction in writing. Anyone can call the voice number: an unknown caller becomes the
+next player (D89's placement, same MAX_PLAYERS cap) with no texting needed. A phone's first call opens with the one
+simulation notice; later calls just say who's calling (D100: no "drill" talk, nothing official).
 """
 
 from __future__ import annotations
@@ -36,24 +45,20 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from .db import thread_key
-from .messaging import Messenger
+from .briefing import ASK_NEEDS
+from .db import PhoneConflict
+from .messaging import DrillFull
+from .photon import PhotonError
 from .speech import render, render_all
 from .threads import normalize_handle, phone_thread, unplaced
 
 log = logging.getLogger("residents.voice")
 
 ELEVENLABS = "https://api.elevenlabs.io"
-OPENER = "Hi, this is EMBER, an automated assistant for the flood drill"
-INBOUND = f"{OPENER}. How can I help?"   # the agent's first message when someone calls us
-WHY = {"no_reply": "calling because the water reaches your street in about {mins} minutes and we haven't heard back",
-       "mobility": "calling about your wheelchair-accessible pickup",
-       "medical": "calling about your pickup, because of the medical needs you told us about",
-       "pickup_changed": "calling because your pickup has changed",
-       "new_offer": "calling with a new pickup for you, because {why}",
-       "undelivered": "calling because our text to you didn't go through",
-       "console": "calling about your evacuation plan"}
-PROMISE = "I'll text you this too."
+DISCLOSURE = "This is EMBER, an automated assistant in a live flood simulation."  # a phone's first call only (D100)
+HI = "Hi, it's EMBER."                                                             # every call after that
+INBOUND = f"{DISCLOSURE} How can I help?"   # the agent's first message when someone calls us
+UNDELIVERED = "Our text to you didn't go through, so I'm calling with it."
 # What a caller says that is about the call, not a message for the thread; the call answers it itself:
 # "hello?" / "sorry, what?" as they pick up our call: a short hello, then the one thing we need, never the opener again
 GREETING = re.compile(r"^(\W*(hello|hi|hey)( there)?)+\W*$", re.I)
@@ -62,10 +67,13 @@ AGAIN = re.compile(r"^\W*(sorry|pardon|huh|excuse me|what)\W*(what|was that|did 
 # "thank you, dear" / "okay, got it" / "bye": the call is winding down
 CLOSING = re.compile(r"^(?=.*\b(thank|bye|got it|will do|take care))(\W*(ok(ay)?|great|alright|all right|perfect|"
                      r"thanks?|thank you|so much|very much|dear|bye|good ?bye|got it|will do|take care|you too))+\W*$", re.I)
-BYE = "I'm texting you all of this now. Take care."
-FOLLOW_UP = "As promised, here's your plan in writing."
+BYE = "I'll text you all of this now. Take care."
+FOLLOW_UP = "From our call:"
 MISSED = "We just tried to call you."
 WHERE = "Where are you right now? Tell me your street address or the nearest intersection."
+CLOSED = "This line is for people taking part in the EMBER flood simulation. Goodbye."
+FULL_CALL = "Thanks for calling. The flood simulation is full right now; you can watch it on the big screen. Goodbye."
+BUSY = "Sorry, I couldn't add you just now. Please call again in a minute."
 FILLER = "One moment... "        # ElevenLabs' advice for slow turns: an ellipsis + space, said while we work
 FILLER_AFTER_S = 1.2
 SESSION_IDLE_S = 300.0           # a call with no turn for this long is over (its leftovers go back to text)
@@ -74,15 +82,16 @@ SESSION_IDLE_S = 300.0           # a call with no turn for this long is over (it
 SCREENING = re.compile(r"\b(stay on the line|record (your|it)\b|recorded\b|reason for (your )?call|screening service|"
                        r"see if (this person|they)( is| are|'re)? (is )?available|i'll see if|who('s| is) (calling|this)|state your name|"
                        r"leave (a|your) (message|name))", re.I)
-WHO_WE_ARE = "It's EMBER, an automated assistant for the HackHarvard flood drill; this is a drill, not a real emergency."
+WHO_WE_ARE = f"{DISCLOSURE} It's not a real emergency."
 # someone frightened gets a calm word before the plan (once a call)
 PANIC = re.compile(r"\b(oh my god|omg|scared|terrified|panick?ing|hurry|help me|what do i do)\b", re.I)
-CALM = "I'm here with you; we'll go one step at a time."
-NO_REPLY_S = 180.0               # an open offer / step / question unanswered this long (sim-s), not called about yet …
-NEAR_S = 45 * 60.0               # … while their deadline is this close: call
-CHANGED_S = 30 * 60.0            # their pickup changed this recently (they haven't written or been called since): call
-QUIET_S = 60.0                   # never call someone in the middle of texting us
-COOLDOWN_S = 15 * 60.0           # one call per (phone, reason) per this many sim-s
+CALM = "I'm here with you."
+RETRY_S = 120.0                  # an unanswered call is tried once more after this many sim-s (D100) …
+RETRY_WALL_S = 60.0              # … or this many wall-s, whichever comes first (the sim clock may be paused)
+NO_RETRY = ("soon", "undelivered", "console", "inbound")  # unanswered: by text at once ("2 minutes away" can't wait)
+REPEAT_S = 20.0                  # the same words again this soon: ElevenLabs re-sent the turn (D100)
+REVISE_S = 10.0                  # words that extend / mostly repeat the last turn this soon: speech-to-text revised it
+COOLDOWN_S = 15 * 60.0           # D90: one call-back for an undelivered text per phone per this many sim-s
 REAP_EVERY_S = 5.0               # ask ElevenLabs which calls are over at most this often (wall-s)
 ECHO_SIMILAR = 0.7               # this close to what we just said, and no answer in it: our own voice coming back
 ECHO_EXACT = 0.85                # this close: our own voice, whatever it contains (our help text lists "yes", "done")
@@ -92,10 +101,17 @@ SYSTEM_PROMPT = ("EMBER-CALL caller={{system__caller_id}} called={{system__calle
 
 
 @dataclass
+class Heard:
+    words: list[str]             # what they said, normalized
+    at: float                    # when the turn arrived (monotonic)
+    reply: list[str] | None      # what we answered
+
+
+@dataclass
 class Session:
     handle: str
     conversation_id: str | None = None
-    reason: str = "inbound"      # inbound | console | no_reply | mobility | pickup_changed | undelivered
+    reason: str = "inbound"      # inbound | console | first_contact | instruction | pickup_changed | soon | undelivered
     started_t_s: float = 0.0
     reports_at: int = 0          # reports before the call: the ones after it are what the call changed
     outbox: list[str] = field(default_factory=list)
@@ -103,17 +119,26 @@ class Session:
     turns: int = 0
     last_said: str = ""          # what this call said last (to tell our own echo from the caller)
     screened: int = 0            # times we said again who we are (call screening, "who is this?", "hello?")
-    promised: bool = False       # told them a text follows
     calmed: bool = False         # said CALM
+    dialed: bool = False         # ElevenLabs dialed it, or they called us; until then it's queued for a free line
+    deadline: float = math.inf   # queue order: their household's flood deadline
+    plan_version: int = 0        # the plan when the call was queued; refresh the opening if it changed while waiting
+    attempt: int = 1             # 2: the retry of an unanswered call
+    arrived: float = 0.0         # when the newest turn arrived (monotonic)
+    heard: list[Heard] = field(default_factory=list)  # this call's recent turns (repeats and revisions, D100)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)  # one turn at a time: ElevenLabs may post the next early
 
 
 class Voice:
     def __init__(self, store, messenger, outbound, settings, http: httpx.AsyncClient | None = None):
         self.store, self.messenger, self.outbound, self.settings = store, messenger, outbound, settings
+        self.locator = None  # locate.Locator, set by the app: an unknown caller joins as a player (D100)
         self.sessions: dict[str, Session] = {}
         self.http = http
         self.recent: list[dict] = []  # this process's finished calls, newest last (GET /calls)
         self._reaped = 0.0
+        self._check_lock = asyncio.Lock()
+        self._dial_lock = asyncio.Lock()
         messenger.voice = self
 
     def _t_s(self) -> float:
@@ -122,6 +147,12 @@ class Voice:
     def configured(self) -> bool:
         st = self.settings
         return bool(st.elevenlabs_api_key and st.elevenlabs_agent_id and st.elevenlabs_phone_number_id)
+
+    def calls_first(self, handle: str) -> bool:
+        """D100: this phone hears the moments that matter on a call (a resident's real number, calls configured)."""
+        phone = self.store.phone(handle=handle)
+        return (self.configured() and self.settings.voice_max_concurrent > 0 and handle.startswith("+")
+                and phone is not None and phone["role"] == "resident")
 
     async def _eleven(self, method: str, path: str, **kw) -> httpx.Response:
         http = self.http or httpx.AsyncClient(timeout=30)
@@ -133,16 +164,16 @@ class Voice:
 
     # ---------- the capture (Messenger asks us before texting) ----------
     def live(self, handle: str | None) -> Session | None:
+        """The call on, or queued, for this phone (what the thread says goes to it)."""
         if handle is None:
             return None
         s = self.sessions.get(handle)
-        if s is not None and time.monotonic() - s.last > SESSION_IDLE_S:
-            self.end(handle, reason="idle")
-            return None
+        if s is not None and s.dialed and time.monotonic() - s.last > SESSION_IDLE_S:
+            return None  # reap() closes it asynchronously, including the follow-up or missed-call retry
         return s
 
     def capture(self, handle: str | None, text: str) -> bool:
-        """True: a call is live for this phone, so the text is said there instead of texted."""
+        """True: a call is on or queued for this phone, so the text is said there instead of texted."""
         s = self.live(handle)
         if s is None:
             return False
@@ -157,8 +188,9 @@ class Voice:
             s = None
         if s is None:
             s = self.sessions[handle] = Session(handle, conversation_id, reason, self._t_s(), len(self.store.reports()),
-                                                outbox=owed)
+                                                outbox=owed, plan_version=int(self.store.meta().get("plan_version", 0)))
         s.conversation_id = s.conversation_id or conversation_id
+        s.dialed = s.dialed or conversation_id is not None
         s.last = time.monotonic()
         return s
 
@@ -167,10 +199,10 @@ class Voice:
         s = self.sessions.pop(handle, None)
         if s is None:
             return None
-        if s.outbox:
+        if s.outbox and s.turns:
             log.warning("call with %s ended (%s) with %d unsaid message(s); they stay in the thread", handle, reason,
                         len(s.outbox))
-        if s.turns or s.reason != "inbound":  # not the drill's capture while it decides whether to call
+        if s.turns or s.reason != "inbound":  # not the drill console's capture while it decides whether to call
             hid = self._household_id(handle)
             kinds = {r["kind"] for r in self.store.reports()[s.reports_at:] if hid is not None and r.get("household_id") == hid}
             outcome = ("failed" if reason == "dial failed" else "no_answer" if not s.turns else
@@ -181,10 +213,17 @@ class Voice:
         return s
 
     async def hang_up(self, handle: str) -> None:
-        """The call is over: the thread texts them where things stand, so the conversation goes on by text."""
+        """The call is over. Answered: the instruction follows in one short text. Not answered: one retry after RETRY_S,
+        then the same news by text; time-critical news (and a call that was itself the retry) by text at once."""
         s = self.end(handle, reason="hung up")
-        if s is not None:
-            await self.say_situation(handle, lead=FOLLOW_UP if s.turns else MISSED)
+        if s is None:
+            return
+        if s.turns:
+            await self.say_situation(handle, lead=FOLLOW_UP)
+        elif s.attempt == 1 and s.reason not in NO_RETRY:
+            self.store.kv_set(f"retry:{handle}", json.dumps({"reason": s.reason, "t_s": self._t_s(), "wall": time.time()}))
+        else:
+            await self.say_situation(handle, lead=MISSED)
 
     def _household_id(self, handle: str) -> int | None:
         phone = self.store.phone(handle=handle)
@@ -204,21 +243,63 @@ class Voice:
         conv = m[3] if m[3] and "{{" not in m[3] else None
         return (known or cands or [None])[0], conv
 
-    async def turn(self, handle: str, conversation_id: str | None, text: str) -> list[str]:
-        """What the caller said → the backend's replies (raw texts, not yet rendered for speech)."""
+    async def turn(self, handle: str, conversation_id: str | None, text: str, arrived: float | None = None) -> list[str] | None:
+        """What the caller said → the backend's replies (raw texts, not yet rendered for speech). None: say nothing."""
+        arrived = time.monotonic() if arrived is None else arrived
         s = self.open(handle, conversation_id)
+        s.arrived = max(s.arrived, arrived)
+        async with s.lock:  # ElevenLabs may post a revised turn before we've answered the last one
+            text = (text or "").strip()
+            kind, prev = self._boundary(s, _words(text), arrived)
+            if kind == "repeat":
+                log.info("call %s: %r again; same reply, not processed again", handle, text[:60])
+                return prev.reply
+            out = await self._turn(s, handle, text, revision=kind == "revision")
+            s.heard = (s.heard + [Heard(_words(text), arrived, out)])[-8:]
+            return out
+
+    @staticmethod
+    def _boundary(s: Session, words: list[str], arrived: float) -> tuple[str | None, Heard | None]:
+        """("repeat", that turn): the same words again within REPEAT_S; ("revision", the last turn): they extend it or
+        share most of its opening words, within REVISE_S (speech-to-text revising what it heard); else (None, None)."""
+        if not words:
+            return None, None
+        for h in reversed(s.heard):
+            if h.words == words and arrived - h.at <= REPEAT_S:
+                return "repeat", h
+        last = s.heard[-1] if s.heard else None
+        if last is not None and arrived - last.at <= REVISE_S and last.words:
+            n = next((i for i, (a, b) in enumerate(zip(words, last.words)) if a != b), min(len(words), len(last.words)))
+            if n == len(last.words) or n >= max(2, 0.6 * min(len(words), len(last.words))):
+                return "revision", last
+        return None, None
+
+    async def _turn(self, s: Session, handle: str, text: str, revision: bool) -> list[str] | None:
         s.turns += 1
-        if self.store.phone(handle=handle) is None:
-            if not self.settings.voice_admit_callers:
-                return ["This line is for registered drill participants. Goodbye."]
-            self.store.upsert_phone(handle, "resident", scenario_id=self.store.meta().get("scenario_id"))
-            log.info("admitted caller %s as a resident to be located", handle)
-        text = (text or "").strip()
+        joined = False
+        if self.store.phone(handle=handle) is None:  # someone called the number: they join by voice (D100)
+            if not self.settings.voice_admit_callers or self.locator is None:
+                return [CLOSED]
+            try:
+                await self.messenger.register_player(handle)
+            except DrillFull:
+                return [FULL_CALL]
+            except (PhoneConflict, ValueError, PhotonError) as e:
+                log.warning("couldn't add caller %s: %s", handle, e)
+                return [BUSY]
+            self.store.kv_set(f"joined:{handle}", "1")  # placed again after a reset, like a player who texted
+            self.store.kv_set(f"voiced:{handle}", "1")  # the agent's first words were the notice (INBOUND)
+            await self.locator.join_now(self.store.phone(handle=handle))  # where, when, then the plan's question
+            log.info("caller %s joined by voice", handle)
+            joined = True
+            if GREETING.match(text) or ("join" in text.lower() and not _answers(text)):
+                text = ""  # a greeting/join request is answered by the introduction; keep any supplied needs
         sim = _similar(text, s.last_said) if text and s.last_said else 0.0
         if sim >= ECHO_EXACT or (sim >= ECHO_SIMILAR and not _answers(text)):
             log.info("call %s: ignored our own echo %r", handle, text[:60])
             return None  # say nothing
-        intro = (WHO_WE_ARE if SCREENING.search(text) and s.screened < 2 else f"{OPENER}." if s.turns == 1
+        greeted = bool(s.outbox) and s.outbox[0].startswith((DISCLOSURE, HI))  # an opening ElevenLabs didn't say
+        intro = (WHO_WE_ARE if SCREENING.search(text) and s.screened < 2 else HI if s.turns == 1 and not greeted
                  and s.reason != "inbound" and (GREETING.match(text) or AGAIN.match(text)) else None)
         if intro:  # who we are, then the one thing we need from them
             s.screened += 1
@@ -229,21 +310,35 @@ class Voice:
             s.outbox.insert(0, s.last_said)
         elif text and CLOSING.match(text):
             s.outbox.append(("You're welcome. " if "thank" in text.lower() else "Great. ") + BYE)
-            s.promised = True
         elif text:
-            await self.messenger.phone_inbound(handle, text)
+            if revision:
+                self.messenger.revising.add(handle)
+            try:
+                await self.messenger.phone_inbound(handle, text)
+            finally:
+                self.messenger.revising.discard(handle)
+            if joined:
+                hid = self._household_id(handle)
+                household = next((h for h in self.store.households() if h["household_id"] == hid), {})
+                if isinstance(household.get("needs"), dict):
+                    # The first answer already supplied the details: don't ask the onboarding question again.
+                    s.outbox = [t.replace(ASK_NEEDS, "").strip() for t in s.outbox if t.strip() != ASK_NEEDS]
             if PANIC.search(text) and not s.calmed:
                 s.outbox.insert(0, CALM)
                 s.calmed = True
         elif not s.outbox:  # the call started with no first words from them: say where things stand
             await self.say_situation(handle)
         out, s.outbox = s.outbox, []
-        if not s.promised and any("Step " in t for t in out):  # they have something to do: it's coming in writing
-            out.append(PROMISE)
-            s.promised = True
         s.last = time.monotonic()
         s.last_said = render_all(out) or s.last_said
         return out
+
+    def requeue(self, handle: str, texts: list[str], arrived: float) -> None:
+        """They talked over a reply (ElevenLabs cancelled it): say it on the next turn, unless a newer turn already
+        arrived (a repeat or a revision gets its own reply, so this one would be said twice)."""
+        s = self.sessions.get(handle)
+        if s is not None and s.arrived <= arrived:
+            s.outbox[:0] = texts
 
     async def say_situation(self, handle: str, lead: str = "", brief: bool = False) -> None:
         """What the thread would say right now: said on the call while one is live (captured), else texted."""
@@ -259,48 +354,49 @@ class Voice:
 
     # ---------- outbound calls ----------
     def hello(self, handle: str, reason: str) -> str:
-        """Who is calling and why, in one sentence."""
+        """Who is calling: the simulation notice on a phone's first call (D100), "Hi, it's EMBER." after that. First
+        contact adds where they live and when the water comes."""
+        parts = [HI if self.store.kv_get(f"voiced:{handle}") else DISCLOSURE]
         hid = self._household_id(handle)
-        h = next((x for x in self.store.households() if x["household_id"] == hid), {})
-        needs = h["needs"] if isinstance(h.get("needs"), dict) else {}
-        if reason == "mobility" and not (needs.get("mobility") or needs.get("accessible_vehicle")):
-            reason = "medical"
-        thread = {"household_id": hid}
-        why = WHY.get(reason, WHY["console"])
-        if reason == "no_reply":  # only called with a deadline
-            why = why.format(mins=max(1, round((self.outbound.water_s(thread) - self._t_s()) / 60)))
-        elif reason == "pickup_changed":  # a confirmed pickup's update says why itself; a new offer says it here
-            view = self.store.plan_view() or {}
-            a = self.outbound.instruction_for(view, thread, exclude=self.outbound.rejected(thread_key(thread)))
-            if a is not None and not self.outbound.confirmed(a):
-                why = WHY["new_offer"].format(why=self.outbound.news(view["version"], thread))
-        return f"{OPENER}, {why}."
+        if reason == "first_contact" and hid is not None and self.outbound is not None:
+            parts.append(self.outbound.where_when({"household_id": hid}))
+        elif reason == "undelivered":
+            parts.append(UNDELIVERED)
+        return " ".join(p for p in parts if p)
 
     async def say_next(self, handle: str, reason: str) -> None:
-        """The one thing the thread most needs them to hear now (a call says one thing at a time): their pickup as it
-        is now, if it changed, else the step they're on, the offer or where they stand, else our question."""
-        phone = self.store.phone(handle=handle)
-        thread = phone_thread(self.store, phone) if phone else None
-        view = self.store.plan_view()  # the simulated ETAs, the same ones the texts and "what changed?" say
-        a = None
-        if reason == "pickup_changed" and thread is not None and view:
-            a = self.outbound.instruction_for(view, thread, exclude=self.outbound.rejected(thread_key(thread)))
-        if a is not None:  # "Update: Callender Street was reported blocked, so Van 2 is now arriving in about 40 min." / the new offer
-            await self.messenger.send_message(thread, self.outbound.compose(a, thread, self._t_s(), view["version"]),
-                                              view["version"], a["id"])
-        else:
-            await self.say_situation(handle, brief=True)
+        """The one thing they most need to hear now (a call says one thing at a time): the step they're on, else
+        where they stand, else our question."""
+        await self.say_situation(handle, brief=True)
 
     async def opening(self, handle: str, reason: str) -> str:
-        """A call's first words: who and why in one sentence, then the one thing they most need to hear."""
+        """A call's first words: who is calling, then the one thing they most need to hear."""
         s = self.open(handle, reason=reason)
+        if not s.dialed:
+            s.reason = reason
+            if reason in ("first_contact", "instruction", "pickup_changed", "soon") and (
+                    s.started_t_s != self._t_s() or s.plan_version != self.store.meta().get("plan_version")):
+                # A busy line can outlast a pickup estimate or a whole plan. Say the current step, once.
+                s.outbox = []
         if not s.outbox:
             await self.say_next(handle, reason)
-        return f"{self.hello(handle, reason)} {render_all(s.outbox)}".strip()
+        return render_all([self.hello(handle, reason), *s.outbox])
 
     async def call(self, handle: str, reason: str = "console") -> dict:
         """Dial a registered phone through ElevenLabs (Photon number). Returns ElevenLabs' answer
         (conversation_id, sip_call_id) and the opening, or raises."""
+        handle = normalize_handle(handle)
+        if handle in self.sessions and self.sessions[handle].dialed and self.live(handle) is None:
+            # A failed follow-up may itself request a callback: finish it before taking the dial lock.
+            await self.hang_up(handle)
+        async with self._dial_lock:
+            s = self.live(handle)
+            if s is not None and s.dialed:
+                return {"handle": handle, "reason": s.reason, "conversation_id": s.conversation_id,
+                        "sip_call_id": None, "opening": s.last_said}
+            return await self._dial(handle, reason)
+
+    async def _dial(self, handle: str, reason: str) -> dict:
         if not self.configured():
             raise RuntimeError("ELEVENLABS_API_KEY / ELEVENLABS_AGENT_ID / ELEVENLABS_PHONE_NUMBER_ID missing in residents/.env")
         st = self.settings
@@ -309,6 +405,7 @@ class Voice:
             raise ValueError(f"{handle} is not a registered phone")
         first = await self.opening(handle, reason)
         s = self.sessions[handle]
+        opening_messages = len(s.outbox)
         body = {"agent_id": st.elevenlabs_agent_id, "agent_phone_number_id": st.elevenlabs_phone_number_id,
                 "to_number": handle,
                 "conversation_initiation_client_data": {
@@ -326,34 +423,69 @@ class Voice:
             self.end(handle, reason="dial failed")
             raise RuntimeError(f"ElevenLabs outbound call failed ({r.status_code}): {res}")
         if said:
-            s.outbox = []
+            del s.outbox[:opening_messages]  # news captured while the provider was dialing still needs to be said
             s.last_said = first
+        else:
+            s.outbox.insert(0, self.hello(handle, reason))
         s.conversation_id = res.get("conversation_id") or s.conversation_id
+        s.dialed, s.last = True, time.monotonic()
+        self.store.kv_set(f"voiced:{handle}", "1")
         log.info("calling %s (%s): %s", handle, reason, res.get("conversation_id"))
         return {"handle": handle, "reason": reason, "conversation_id": res.get("conversation_id"),
                 "sip_call_id": res.get("sip_call_id"), "opening": first}
 
-    # ---------- proactive calls (D80) ----------
+    # ---------- when EMBER calls (D100) ----------
+    def ring(self, handle: str, reason: str) -> Session | None:
+        """Queue a call for one of the moments that matter: first contact, the pickup, a changed pickup, "2 minutes
+        away". Until it's dialed (`check`: a free line, earliest deadline first), what the thread would text this
+        phone waits in the call's outbox and is said when they pick up. A call already on or queued takes it; someone
+        texting us right now gets the answer by text."""
+        if not self.calls_first(handle):
+            return None
+        s = self.live(handle)
+        if s is None and handle in self.messenger.texting:
+            return None  # they're texting us right now: the answer goes back by text
+        if s is None:
+            s = self.open(handle, reason=reason)
+            hid = self._household_id(handle)
+            h = next((x for x in self.store.households() if x["household_id"] == hid), {})
+            s.deadline = math.inf if h.get("deadline_s") is None else float(h["deadline_s"])
+        return s
+
     async def check(self, *_) -> list[dict]:
-        """Plan and clock hook: call whoever needs it most, earliest deadline first, within the concurrency cap."""
+        """Plan / clock hook and the poll: notice calls that are over, re-ring unanswered ones whose retry is due, and
+        dial queued calls earliest deadline first within VOICE_MAX_CONCURRENT."""
+        async with self._check_lock:
+            return await self._check()
+
+    async def _check(self) -> list[dict]:
         if not self.configured():
             return []
         await self.reap()
-        free = self.settings.voice_max_concurrent - self._live_count()
-        now = self._t_s()
-        due = sorted(d for p in self.store.phones() if (d := self._due(p, now)))
+        now, wall = self._t_s(), time.time()
+        for key, raw in self.store.kv_prefix("retry:").items():
+            handle, r = key.removeprefix("retry:"), json.loads(raw)
+            if self.live(handle) is not None:
+                self.store.kv_delete(key)  # they're on a call (or one is queued) already
+            elif now - r["t_s"] >= RETRY_S or wall - r["wall"] >= RETRY_WALL_S:
+                self.store.kv_delete(key)
+                if (s := self.ring(handle, r["reason"])) is not None:
+                    s.attempt = 2
         placed = []
-        for _, handle, reason in due[:max(free, 0)]:
-            self.store.kv_set(f"call:{handle}:{reason}", str(now))  # a failed dial isn't retried every tick either
+        queued = sorted((s for s in self.sessions.values() if not s.dialed and s.reason != "inbound"),  # (the console's
+                        key=lambda s: s.deadline)                                                      # capture: not a call)
+        for s in queued[:max(self.settings.voice_max_concurrent - self._live_count(), 0)]:
             try:
-                placed.append(await self.call(handle, reason))
+                placed.append(await self.call(s.handle, s.reason))
             except (RuntimeError, ValueError, httpx.HTTPError) as e:
-                log.warning("proactive call to %s (%s) failed: %s", handle, reason, e)
+                log.warning("call to %s (%s) failed: %s; texting instead", s.handle, s.reason, e)
+                self.end(s.handle, reason="dial failed")
+                await self.say_situation(s.handle)
         return placed
 
     async def undelivered(self, handle: str, text: str) -> dict | None:
-        """D90: a text Photon refused after its retries is said on a call instead (Messenger tells us). Same rules
-        as D80: a resident's real number, no call already on, VOICE_MAX_CONCURRENT, COOLDOWN_S per (phone, reason)."""
+        """D90: a text Photon refused after its retries is said on a call instead (Messenger tells us): a resident's real
+        number, no call already on, VOICE_MAX_CONCURRENT, one call per phone per COOLDOWN_S."""
         if not self.configured() or not handle.startswith("+") or self.live(handle) is not None:
             return None
         phone = self.store.phone(handle=handle)
@@ -375,47 +507,13 @@ class Voice:
             return None
 
     def _live_count(self) -> int:
-        return sum(1 for h in list(self.sessions) if self.live(h))
-
-    def _due(self, phone: dict, now: float) -> tuple[float, str, str] | None:
-        """(deadline, handle, reason) when this resident should get a call now, else None."""
-        handle = phone["handle"]
-        thread = phone_thread(self.store, phone)
-        if phone["role"] != "resident" or not handle.startswith("+") or thread is None or self.live(handle):
-            return None
-        h = next((x for x in self.store.households() if x["household_id"] == thread["household_id"]), None)
-        if h is None or h["status"] in ("picked_up", "safe"):
-            return None
-        key = thread_key(thread)
-        msgs = self.store.thread_messages(key)
-        ins = [i for i, m in enumerate(msgs) if m["direction"] == "in"]
-        last_in = msgs[ins[-1]]["t_s"] if ins else None
-        # since when we've been waiting: our first message after their last one
-        waiting = next((m["t_s"] for m in msgs[ins[-1] + 1 if ins else 0:] if m["direction"] == "out"), None)
-        if (last_in is None and not Messenger.opted_in(phone)) or (last_in is not None and now - last_in < QUIET_S):
-            return None  # they never wrote to us (no call out of the blue), or they're writing right now
-        view = self.store.plan_view() or {}
-        a = self.outbound.instruction_for(view, thread, exclude=self.outbound.rejected(key))
-        offered = a is not None and not self.outbound.confirmed(a)
-        asked = any(q["to"] == thread and self.store.kv_get(f"asked:{q['id']}") for q in view.get("info_requests", []))
-        stepping = self.outbound.guide is not None and self.outbound.guide.awaiting_done(thread)
-        changed = json.loads(self.store.kv_get(f"instr:{key}") or "{}").get("changed_t_s")
-        called = max((float(v) for v in self.store.kv_prefix(f"call:{handle}:").values()), default=None)
-        needs = h["needs"] if isinstance(h.get("needs"), dict) else {}
-        deadline = h.get("deadline_s")
-        for reason, hit in (  # a change and a wait get one call each; a need not yet confirmed, one per cooldown
-                ("pickup_changed", changed is not None and now - changed <= CHANGED_S
-                 and (last_in is None or last_in < changed) and (called is None or called < changed)),
-                ("mobility", offered and any(needs.get(k) for k in ("mobility", "accessible_vehicle", "medical"))),
-                ("no_reply", (offered or asked or stepping) and deadline is not None and deadline - now <= NEAR_S
-                 and waiting is not None and now - waiting >= NO_REPLY_S and (called is None or called < waiting))):
-            last_call = self.store.kv_get(f"call:{handle}:{reason}")
-            if hit and (last_call is None or now - float(last_call) >= COOLDOWN_S):
-                return (math.inf if deadline is None else deadline), handle, reason
-        return None
+        return sum(1 for h in list(self.sessions) if (s := self.live(h)) is not None and s.dialed)
 
     async def reap(self) -> None:
-        """Calls ElevenLabs says are over end here, each with its follow-up text."""
+        """Calls ElevenLabs says are over end here, each with its follow-up (a text, or a retry)."""
+        for handle, s in list(self.sessions.items()):
+            if s.dialed and time.monotonic() - s.last > SESSION_IDLE_S:
+                await self.hang_up(handle)
         if time.monotonic() - self._reaped < REAP_EVERY_S:
             return
         self._reaped = time.monotonic()
@@ -434,8 +532,12 @@ class Voice:
     def calls_view(self) -> dict:
         """GET /calls: the calls in progress, and the finished ones newest first."""
         live = [{"handle": h, "household_id": self._household_id(h), "reason": s.reason, "started_t_s": s.started_t_s,
-                 "turns": s.turns} for h, s in list(self.sessions.items()) if self.live(h)]
+                 "turns": s.turns} for h, s in list(self.sessions.items()) if self.live(h) and s.dialed]
         return {"live": live, "recent": self.recent[::-1][:20]}
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9']+", (text or "").lower())
 
 
 def _similar(a: str, b: str) -> float:
@@ -482,13 +584,14 @@ def create_voice_app(get_voice, token: str) -> FastAPI:
         system = " ".join(_content(m) for m in msgs if m.get("role") == "system")
         said = next((_content(m) for m in reversed(msgs) if m.get("role") == "user"), "")
         handle, conv = voice.identify(system)
+        arrived = time.monotonic()
         cid = f"chatcmpl-{secrets.token_hex(6)}"
         if handle is None:
             log.error("voice turn without a caller id; is the agent's system prompt set? (%r)", system[:120])
             reply_now = "Sorry, I can't tell which phone this is. Please call again later."
             task = None
         else:
-            task = asyncio.create_task(voice.turn(handle, conv, said))
+            task = asyncio.create_task(voice.turn(handle, conv, said, arrived))
             reply_now = None
 
         async def answer() -> str:
@@ -518,10 +621,8 @@ def create_voice_app(get_voice, token: str) -> FastAPI:
                 yield _chunk(cid, {}, "stop")
                 yield "data: [DONE]\n\n"
             except (asyncio.CancelledError, GeneratorExit):
-                if texts and handle:  # they talked over us: say it on the next turn
-                    s = voice.sessions.get(handle)
-                    if s is not None:
-                        s.outbox[:0] = texts
+                if texts and handle:  # they talked over us: say it on the next turn (unless a newer turn answers it)
+                    voice.requeue(handle, texts, arrived)
                 raise
 
         return StreamingResponse(stream(), media_type="text/event-stream")
@@ -529,7 +630,7 @@ def create_voice_app(get_voice, token: str) -> FastAPI:
     return app
 
 
-__all__ = ["Voice", "create_voice_app", "render", "SYSTEM_PROMPT", "OPENER"]
+__all__ = ["Voice", "create_voice_app", "render", "SYSTEM_PROMPT", "DISCLOSURE", "HI"]
 
 
 # ---------- ElevenLabs agent settings (the tunnel URL changes every run) ----------

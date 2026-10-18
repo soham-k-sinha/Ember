@@ -26,23 +26,25 @@ HTTP/WS on :8000 so the web map can watch), starts the run from scratch (`--keep
 own DB `residents/drill.db`, log `residents/drill.log`), registers the phones and prints every text in and out.
 It refuses to start while another EMBER backend with Photon on is running (both would answer every text).
 
-What happens, all by text:
-1. **Text HI** to the number the console prints (Photon only lets EMBER reply after you text first).
+What happens (a phone that texts us is answered by text; calls: next section):
+1. **Text HI** to the number the console prints (Photon only lets EMBER reply after you text first). The first text
+   you get starts with the one-line notice "EMBER flood simulation, live demo, not a real emergency." (D100); nothing
+   after it says "drill".
 2. EMBER asks **where you are**. Reply with an address ("125 Western Ave"), an intersection ("Putnam Ave and
    Western Ave"), a landmark, or a maps link / coordinates. It's placed on the engine's map: coordinates →
    street intersection in town.json → OSM Nominatim (bounded to the town). The nearest building nobody else has
    becomes your household; you're told your pickup corner and when the water reaches your street (or that it
    doesn't: then the plan says shelter in place). The console lists flood-zone corners to try.
-3. The **plan asks** its question ("How many people are with you, and does anyone need a wheelchair-accessible
-   vehicle?"). Answer in your own words; it replans and **offers** a vehicle: who, where, when, drop-off, and
-   how long you have.
-4. Reply **YES**. From then on one text per step, each computed from the plan's simulation (never the LLM):
-   *Step 1* get ready and walk to the pickup corner (distance, direction, minutes on foot), or stay inside if
-   someone needs help to walk (the crew comes to the door) → *Step 2* the vehicle is at the corner, board →
-   *Step 3* on the way to the drop-off → *Step 4* checked in. Reply **DONE** after each ("we're at the corner"
-   works too). Operators get the generator version: meet the crew → connecting → powered.
-5. **The clock moves one step at a time:** when everyone EMBER is waiting on has replied DONE, the sim clock
-   jumps to the next event (the vehicle arriving, the pickup, the drop-off). `--manual-clock` turns that off.
+3. EMBER asks **one question** ("How many people are with you, and is anyone hurt, in a wheelchair, or in need of
+   oxygen or medication?"). Answer in your own words; it replans and sends **the instruction**, never an offer to
+   accept: who, when, what to bring, where to be ("Accessible Van 3 is coming to your door in about 3 min. Be ready at
+   the door with medications, ID, your phone and the wheelchair."). Nobody says YES: silence means we proceed (the
+   assignment is `confirmed` once it reaches you); only a NO or a new fact changes it.
+4. Every later step goes out **by itself, on the plan's clock**, each computed from the plan's simulation (never the
+   LLM): "2 minutes away, come to the door / corner now" → "outside now" → "on board, on your way" → "checked in at the
+   shelter". Nothing waits for a DONE; "done" / "yes" are understood ("Thanks. Van 2 gets to you in about 6 min.") and
+   never move anything on. Operators get the generator version: meet the crew → connecting → powered.
+5. **The clock** moves with `next` (to the next step anyone has), `+10`, or the web's playback.
 
 Ask anything; every question is answered from the plan (D60): "what's the plan?" / "what do I do?" (where you
 stand, the step you're on, what we still need from you), "how long?", "where do we go?", "are there other vans?",
@@ -63,14 +65,16 @@ Claude Sonnet 5.5 reads each text or spoken turn with the conversation so far an
 yes/no, done, questions); the planner and the guide compute everything that follows, exactly as before. The person
 then gets **one** reply per turn, written by Claude Haiku 5.5 from those computed messages ("I'm sorry about your leg.
 Accessible Van 3 will pick you up at your door in about 3 min…"). A guard sends the computed messages instead if the
-reply mentions any number, vehicle, place or street they don't, drops a YES/DONE ask or a question, or makes a safety
-claim. `REPLY_ENABLED=0` turns the rewriting off.
+reply mentions any number, vehicle, place or street they don't, drops a question, adds an ask for a yes or a done,
+makes a safety claim or sounds official ("official", "emergency alert", police, FEMA). `REPLY_ENABLED=0` turns the
+rewriting off.
 
-## Calls: the same conversation by phone (D74)
-ElevenLabs runs the call on the Photon SMS number (speech, voice, turn-taking); **EMBER's backend is the agent's
-Custom LLM**, so the call says exactly what the thread would text (`residents/speech.py` makes it sound right:
-"Say yes", "Avenue", "9 1 1"). What the caller says goes through the same path as a text; the call and the texts are
-one thread.
+## Calls first (D74, D100)
+In a disaster people answer a ringing phone, not a text, so the moments that matter are calls and texts are the written
+follow-up. ElevenLabs runs the call on the Photon voice number (speech, voice, turn-taking); **EMBER's backend is the
+agent's Custom LLM**, so the call says exactly what the thread would text, at most two short sentences a turn
+(`residents/speech.py` drops what only makes sense on a screen and makes it sound right: "Avenue", "9 1 1"). What the
+caller says goes through the same path as a text; the call and the texts are one thread.
 
 One-time: Photon number → ElevenLabs (inbound + outbound) as in Photon's voice guide, then in `residents/.env`:
 `PHOTON_VOICE_NUMBER`, `ELEVENLABS_API_KEY`, `ELEVENLABS_AGENT_ID`, `ELEVENLABS_PHONE_NUMBER_ID` (see `.env.example`).
@@ -86,15 +90,35 @@ public, behind a random path), and points the ElevenLabs agent at it (Custom LLM
 the caller). It prints what to paste if it can't. Give the new tunnel about a minute before the first call.
 Console: `call r1`, `calls`. API: `POST /calls {handle}`, `GET /calls`.
 
-**EMBER calls first (D80).** On every new plan and clock move EMBER calls the most at-risk residents itself (they
-wrote to us, a real number, no call on), earliest deadline first, at most `VOICE_MAX_CONCURRENT` (2; 0 = never) at
-once: no reply for 3 sim-min to an open offer, step or question while their deadline is within 45 min; a wheelchair or
-medical need not yet confirmed; a pickup that changed since they last wrote. One call per wait and per change, and a
-15 sim-min cooldown per (phone, reason). A call opens with who and why in one sentence, then the one thing they need
-to hear; when ElevenLabs reports it over, the plan follows by text. `GET /calls` →
-`{live: [{handle, household_id, reason, started_t_s, turns}], recent: [{handle, household_id, reason, outcome, turns,
-ended_t_s}]}`. Six calls end to end without ElevenLabs or an LLM: `uv run python scripts/sim_calls.py`
-(`--out ../docs/voice_transcripts.md`).
+**When EMBER calls (D100, replacing D80's "no reply" calls; never a call just to get a yes):**
+- **first contact:** a player who joins (`POST /join` + "JOIN EMBER") is called right away (the text says "We're
+  calling you now."): "This is EMBER, an automated assistant in a live flood simulation. The river reaches the corner of
+  Ballord Place and Putnam Avenue in about 150 minutes. How many people are with you, and is anyone hurt, in a
+  wheelchair, or in need of oxygen or medication?" Their spoken answer drives the plan; the instruction is said back on
+  the call. That notice is said once per phone per run; later calls open "Hi, it's EMBER.";
+- **the pickup instruction**, **a pickup that changed** (with why), and **"2 minutes away, come to the door now"**.
+
+Each of those queues a call; at most `VOICE_MAX_CONCURRENT` (3; 0 = everything by text) at once, the rest wait earliest
+flood deadline first, and what EMBER would text them meanwhile is said when they pick up. Someone texting us right now
+gets the answer by text. Answered: one short text follows with the instruction in writing ("From our call: …"). Not
+answered: one retry after 2 sim-min (or 60 s on the wall clock if the clock is paused), then the same news by text;
+time-critical news ("2 minutes away") by text at once. `VOICE_POLL_S` (5 s) checks for ended calls, due retries and
+queued calls even while the clock is paused.
+
+**Anyone can call the number:** an unknown caller becomes the next player (placed on a flood-zone house exactly like
+`/join`, same `MAX_PLAYERS` cap; "The flood simulation is full" when it is) and hears where they live, when the water
+comes and the one question, with no texting needed.
+
+**Re-sent and revised turns (seen live 2026-10-18):** ElevenLabs re-posts a turn while its speech-to-text revises it
+("I'm done." ×3; "A walker." → "A walker. I need my needle."). Per call: the same words again within 20 s get the same
+reply without being processed again; words that extend or mostly repeat the last turn within 10 s replace it (its
+facts count, a yes / no in it doesn't count twice); turns are handled one at a time. Nothing moves a step on except
+the plan's clock, so a re-sent "done" can't skip one.
+
+`GET /calls` → `{live: [{handle, household_id, reason, started_t_s, turns}], recent: [{handle, household_id, reason,
+outcome, turns, ended_t_s}]}`. The whole thing without ElevenLabs, Photon or an LLM (three players called at once,
+a caller who joins by voice, the live re-sent turns, a busy person, a missed call → retry → text):
+`uv run python scripts/sim_calls.py` (`--out ../docs/voice_transcripts.md`).
 
 ## API (so far)
 | | |
@@ -107,17 +131,17 @@ ended_t_s}]}`. Six calls end to end without ElevenLabs or an LLM: `uv run python
 | `POST /disruption` | judge's map controls: `{"close_edges": [edge ids]}` (reverse direction closed too) or `{"facility_id", "set": {...}}` → report → replan |
 | `POST /replan` | replan now (no new fact) |
 | `POST /optimize?seeds=50&k=4` → 202 (seeds 1..2000, k 1..8) | robust fan-out (top-k candidates × perturbed worlds + baseline; Daytona if engine/.env has a key, else local processes). Streams WS `scatter_point`, then `plan`. Runs outside the planner lock on its own engine session + World (clock / texts / replans keep flowing); if a replan lands meanwhile the result is discarded as superseded. 409 while running; `GET /optimize` = `{running, last}` |
-| `POST /join {handle}` | multiplayer (D89): register a phone (E.164) as a drill player on the shared iMessage line → `{handle, player, assigned_number, dev, household_id, texted, note}`; its first text to `assigned_number` places it. Idempotent; 409 when every seat is taken (`MAX_PLAYERS`, team phones count) or for a team phone; 422 for a non-phone |
+| `POST /join {handle}` | multiplayer (D89): register a phone (E.164) as a player on the shared iMessage line → `{handle, player, assigned_number, dev, household_id, texted, note}`; its first text to `assigned_number` places it and EMBER calls it (D100). Idempotent; 409 when every seat is taken (`MAX_PLAYERS`, team phones count) or for a team phone; 422 for a non-phone |
 | `POST /simulate {planner: ember\|baseline}` | projected metrics over the horizon for the current plan or the incident-by-incident baseline, with every report known by the clock |
 | `POST /ask {role, household_id?, facility_id?, question?}` | prompt a specific household/facility. A role alone works with at most one active registration of that role; multiple matches → 422. Returns delivery status, assigned_number and action_needed; blocked sends do not consume the plan's question. |
 | `POST /clock {t_s}` | move the sim clock (play / scrub); broadcasts `state` |
 | `GET /comparison?seeds=5` | baseline vs EMBER on paired perturbations (`comparison.schema.json`), cached per plan version (~3 s first call) |
 | `GET /playback?which=ember\|baseline` | the current plan or the baseline on the same reports, simulated over the whole horizon (`playback.schema.json`) for the map's replay; cached per plan version and report count (~4 s first call) |
-| `POST /assignments/{id}/confirm`, `/reject` `{plan_version?}` | the person accepts / declines an offer (texts "yes"/"no" take the same path). Reject → replan; that vehicle is never re-offered to them. 409 if `plan_version` is older and the assignment changed since (stale) |
+| `POST /assignments/{id}/confirm`, `/reject` `{plan_version?}` | confirm / decline an assignment (an instruction that reached the person is already confirmed, D100; a text or spoken "no" takes the same path). Reject → replan; that vehicle is never re-offered to them. 409 if `plan_version` is older and the assignment changed since (stale) |
 | `GET /phones`, `POST /phones {role, handle, household_id?, facility_id?}` | one phone per household/facility, many residents/operators. Residents specify household_id, operators facility_id. Omission uses the original judge/hospital default. Occupied target or a phone bound elsewhere → 409; never silently replaces a registration. Returns thread, assigned_number, opted_in and action_needed. `locate: true` (resident, no household_id): the phone gets a household when it texts where it is (D56). Each item also has `household_id` and `player` (join order of drill players, else null). |
-| `POST /messages {thread, text, plan_version?, assignment_id?}` | send on a thread (gets the `[EMBER drill]` prefix); returns `delivery`: `sent` / `failed` / `not_opted_in` / `no_phone` / `dev` |
+| `POST /messages {thread, text, plan_version?, assignment_id?}` | send on a thread as written (a phone's first text in a run gets the one-line simulation notice); returns `delivery`: `sent` / `failed` / `not_opted_in` / `no_phone` / `dev` |
 | `GET /questions?open_only=` | questions the plan couldn't answer (D60): `{report_id, thread, handle, text, t_s, answer}`; each person already got their situation |
-| `POST /questions/{report_id}/answer {text}` | a coordinator's reply, texted on that thread as written (drill prefix); marks it answered. 404 if not in this run |
+| `POST /questions/{report_id}/answer {text}` | a coordinator's reply, texted on that thread as written; marks it answered. 404 if not in this run |
 | `POST /dev/reset` | reseed from `SEED_STATE` and broadcast `state` (rehearsals; `DEV_ENDPOINTS=0` hides it) |
 | `POST /dev/inbound {role, text, household_id?, facility_id?, handle?}` | inject a message into a specific thread (or as a registered phone, `handle`, also before it has a household); role-only is rejected if ambiguous. Does not opt a real phone in. With Photon enabled, replies can still go to real phones. |
 
@@ -133,7 +157,7 @@ one household, D55) and Player N (join order), and the answer is `{assigned_numb
 `sms:<assigned_number>?&body=JOIN%20EMBER` (iMessage on an iPhone). That first text (any text) places the phone on a
 free building in the forecast flood that we choose, and the plan asks its own question; a burst of joins shares one
 replan. Idempotent per phone. Every Photon assignment holds one of `MAX_PLAYERS` seats (25, Photon's free plan; team
-phones count), so a full drill is a 409 "drill is full", never Photon's refusal; a player who hasn't texted 10 min after
+phones count), so a full run is a 409 "drill is full", never Photon's refusal; a player who hasn't texted 10 min after
 `/join` (wall clock) is released (Photon `DELETE` of the assignment) to make room (D92). The answer's `note` says it's
 iPhone (iMessage) only: an Android scan texts by SMS, which never reaches the line. Texts from
 phones that never registered are ignored. With Photon off, `/join` returns a dev line and `/dev/inbound` with that
@@ -190,10 +214,9 @@ For a clean two-person rehearsal:
 2. `ember_post /clock '{"t_s":300}'`; leave dashboard playback paused.
 3. Tester A texts **“2 of us, one uses a wheelchair”**; tester B texts **“3 of us need pickup”**.
 4. Inspect `ember_get /state`: each inbound message and need report must carry the correct household ID.
-5. Each tester replies **YES** to their own offer. Inspect `/state` for the confirmation reports and
-   `/plan/{version}` for the stored `confirmed` assignments. `/plan/current` shows simulation progress,
-   so an accepted assignment can appear `en_route` there. Confirmations must target their respective
-   households. A repeated fact should not create another plan; a new fact should.
+5. Each tester gets their own instruction (no YES needed, D100). Inspect `/plan/{version}` for the stored `confirmed`
+   assignments (confirmed once the instruction reached them). `/plan/current` shows simulation progress, so an
+   assignment can appear `en_route` there. A repeated fact should not create another plan; a new fact should.
 6. An unrelated household can also receive a changed instruction, because everyone shares one plan.
 
 To inject sample texts instead of receiving them through Photon:
@@ -229,7 +252,7 @@ uv run --project ../engine ember validate-state /tmp/state.json --scenario ../co
 Live accuracy: `uv run python scripts/eval_extract.py` on `tests/samples.json` (20 messages; last run 20/20, median 1.9 s). Unit tests use a fake model and never call the API.
 
 ## Outbound instructions
-After every plan version (`residents/outbound.py`), each opted-in phone thread is compared with the last instruction actually texted to it: a text goes out only if a vehicle is newly assigned / replaced, is no longer coming, or the ETA moved ≥ 10 min. Fixed templates over computed fields, `[EMBER drill]` prefix, `plan_version` + `assignment_id` on every message; the assignment becomes `offered` (WS `assignment` with `change: status_changed`). The plan's `info_requests` for a phone thread are asked once each (e.g. right after the tester's first "hi").
+After every plan version (`residents/outbound.py`), each opted-in phone thread is compared with the last instruction actually texted to it: a text goes out only if a vehicle is newly assigned / replaced, is no longer coming, or the ETA moved ≥ 10 min. Fixed templates over computed fields stated as instructions (no "Reply YES"), the one-line simulation notice on a phone's first text only, `plan_version` + `assignment_id` on every message; once delivered the assignment becomes `confirmed` (WS `assignment` with `change: status_changed`; D100). The plan's `info_requests` for a phone thread are asked once each (e.g. right after the tester's first "hi").
 
 ## Robustness
 - Inbound texts are processed one at a time end to end (the next text sees the previous one's needs and plan); Photon deliveries are deduped by message id across socket, redelivery and polling.

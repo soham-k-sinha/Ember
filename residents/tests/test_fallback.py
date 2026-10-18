@@ -3,6 +3,7 @@
 import pytest
 
 from residents import fallback
+from residents.outbound import ASK_NEEDS
 from tests.helpers import PUTNAM, R1, Tap, register, text, thread_of
 
 
@@ -69,11 +70,11 @@ def test_a_whole_drill_by_text_without_the_llm(drill):
     text(c, R1, PUTNAM)
     assert thread_of(c, R1) is not None, tap.outs(R1)                       # placed from the text itself
     text(c, R1, "2 of us")
-    assert " will pick you up at " in tap.outs(R1)[-1], tap.outs(R1)[-1]   # the offer
+    assert " picks you up in about " in tap.outs(R1)[-1], tap.outs(R1)[-1]   # the instruction, no ask
     text(c, R1, "yes")
-    assert "Step 1 of 4" in tap.outs(R1)[-1]
+    assert tap.outs(R1)[-1].startswith("Thanks. ") and " gets to you in about " in tap.outs(R1)[-1]
     text(c, R1, "what's the plan?")
-    assert "Right now: Step 1 of 4" in tap.outs(R1)[-1]
+    assert " picks you up in about " in tap.outs(R1)[-1]
     text(c, R1, "asdf qwerty")
     text(c, R1, "zxcv")
     a, b = tap.outs(R1)[-2:]
@@ -88,5 +89,5 @@ def test_unreadable_before_details_repeats_the_plans_question(drill):
     register(c)
     text(c, R1, PUTNAM)
     text(c, R1, "mmm")
-    assert tap.outs(R1)[-1] == "Sorry, I didn't catch that. How many people are with you, and does anyone need a wheelchair-accessible vehicle?"
+    assert tap.outs(R1)[-1] == f"Sorry, I didn't catch that. {ASK_NEEDS}"
 

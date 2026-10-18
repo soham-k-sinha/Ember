@@ -492,7 +492,7 @@
   {
    "id": "ems14",
    "type": "response_base",
-   "name": "Boston EMS Station 14 (drill staging)",
+   "name": "Boston EMS Station 14 (staging)",
    "asset_id": 5,
    "capacity_people": 40,
    "consequence": "Vans, crew and fuel stage here; overflow drop-off if the shelter is cut off."
@@ -500,7 +500,7 @@
   {
    "id": "treehouse-shelter",
    "type": "shelter",
-   "name": "David Rubenstein Treehouse (drill shelter)",
+   "name": "David Rubenstein Treehouse",
    "node": 382400901,
    "synthetic": true,
    "capacity_people": 200,

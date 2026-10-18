@@ -3,12 +3,16 @@ instruction materially changed, and ask the plan's info_requests for phone threa
 
 The plan's `changes` list is per assignment and mostly ETA noise; what a person cares about is "who is
 coming and roughly when". So per phone thread we compare the instruction in the new plan with the last
-one we actually texted (kv `instr:<thread>`, with when it last changed: D80 calls about it), and send when:
+one we actually texted (kv `instr:<thread>`, with why it last changed: "what changed?"), and send when:
 - a vehicle is newly assigned, or a different vehicle/assignment replaces the one we told them about;
 - their pickup / generator is no longer coming (cancelled);
 - the ETA moved by ≥ MATERIAL_ETA_S.
-Texts are fixed templates over computed fields; every one carries plan_version and assignment_id, and
-the assignment becomes `offered` until the recipient confirms (Task 5).
+Texts are fixed templates over computed fields; every one carries plan_version and assignment_id.
+
+Proactive (D100): an offer is stated as the instruction ("Accessible Van 3 is coming to your door in about 3 min. Be
+ready at the door with ..."), never "Reply YES". Once it reaches them the assignment is `confirmed` (silence means we
+proceed; a NO or a new fact changes it) and the guide follows it with the later steps on the plan's clock. For a phone
+that takes calls, a new or changed pickup (and the first question) is said on a call; the text follows the call.
 """
 
 from __future__ import annotations
@@ -17,10 +21,10 @@ import json
 import logging
 import re
 
-from .briefing import Briefing
+from .briefing import ASK_NEEDS, Briefing, ask  # noqa: F401 - ASK_NEEDS re-exported for app and tests
 from .db import Store, thread_key
 from .messaging import Messenger
-from .threads import phone_thread
+from .threads import phone_for_thread, phone_thread
 
 log = logging.getLogger("residents.outbound")
 
@@ -63,33 +67,28 @@ class Outbound:
         return a["status"] == "confirmed" or any(x["id"] == a["id"] and x["status"] == "confirmed"
                                                  for x in (self.store.current_plan() or {}).get("assignments", []))
 
-    def compose(self, a: dict, thread: dict, now: float, version: int) -> str:
-        res, fac = self._names()
-        r = res.get(a["resource_id"], {})
-        who = r.get("name", a["resource_id"])
-        if self.confirmed(a):  # they already said yes: just the update and why, no second confirmation
-            return f"Update: {self.news(version, thread)}, so {who} is now arriving {_mins(a['eta_s'], now)}. (plan v{version})"
+    def compose(self, a: dict, thread: dict, now: float, version: int, changed: bool = False) -> str:
+        """The instruction for `a`, stated as what happens and what to do (D100), or, once they have it, the update and
+        why. `changed`: it replaces a pickup we told them about, so it says why first."""
+        res, _ = self._names()
+        who = res.get(a["resource_id"], {}).get("name", a["resource_id"])
+        if self.confirmed(a):  # they have it: just the change and why
+            return (f"Your pickup changed: {self.news(version, thread)}, so {who} is now arriving {_mins(a['eta_s'], now)}. "
+                    f"(plan v{version})")
+        lead = f"Your pickup changed because {self.news(version, thread)}. " if changed else ""
+        if self.guide is not None:  # step 1 of the guide: who, when, what to bring, where to be
+            text = self.guide.steps(a, thread, None)[0].text
+        elif "household_id" in thread:
+            text = f"{who} will pick you up {_mins(a['eta_s'], now)}."
+        else:
+            text = f"{who} is on its way to you, arriving {_mins(a['eta_s'], now)}. Have someone meet the crew."
         if "household_id" in thread:
-            drop = fac.get(a.get("dropoff_facility_id") or "", {}).get("name")
             h = next((x for x in self.store.households() if x["household_id"] == thread["household_id"]), {})
-            needs = h.get("needs") if isinstance(h.get("needs"), dict) else {}
-            where = "at your address"
-            if needs.get("mobility") or needs.get("accessible_vehicle"):
-                where = "at your door"
-            elif self.bridge is not None and self.bridge.is_assisted(thread["household_id"]):
-                where = "at " + self.bridge.places.corner_label(self.bridge.household_node(thread["household_id"]))
-            out_by = h.get("deadline_s")
             why = self.briefing.why(a, thread) if self.briefing is not None else ""
-            return (f"{who} will pick you up {where} {_mins(a['eta_s'], now)}"
-                    + (f" and take you to {drop}" if drop else "")
-                    + (f". Plan to be out within about {round((out_by - now) / 60)} min, before the water reaches your street"
-                       if out_by is not None and out_by > now else "")
-                    + "." + (f" {why}" if why else "")
-                    + (" Your street isn't forecast to flood, so this is a precaution; reply NO if you'd rather stay put."
-                       if out_by is None and self.bridge is not None else "")
-                    + f" Reply YES to confirm, or tell us what changed. (plan v{version})")
-        return (f"{who} is on its way to you, arriving {_mins(a['eta_s'], now)}. "
-                f"Reply YES to confirm someone will meet it. (plan v{version})")
+            text += (f" {why}" if why else "") + (
+                " Your street isn't forecast to flood, so this is a precaution; tell us if you'd rather stay put."
+                if h.get("deadline_s") is None and self.bridge is not None else "")
+        return f"{lead}{text} (plan v{version})"
 
     def news(self, version: int, thread: dict) -> str:
         """Why plan `version` moved this thread's pickup, in a resident's words: the roads it newly knows are blocked, else
@@ -147,25 +146,32 @@ class Outbound:
             changed = force or (last is None or last.get("assignment_id") != a["id"] or last.get("resource_id") != a["resource_id"]
                                 or abs(float(last.get("eta_s", 0)) - a["eta_s"]) >= MATERIAL_ETA_S)
             if not changed:
-                # same instruction carried into a new version: the allocator rebuilds it as `proposed`,
-                # but the person already has it → keep it `offered` (no new text)
+                # same instruction carried into a new version: the allocator may rebuild it as `proposed`,
+                # but the person already has it → keep it `confirmed` (no new text)
                 delivery = self.store.message_delivery(last.get("message_id", ""))[0]
-                if a["status"] == "proposed" and delivery in ("sent", "dev"):
-                    self.store.mark_offered(view["version"], a["id"])
+                if delivery in ("sent", "dev"):
+                    self.store.set_assignment_status(view["version"], a["id"], "confirmed", ("proposed", "offered"))
                 return None
-            text = self.compose(a, thread, now, view["version"])
+            told = self.confirmed(a)
+            phone = phone_for_thread(self.store, thread)
+            if phone is not None and self.messenger.voice is not None and not force:  # D100: a new or changed pickup is a call
+                self.messenger.voice.ring(phone["handle"], "instruction" if last is None else "pickup_changed")
+            text = self.compose(a, thread, now, view["version"], changed=last is not None and not force)
             msg, delivery = await self.messenger.send_message(thread, text, view["version"], a["id"])
             if delivery not in ("sent", "dev", "failed"):
-                return msg  # not opted in / no phone: the instruction has not been offered
+                return msg  # not opted in / no phone: they don't have the instruction
             self.store.kv_set(f"instr:{key}", json.dumps({"assignment_id": a["id"], "resource_id": a["resource_id"],
                                                            "eta_s": a["eta_s"], "plan_version": view["version"],
                                                            "message_id": msg["id"],
-                                                           "changed_t_s": now if last is not None and not force else None,
-                                                           "why": self.news(view["version"], thread) if self.confirmed(a) else None}))
-            if delivery in ("sent", "dev") and self.store.mark_offered(view["version"], a["id"]):
-                await self.messenger.hub.broadcast("assignment", {
-                    "plan_version": view["version"], "change": "status_changed", "assignment_id": a["id"],
-                    "assignment": {**a, "status": "offered"}}, now)
+                                                           "why": self.news(view["version"], thread)
+                                                           if last is not None and not force else None}))
+            if delivery in ("sent", "dev") and not told:  # silence means we proceed (D100): it's theirs, step 1 is done
+                if self.store.set_assignment_status(view["version"], a["id"], "confirmed", ("proposed", "offered")):
+                    await self.messenger.hub.broadcast("assignment", {
+                        "plan_version": view["version"], "change": "status_changed", "assignment_id": a["id"],
+                        "assignment": {**a, "status": "confirmed"}}, now)
+                if self.guide is not None:
+                    self.guide.adopt(a, thread)
             log.info("instruction v%s → %s (%s): %s", view["version"], key, delivery, a["id"])
             return msg
         if last and last.get("assignment_id") and self._underway(view, thread, last):
@@ -177,8 +183,7 @@ class Outbound:
                     f"as soon as we have a new instruction. (plan v{view['version']})")
             msg, delivery = await self.messenger.send_message(thread, text, view["version"], last["assignment_id"])
             if delivery in ("sent", "dev", "failed"):
-                self.store.kv_set(f"instr:{key}", json.dumps({"assignment_id": None, "plan_version": view["version"],
-                                                               "changed_t_s": now}))
+                self.store.kv_set(f"instr:{key}", json.dumps({"assignment_id": None, "plan_version": view["version"]}))
             return msg
         return None
 
@@ -244,13 +249,12 @@ class Outbound:
         if a is not None:
             who = res.get(a["resource_id"], {}).get("name", a["resource_id"])
             if self.confirmed(a):
-                told = json.loads(self.store.kv_get(f"instr:{key}") or "{}")  # "what changed?": the reason we gave
-                why = f"{told['why']}, so " if told.get("assignment_id") == a["id"] and told.get("why") else ""
+                why = f"{self.why(key, a)}, so " if self.why(key, a) else ""  # "what changed?": the reason we gave
                 return f"Your pickup is confirmed: {why}{who} is arriving {_mins(a['eta_s'], now)}. (plan v{v})" \
                     if "household_id" in thread else f"Confirmed: {who} is arriving {_mins(a['eta_s'], now)}. (plan v{v})"
             if "household_id" in thread:
-                return f"{who} is assigned to pick you up, arriving {_mins(a['eta_s'], now)}. Reply YES to confirm. (plan v{v})"
-            return f"{who} is assigned to you, arriving {_mins(a['eta_s'], now)}. Reply YES to confirm someone will meet it. (plan v{v})"
+                return f"{who} is coming to pick you up, arriving {_mins(a['eta_s'], now)}. (plan v{v})"
+            return f"{who} is on its way to you, arriving {_mins(a['eta_s'], now)}. (plan v{v})"
         if "household_id" in thread:
             h = next((x for x in self.store.households() if x["household_id"] == thread["household_id"]), None)
             need = self.describe_need(h["needs"]) if h else ""
@@ -261,7 +265,7 @@ class Outbound:
             if fits and len(declined) == len(fits):  # before `blocked`: since D58 the engine lists them as unresolved
                 names = " and ".join(r["name"] for r in declined)
                 return (f"You declined {names}, the only {'vehicle' if len(declined) == 1 else 'vehicles'} that can "
-                        f"take {need}, so no pickup is scheduled. Reply YES if you want {declined[0]['name']} "
+                        f"take {need}, so no pickup is scheduled. Tell us if you want {declined[0]['name']} "
                         f"after all. (plan v{v})")
             if blocked and h.get("deadline_s") is None:
                 return (f"We have your details ({need}). Your street is outside the forecast flood area, so no "
@@ -289,11 +293,18 @@ class Outbound:
                 + (f"; our plan has {f.get('name', 'your site')} {power}" if power else "")
                 + f". Text us if that changes, e.g. 'on backup, about 40 minutes of fuel left'. (plan v{v})")
 
+    ask = staticmethod(ask)  # the plan's question in our words (briefing.ask)
+
+    def why(self, key: str, a: dict | None) -> str | None:
+        """The reason we gave when this thread's pickup `a` last changed (kv `instr:`), if it did."""
+        told = json.loads(self.store.kv_get(f"instr:{key}") or "{}")
+        return told.get("why") if a is not None and told.get("assignment_id") == a["id"] else None
+
     async def situation(self, thread: dict, brief: bool = False) -> str | None:
-        """Everything the plan says about this person right now, in one text (D60): where they stand, the
-        step they're on, and what we still need from them. It answers "what's the plan?" / "what do I do?"
-        and any question the plan has nothing more specific for, so no question is left without an answer.
-        `brief` (a call's opening, D80): only the most pressing of those, since a call says one thing at a time.
+        """Everything the plan says about this person right now, in one text (D60): the step they're on (which says
+        who, when, where and what to bring), else where they stand and what we still need from them. It answers
+        "what's the plan?" / "what do I do?" and any question the plan has nothing more specific for, so no question is
+        left without an answer. `brief` (a call): only the most pressing of those, since a call says one thing at a time.
         Computed fields only; None only before there is a plan."""
         view = self.store.plan_view()
         if not view:
@@ -302,12 +313,17 @@ class Outbound:
         stand = VERSION_TAG.sub("", status) if status is not None else self.flood_text(thread)
         step = await self.guide.current_text(thread) if self.guide is not None else None
         q = next((x for x in view.get("info_requests", []) if x["to"] == thread), None)
-        if brief and (step or status is not None):
-            parts, q = [step or stand], None
+        if step:  # a pickup that just changed says why first, then what to do now
+            key = thread_key(thread)
+            why = self.why(key, self.instruction_for(view, thread, exclude=self.rejected(key)))
+            fresh = why and (self.guide.state(key) or {}).get("sent") == 0
+            parts, q = [fresh and f"Your pickup changed because {why}.", step], None
+        elif brief and status is not None:
+            parts, q = [stand], None
         elif brief and q is not None:
-            parts = [q["question"]]
+            parts = [self.ask(q)]
         else:
-            parts = [stand, step and f"Right now: {step}", q and f"Please tell us: {q['question']}"]
+            parts = [stand, q and self.ask(q)]
         if q is not None:
             self.store.kv_set(f"asked:{q['id']}", str(view["version"]))
         parts = [p for p in parts if p]
@@ -320,44 +336,60 @@ class Outbound:
         h = next((x for x in self.store.households() if x["household_id"] == thread.get("household_id")), {})
         return None if h.get("deadline_s") is None else h["deadline_s"] + (self.bridge.margin_s if self.bridge else 0)
 
+    def _water_words(self, thread: dict) -> str:
+        now = float(self.store.meta().get("t_s", 0.0))
+        if (water := self.water_s(thread)) is None:
+            return "your street is outside the forecast flood area"
+        return f"the river reaches your street in about {round((water - now) / 60)} min" if water > now \
+            else "your street is flooding now"
+
     def flood_text(self, thread: dict) -> str | None:
         """What the forecast flood means for a household whose details we don't know yet."""
         if "household_id" not in thread:
             return None
-        now = float(self.store.meta().get("t_s", 0.0))
-        if (water := self.water_s(thread)) is None:
-            return ("Your street is outside this drill's forecast flood area, so no pickup is planned: stay where you "
-                    "are, above the ground floor if you can.")
-        if water > now:
-            return (f"In this drill's flood forecast, water reaches your street in about {round((water - now) / 60)} "
-                    f"min, so we're planning to pick you up; we need a few details to send the right vehicle.")
-        return "Your street is flooding now; we need a few details to send the right vehicle."
+        words = self._water_words(thread)
+        if self.water_s(thread) is None:
+            return f"{words[0].upper()}{words[1:]}, so no pickup is planned: stay where you are, above the ground floor if you can."
+        return f"{words[0].upper()}{words[1:]}, so we're planning to pick you up."
+
+    def where_when(self, thread: dict) -> str | None:
+        """First contact (D100), one sentence: where we have them and when the water comes there."""
+        if "household_id" not in thread:
+            return None
+        home = self.briefing.home(thread) if self.briefing is not None else None
+        words = self._water_words(thread)
+        if home is None or home[2] == "your address":
+            return f"{words[0].upper()}{words[1:]}."
+        said = words.replace("your street", home[2], 1)  # "the river reaches the corner of A and B in about 90 min"
+        return f"{said[0].upper()}{said[1:]}."
 
     def next_info_request(self, view: dict, thread: dict) -> dict | None:
         return next((q for q in view.get("info_requests", []) if q["to"] == thread and not self.store.kv_get(f"asked:{q['id']}")), None)
 
     async def send_status(self, thread: dict, prefix: str = "") -> dict | None:
+        """Where they stand, in one text: the step they're on while a pickup is under way (it says who, when and what to
+        bring, so a new fact like "she needs oxygen" is answered with the instruction that now includes it)."""
         view = self.store.plan_view()
-        text = self.status_text(view, thread) if view else None
+        step = await self.guide.current_text(thread) if view and self.guide is not None else None
+        text = f"{step} (plan v{view['version']})" if step else self.status_text(view, thread) if view else None
         if text is None:
             return None
         msg, _ = await self.messenger.send_message(thread, prefix + text, view["version"])
         return msg
 
     async def ack(self, a: dict, decision: str, thread: dict) -> dict:
-        """Reply to a YES / NO on an offered instruction."""
+        """Reply to a YES / NO on an instruction (never needed, always understood, D100)."""
         res, _ = self._names()
         who = res.get(a["resource_id"], {}).get("name", a["resource_id"])
         now = float(self.store.meta().get("t_s", 0.0))
         v = a["plan_version"]
         if decision == "confirm":
-            text = (f"Confirmed: {who} is coming to you, arriving {_mins(a['eta_s'], now)}. "
-                    f"Reply here if anything changes. (plan v{v})")
+            text = f"Thanks. {who} is on the way, arriving {_mins(a['eta_s'], now)}. (plan v{v})"
         else:
             water = self.water_s(thread)
             stay = (f" The water reaches your street in about {round((water - now) / 60)} min; if you stay, go to the "
                     f"highest floor and keep your phone with you." if water is not None and water > now else "")
-            text = f"Understood, we won't send {who}.{stay} Reply here if you change your mind. (plan v{v})"
+            text = f"Understood, we won't send {who}.{stay} Tell us if you change your mind. (plan v{v})"
         msg, _ = await self.messenger.send_message(thread, text, self.store.meta().get("plan_version"), a["id"])
         return msg
 
@@ -377,7 +409,10 @@ class Outbound:
         q = self.next_info_request(view, thread)  # one question at a time
         if q is None:
             return None
-        msg, delivery = await self.messenger.send_message(thread, q["question"], view["version"])
+        phone = phone_for_thread(self.store, thread)
+        if phone is not None and self.messenger.voice is not None and "household_id" in thread:
+            self.messenger.voice.ring(phone["handle"], "first_contact")  # D100: first contact is a call
+        msg, delivery = await self.messenger.send_message(thread, self.ask(q), view["version"])
         if delivery in ("sent", "dev", "failed"):  # failed is queued for retry, not silently discarded
             self.store.kv_set(f"asked:{q['id']}", str(view["version"]))
         return msg

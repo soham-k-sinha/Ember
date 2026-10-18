@@ -7,6 +7,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from residents.app import DEFAULT_ASK, create_app
+from residents.messaging import DISCLOSURE
+from residents.outbound import ASK_NEEDS
 from residents.contracts import def_errors
 from tests.helpers import JUDGE, SCENARIO, FakeLLM, ex, fact, judge_need
 
@@ -48,22 +50,22 @@ def test_simulate_ember_and_baseline(oc):
 def test_ask_uses_the_plans_question_and_marks_it(oc):
     q = next(q for q in oc.get("/state").json()["plan"]["info_requests"] if q["to"] == {"household_id": JUDGE})
     r = oc.post("/ask", json={"role": "resident"}).json()
-    assert r["info_request"] == q["id"] and r["message"]["text"] == f"[EMBER drill] {q['question']}" and r["delivery"] == "dev"
+    assert r["info_request"] == q["id"] and r["message"]["text"] == f"{DISCLOSURE} {ASK_NEEDS}" and r["delivery"] == "dev"
     oc.post("/dev/inbound", json={"role": "resident", "text": "hi"})
-    assert sum(q["question"] in m["text"] for m in outs(oc, {"household_id": JUDGE})) == 1   # not asked again
+    assert sum(ASK_NEEDS in m["text"] for m in outs(oc, {"household_id": JUDGE})) == 1   # not asked again
 
 
 def test_ask_operator_then_reply_replans(oc):
     r = oc.post("/ask", json={"role": "operator"}).json()
     assert r["message"]["thread"] == OP
-    assert r["message"]["text"] in (f"[EMBER drill] {DEFAULT_ASK['operator']}",) or r["info_request"]
+    assert r["message"]["text"] in (f"{DISCLOSURE} {DEFAULT_ASK['operator']}",) or r["info_request"]
     oc.post("/dev/inbound", json={"role": "operator", "text": "about 90 minutes of diesel"})
     st = oc.get("/state").json()
     rep = next(x for x in st["reports"] if x["source"] == "operator")
     assert rep["kind"] == "facility_status" and rep["payload"]["set"]["backup_endurance_s"] == 5400
     assert st["plan_version"] == 2 and outs(oc, OP)[-1]["direction"] == "out"   # and the operator got an answer
     custom = oc.post("/ask", json={"role": "operator", "question": "Is your generator fuelled?"}).json()
-    assert custom["message"]["text"] == "[EMBER drill] Is your generator fuelled?" and custom["info_request"] is None
+    assert custom["message"]["text"] == "Is your generator fuelled?" and custom["info_request"] is None
 
 
 def _slow_optimize(c, seconds):

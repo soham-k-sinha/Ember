@@ -1,22 +1,22 @@
-"""Step-by-step directions after someone says YES (D56).
+"""What to do, step by step, on the plan's clock (D56; proactive since D100).
 
-An offer says who is coming and when; once the person confirms it, they get one text per step and
-reply DONE when they've done it. Every step comes from the plan and its simulation, never from the
-LLM: the pickup corner is the household's node in town.json, the times are the plan simulator's
-arrive / pickup / drop-off times for that assignment (plan_sim Outcome), the names are the scenario's.
+The pickup instruction is step 1 and goes out as soon as the plan assigns a vehicle (outbound.py calls or texts it;
+nobody has to say YES: silence means we proceed, only a decline or a new fact changes it). Every later step goes out
+by itself when the sim clock reaches its time; nothing waits for a DONE ("done" / "we're ready" is understood, never
+required). Every step comes from the plan and its simulation, never from the LLM: the pickup corner is the
+household's node in town.json, the times are the plan simulator's arrive / pickup / drop-off times for that
+assignment (plan_sim Outcome), the names are the scenario's.
 
-Rescue (a resident):           1 get ready + go to the pickup corner (or wait inside, if someone needs
-                               help to walk; the crew comes to the door) → 2 board when the vehicle is
-                               there → 3 ride to the drop-off → 4 checked in (no reply needed).
+Rescue (a resident):           1 the instruction: who, when, what to bring, where to be (the crew comes to the door
+                               if someone needs help to walk) → 2 "2 minutes away, come to the door / corner now"
+                               (a call, D100) → 3 outside now → 4 on board, on the way → 5 checked in at the shelter.
 Protect (a facility operator): 1 meet the generator crew → 2 it's connecting → 3 powered.
 
-Step k+1 is texted when the sim clock reaches its time (the web's playback, `POST /clock`, or the drill
-console). With `auto_clock` (the drill), a DONE from the last person anyone was waiting on moves the
-clock straight to the next event, so a drill advances one step at a time, driven by the texts.
+Steps go out when the clock reaches them: the web's playback, `POST /clock`, or the drill console (`next`, `+N`).
 
-State per thread in kv `guide:<thread>`: {assignment_id, resource_id, sent, done: [step indexes], finished}.
-A guide ends when its assignment leaves the plan or changes vehicle (outbound texts the change; the next
-YES starts a new guide).
+State per thread in kv `guide:<thread>`: {assignment_id, resource_id, sent, finished, steps}.
+A guide ends when its assignment leaves the plan or changes vehicle (outbound says the change; the new instruction
+starts a new guide).
 """
 
 from __future__ import annotations
@@ -36,11 +36,12 @@ from .threads import phone_for_thread
 
 log = logging.getLogger("residents.guide")
 
-
+# "done" / "we're ready" / "yes" while a pickup is under way: answered with when the vehicle gets there, never needed
 STEP_DONE = re.compile(
     r"^\s*(?:ok(?:ay)?[,!. ]*)?(?:done|ready|i'?m ready|we'?re ready|here|i'?m here|we'?re here|i am here|we are here|"
     r"aboard|on board|in the (?:van|truck|vehicle)|on the (?:van|truck|bus)|arrived|we'?ve arrived|i'?ve arrived|"
     r"at the corner|connected|it'?s connected|checked in|yes|yep|yeah|y|ok|okay|k|👍)\s*[.!]*\s*$", re.I)
+SOON_S = 120.0  # "2 minutes away, come to the door now": one of the calls that matter (D100)
 
 
 @dataclass(frozen=True)
@@ -48,7 +49,6 @@ class Step:
     name: str
     due_t: float      # sim time it becomes current (inf = unknown: not reached in the simulation)
     text: str
-    wants_done: bool
 
 
 def _mins(dt_s: float) -> str:
@@ -64,9 +64,8 @@ def _t(*vals) -> float:
 
 
 class Guide:
-    def __init__(self, store: Store, messenger: Messenger, planner, auto_clock: bool = False):
+    def __init__(self, store: Store, messenger: Messenger, planner):
         self.store, self.messenger, self.planner = store, messenger, planner
-        self.auto_clock = auto_clock
 
     # ---------- state ----------
     def state(self, key: str) -> dict | None:
@@ -82,16 +81,10 @@ class Guide:
     def active(self) -> dict[str, dict]:
         return {k[len("guide:"):]: json.loads(v) for k, v in self.store.kv_prefix("guide:").items()}
 
-    def awaiting(self) -> list[str]:
-        """Threads whose current step asks for a DONE they haven't sent."""
-        out = []
-        for key, st in self.active().items():
-            if not st.get("finished") and st.get("wants_done") and st["sent"] not in st["done"]:
-                out.append(key)
-        return out
-
-    def awaiting_done(self, thread: dict) -> bool:
-        return thread_key(thread) in self.awaiting()
+    def guiding(self, thread: dict) -> bool:
+        """A pickup / generator is under way for this thread and not finished."""
+        st = self.state(thread_key(thread))
+        return st is not None and not st.get("finished")
 
     # ---------- plan facts ----------
     def _now(self) -> float:
@@ -121,7 +114,8 @@ class Guide:
         return (h["lon"], h["lat"], "your address") if h else None
 
     def steps(self, a: dict, thread: dict, o: dict | None) -> list[Step]:
-        """The directions for one assignment, from its simulated outcome `o`."""
+        """The directions for one assignment, from its simulated outcome `o` (None: the plan's ETA). Step 1 is the
+        instruction itself. Always the same number of steps, so the index in the guide's state stays valid."""
         res, fac = self._names()
         who = res.get(a["resource_id"], {}).get("name", a["resource_id"])
         now = self._now()
@@ -133,14 +127,12 @@ class Guide:
             done = _t(o.get("complete_t"))
             connect = max(done - arrive, 0) if math.isfinite(done) and math.isfinite(arrive) else None
             return [
-                Step("meet", now, f"Confirmed: {who} is on its way to {site}. Step 1 of 3: Have someone meet the crew at "
-                                  f"the entrance {_mins(arrive - now)} and clear the way to your generator connection "
-                                  f"point. Reply DONE when someone is waiting.", True),
-                Step("connect", arrive, f"Step 2 of 3: {who} has arrived. The crew needs about "
-                                        f"{round((connect or 900) / 60)} min to connect it. Reply DONE when it's "
-                                        f"connected and powering the site.", True),
-                Step("powered", done, f"Step 3 of 3: {site} is on {who} power now. Text us if anything changes "
-                                      f"(fuel, load, water on site).", False),
+                Step("meet", now, f"{who} is on its way to {site}, arriving {_mins(arrive - now)}. Have someone meet the "
+                                  f"crew at the entrance and clear the way to your generator connection point."),
+                Step("connect", arrive, f"{who} has arrived. The crew needs about {round((connect or 900) / 60)} min to "
+                                        f"connect it."),
+                Step("powered", done, f"{site} is on {who} power now. Text us if anything changes (fuel, load, water on "
+                                      f"site)."),
             ]
         hid = thread["household_id"]
         h = next((x for x in self.store.households() if x["household_id"] == hid), {})
@@ -155,30 +147,29 @@ class Guide:
         corner = places.corner_label(node)
         home = self._home(thread)
         here = home[2] if home else "your address"
+        aid = ["the wheelchair"] if needs.get("accessible_vehicle") else ["any walker or cane"] if door else []
+        items = ["medications", *(["prescriptions", "any oxygen"] if needs.get("medical") else []), "ID", "your phone", *aid]
+        bring = ", ".join(items[:-1]) + " and " + items[-1]
+        medical = "; the crew knows someone needs medical care" if needs.get("medical") else ""
         if door:
-            uses = "you use" if people == 1 else "the person who needs help uses"
-            first = (f"Confirmed: {who} is coming to your door. Step 1 of 4: Stay inside at {here}. Get medications, "
-                     f"ID, your phone and charger ready, plus anything {uses}, like a walker or oxygen. The crew "
-                     f"arrives {_mins(arrive - now)}. Reply DONE when you're ready.")
-            board = (f"Step 2 of 4: {who} is outside {here} now and the crew is coming to your door. "
-                     f"Reply DONE once everyone is aboard.")
+            first = f"{who} is coming to your door {_mins(arrive - now)}. Be ready at the door with {bring}{medical}."
+            soon = f"{who} is 2 minutes away. Come to the door now with your medications{' and ' + aid[0] if aid else ''}."
+            board = f"{who} is outside {here} now, and the crew is coming to your door."
         else:
-            walk = walk_phrase(places, home, node)
-            first = (f"Confirmed: {who} is coming to you. Step 1 of 4: Pack medications, ID, your phone and charger, "
-                     f"then {walk}. {who} gets there {_mins(arrive - now)}. Reply DONE when you're there.")
-            board = (f"Step 2 of 4: {who} is at {corner} now. Tell the driver your address"
-                     f"{f' and that you are {people}' if people and people > 1 else ''}, then get in. "
-                     f"Reply DONE once everyone is aboard.")
+            first = (f"{who} picks you up {_mins(arrive - now)}. Pack {bring}, then "
+                     f"{walk_phrase(places, home, node)}{medical}.")
+            soon = f"{who} is 2 minutes away. Go to {corner} now."
+            board = (f"{who} is at {corner} now. Tell the driver your address"
+                     f"{f' and that you are {people}' if people and people > 1 else ''}, then get in.")
         ride = round((safe - pickup) / 60) if math.isfinite(safe) and math.isfinite(pickup) else None
         return [
-            Step("prepare", now, first, True),
-            Step("board", arrive, board, True),
-            Step("ride", pickup, f"Step 3 of 4: You're on your way to {drop}"
-                                 f"{f' (about {ride} min)' if ride else ''}. Stay with the crew; they'll take you "
-                                 f"inside. Reply DONE when you've arrived and checked in.", True),
-            Step("arrived", safe, f"Step 4 of 4: You're checked in at {drop}, out of the flood area. Stay there "
-                                  f"until the all-clear; we'll text you if anything changes. Thanks for taking part "
-                                  f"in the drill.", False),
+            Step("prepare", now, first),
+            Step("soon", arrive - SOON_S, soon),
+            Step("board", arrive, board),
+            Step("ride", pickup, f"You're on board, on your way to {drop}{f' (about {ride} min)' if ride else ''}. Stay "
+                                 f"with the crew; they'll take you inside."),
+            Step("arrived", safe, f"You're checked in at {drop}, out of the flood area. Stay there until the all-clear; "
+                                  f"we'll text you if anything changes."),
         ]
 
     # ---------- events ----------
@@ -186,15 +177,27 @@ class Guide:
         plan = self.store.current_plan()
         return next((x for x in (plan or {}).get("assignments", []) if x["id"] == assignment_id), None)
 
+    def _ring(self, thread: dict, reason: str) -> None:
+        """One of the moments that matter (D100): the next text to this phone is said on a call, if it takes calls."""
+        phone = phone_for_thread(self.store, thread)
+        if phone is not None and self.messenger.voice is not None:
+            self.messenger.voice.ring(phone["handle"], reason)
+
+    def adopt(self, a: dict, thread: dict) -> None:
+        """The instruction for `a` (step 1) just went out: follow it with the later steps, on the clock. A step that is
+        already due (the vehicle is 2 minutes away right now) is covered by the instruction's own time."""
+        steps = self.steps(a, thread, None)
+        now = self._now()
+        sent = max(i for i, s in enumerate(steps) if s.due_t <= now)
+        self._save(thread_key(thread), {"assignment_id": a["id"], "resource_id": a["resource_id"], "sent": sent,
+                                        "finished": sent == len(steps) - 1, "steps": len(steps)})
+
     async def start(self, a: dict, thread: dict) -> dict | None:
-        """They confirmed `a` (by text): text step 1 now. Returns the message sent."""
-        key = thread_key(thread)
-        outcomes = await self._outcomes()
-        steps = self.steps(a, thread, outcomes.get(a["id"]))
-        st = {"assignment_id": a["id"], "resource_id": a["resource_id"], "sent": 0, "done": [],
-              "wants_done": steps[0].wants_done, "finished": False, "steps": len(steps)}
-        self._save(key, st)
+        """`a` was confirmed before its instruction went out (the web console): send it now. Returns the message."""
+        self._ring(thread, "instruction")
+        steps = self.steps(a, thread, (await self._outcomes()).get(a["id"]))
         msg, _ = await self.messenger.send_message(thread, steps[0].text, self.store.meta().get("plan_version"), a["id"])
+        self.adopt(a, thread)
         await self.tick()  # a step already due (e.g. the van is already there) goes out right away
         return msg
 
@@ -202,8 +205,8 @@ class Guide:
         await self.tick()
 
     async def tick(self) -> int:
-        """Send every step that has become current; start guides for assignments confirmed outside a
-        text (the web console); drop guides whose assignment changed. Returns how many texts were sent."""
+        """Send every step that has become current ("2 minutes away" is a call); start guides for assignments confirmed
+        outside a text (the web console); drop guides whose assignment changed. Returns how many texts were sent."""
         plan = self.store.current_plan()
         if plan is None:
             return 0
@@ -211,7 +214,7 @@ class Guide:
         outcomes = await self._outcomes()
         now = self._now()
         guides = self.active()
-        for a in plan.get("assignments", []):  # confirmed on the web, never texted step 1
+        for a in plan.get("assignments", []):  # confirmed on the web, never told
             t = a["target"]
             if a["status"] != "confirmed" or "edge_ids" in t or phone_for_thread(self.store, t) is None:
                 continue
@@ -238,38 +241,29 @@ class Guide:
             if due <= st["sent"]:
                 continue
             step = steps[due]  # only the latest: after a jump, earlier steps are already history
+            if step.name == "soon":
+                self._ring(thread, "soon")
             await self.messenger.send_message(thread, step.text, self.store.meta().get("plan_version"), a["id"])
-            st.update(sent=due, wants_done=step.wants_done, finished=due == len(steps) - 1)
+            st.update(sent=due, finished=due == len(steps) - 1)
             self._save(key, st)
             sent += 1
         return sent
 
-    async def done(self, thread: dict) -> bool:
-        """They finished the current step. False if no step was waiting on them."""
+    async def done(self, thread: dict, lead: str = "Thanks.") -> bool:
+        """"done" / "we're ready" / "yes" while a pickup is under way: understood, never required (D100). Nothing moves on
+        because of it (the next step comes on the plan's clock, so a repeated or re-sent "done" can't skip a step); the
+        reply says when the vehicle gets there. False if nothing is under way for them."""
         key = thread_key(thread)
         st = self.state(key)
-        if st is None or st.get("finished"):
+        a = self._assignment(st["assignment_id"]) if st else None
+        if st is None or st.get("finished") or a is None:
             return False
-        if st["sent"] in st["done"]:
-            await self.messenger.send_message(thread, "Thanks, noted. We'll text you the next step.",
-                                              self.store.meta().get("plan_version"), st["assignment_id"])
-            return True
-        st["done"].append(st["sent"])
-        self._save(key, st)
-        await self.tick()  # a step that is already due goes out now
-        if self._advanced(key, st):
-            return True
-        if self.auto_clock and not self.awaiting():
-            t = await self.next_event_t()
-            if t is not None and t > self._now():
-                await self.planner.set_clock(min(t, self.planner.bridge.t_end_s))  # clock hooks → tick
-                if self._advanced(key, st):
-                    return True
-        a = self._assignment(st["assignment_id"])
-        nxt = await self.next_step(key)
-        when = f" {_mins(nxt.due_t - self._now())}" if nxt and math.isfinite(nxt.due_t) else ""
-        await self.messenger.send_message(thread, f"Thanks. We'll text you the next step{when}.",
-                                          self.store.meta().get("plan_version"), a["id"] if a else None)
+        steps = self.steps(a, thread, (await self._outcomes()).get(a["id"]))
+        arrive = steps[1 if "facility_id" in thread else 2].due_t
+        who = self._names()[0].get(a["resource_id"], {}).get("name", a["resource_id"])
+        now = self._now()
+        text = f"{lead} {who} gets to you {_mins(arrive - now)}." if arrive > now else f"{lead[:-1]}, noted."
+        await self.messenger.send_message(thread, text, self.store.meta().get("plan_version"), a["id"])
         return True
 
     async def current_text(self, thread: dict) -> str | None:
@@ -280,17 +274,8 @@ class Guide:
         a = self._assignment(st["assignment_id"]) if st else None
         if not st or st.get("finished") or a is None:
             return None
-        if st["sent"] in st["done"]:
-            nxt = await self.next_step(key)
-            when = f" {_mins(nxt.due_t - self._now())}" if nxt and math.isfinite(nxt.due_t) else ""
-            return f"You've done step {st['sent'] + 1} of {st['steps']}; we'll text you the next step{when}."
         steps = self.steps(a, thread, (await self._outcomes()).get(a["id"]))
-        text = steps[min(st["sent"], len(steps) - 1)].text
-        return text[text.index("Step "):] if "Step " in text else text  # without step 1's "Confirmed: …" lead
-
-    def _advanced(self, key: str, before: dict) -> bool:
-        now = self.state(key)
-        return now is None or now["sent"] > before["sent"] or now["assignment_id"] != before["assignment_id"]
+        return steps[min(st["sent"], len(steps) - 1)].text
 
     async def next_step(self, key: str) -> Step | None:
         st = self.state(key)

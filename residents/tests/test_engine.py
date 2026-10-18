@@ -11,6 +11,8 @@ from referencing import Registry, Resource
 
 from ember_engine.state import validate_state
 from residents.app import create_app
+from residents.messaging import DISCLOSURE, plain
+from residents.outbound import ASK_NEEDS
 from residents.config import CONTRACTS
 from residents.contracts import errors
 from residents.intake import URGENT
@@ -147,7 +149,7 @@ def test_an_urgent_text_gets_a_replan_a_calm_word_and_the_eta(ec):
     st = ec.get("/state").json()
     assert st["plan"]["version"] == 3 and st["plan"]["trigger"] == "Judge: urgent, asked us to hurry"
     last = st["messages"][-1]["text"]
-    assert last.startswith(f"[EMBER drill] {URGENT} ") and "Accessible Van 3" in last and "arriving in about" in last, last
+    assert plain(last).startswith(f"{URGENT} ") and "Accessible Van 3" in last and "in about" in last, last
     assert not any("didn't catch" in m["text"] for m in st["messages"])
 
 
@@ -237,9 +239,10 @@ def test_restart_keeps_plans_reset_replans(esettings, bridge):
         assert c.post("/dev/reset").json()["plan_version"] == 1
         st = c.get("/state").json()
         assert st["reports"] == []
-        q = next(q for q in st["plan"]["info_requests"] if q["to"] == {"household_id": JUDGE})
-        # the only message after a reset: v1's open question to the (still registered) judge phone (DEMO.md step 6)
-        assert [(m["direction"], m["text"]) for m in st["messages"]] == [("out", f"[EMBER drill] {q['question']}")]
+        assert any(q["to"] == {"household_id": JUDGE} for q in st["plan"]["info_requests"])
+        # the only message after a reset: v1's open question to the (still registered) judge phone (DEMO.md step 6),
+        # with the simulation notice again (a new run, D100)
+        assert [(m["direction"], m["text"]) for m in st["messages"]] == [("out", f"{DISCLOSURE} {ASK_NEEDS}")]
         assert c.get("/phones").json()[0]["thread"] == {"household_id": JUDGE}  # phones survive, resolve to the Allston judge
 
 
@@ -249,7 +252,7 @@ def test_fresh_start_asks_the_judge(esettings, bridge):
         c.post("/phones", json={"role": "resident", "handle": "6175550120"})
     with TestClient(create_app(_r(esettings, reset_on_start=True), bridge=bridge)) as c:  # RESET_ON_START=1 (DEMO.md)
         outs = [m for m in c.get("/state").json()["messages"] if m["direction"] == "out"]
-        assert len(outs) == 1 and "wheelchair-accessible vehicle" in outs[0]["text"] and outs[0]["thread"] == {"household_id": JUDGE}
+        assert len(outs) == 1 and ASK_NEEDS in outs[0]["text"] and outs[0]["thread"] == {"household_id": JUDGE}
 
 
 def test_switching_scenario_reseeds(settings, esettings, bridge):

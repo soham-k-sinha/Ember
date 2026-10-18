@@ -75,7 +75,7 @@ def explain(ctx: Context, carry, assignments: list, res, reports, version: int, 
                                "would_unblock": "how many people, and whether anyone needs a wheelchair-accessible vehicle",
                                "alternatives": ["keep the accessible van's next slot open", "send a standard van if no mobility need"]})
             info.append({"id": f"q-{hid}", "to": {"household_id": hid},
-                         "question": "How many people are with you, and does anyone need a wheelchair-accessible vehicle?",
+                         "question": "How many people are with you, and is anyone hurt, in a wheelchair, or in need of oxygen or medication?",
                          "why": ("the accessible van is the scarce resource; your answer decides its next trip" if h.get("judge")
                                  else "needed to schedule a pickup before the water reaches your street")})
             continue

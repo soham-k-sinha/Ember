@@ -40,6 +40,15 @@ SAFETY = ("In a real emergency, call 911. Don't walk or drive through floodwater
           "and stay away from downed power lines.")
 
 
+# the one question first contact asks (D100): the planner asks a household for its needs; this is how we word it
+ASK_NEEDS = "How many people are with you, and is anyone hurt, in a wheelchair, or in need of oxygen or medication?"
+
+
+def ask(q: dict) -> str:
+    """An info request in our words: a household is asked the one combined needs question (D100)."""
+    return ASK_NEEDS if "household_id" in q["to"] else q["question"]
+
+
 def mins(dt_s: float) -> str:
     if not math.isfinite(dt_s):
         return "soon"
@@ -244,10 +253,10 @@ class Briefing:
     def others_text(self, thread: dict) -> str:
         near = self.neighbors(thread)
         if not near:
-            return "No other household in this drill is near you right now."
+            return "No other household we're helping is near you right now."
         texted = [x for x in near if x["phone"]]
         corner = [x for x in near if x["same_corner"]]
-        s = f"{plural(len(near), 'other household')} in this drill {'is' if len(near) == 1 else 'are'} within {int(NEAR_M)} m of you"
+        s = f"{plural(len(near), 'other household')} we're helping {'is' if len(near) == 1 else 'are'} within {int(NEAR_M)} m of you"
         if corner:
             s += f" ({len(corner)} at your pickup corner)"
         s += "."
@@ -285,11 +294,11 @@ class Briefing:
         if not h:
             own = ""
         elif h.get("deadline_s") is None:
-            own = "Your street is outside this drill's forecast flood area. "
+            own = "Your street is outside the forecast flood area. "
         elif (water := h["deadline_s"] + margin) <= now:
             own = "Your street is flooding now. "
         else:
-            own = f"In this drill's flood forecast, water reaches your street in about {round((water - now) / 60)} min. "
+            own = f"The river reaches your street in about {round((water - now) / 60)} min. "
         first = []
         for d, label in self.bridge.flood_corners(3):
             water = d + margin
@@ -340,8 +349,8 @@ class Briefing:
         if a is None:
             shelters = [f["name"] for f in self.store.facilities() if f["type"] == "shelter"]
             if topic == "destination" and shelters and "household_id" in thread:  # then what we still need to know
-                q = next((x["question"] for x in self._view().get("info_requests", []) if x["to"] == thread), None)
-                return f"Everyone we pick up goes to {' or '.join(shelters)}." + (f" {q}" if q else "")
+                q = next((x for x in self._view().get("info_requests", []) if x["to"] == thread), None)
+                return f"Everyone we pick up goes to {' or '.join(shelters)}." + (f" {ask(q)}" if q else "")
             return None  # nothing scheduled: the status text says why
         who = res.get(a["resource_id"], {}).get("name", a["resource_id"])
         now = self._now()

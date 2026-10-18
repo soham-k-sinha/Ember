@@ -36,7 +36,8 @@ class Fact(BaseModel):
     people: int | None = Field(description="need: how many people need pickup, only if stated or clearly implied (e.g. 'me and my wife' = 2)")
     mobility: bool | None = Field(description="need: someone can't walk far / uses a wheelchair, walker, is bedridden")
     accessible_vehicle: bool | None = Field(description="need: they need a wheelchair-accessible vehicle")
-    medical: bool | None = Field(description="need: a medical condition needing care (oxygen, dialysis, insulin, injury)")
+    medical: bool | None = Field(description="need: someone is hurt or has a medical condition needing care (oxygen, "
+                                             "dialysis, insulin, needs medication, injury)")
     road_hint: str | None = Field(description="closure_report: the blocked street's name as written, e.g. 'River St'; "
                                               "question (topic roads): the street or bridge they ask about; null if not named")
     cross_street: str | None = Field(description="closure_report / location / question (roads): a cross street or landmark that locates it")

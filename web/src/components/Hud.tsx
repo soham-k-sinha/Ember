@@ -207,7 +207,7 @@ export function JoinCard(props: { apiBase: string | null; phones: Phone[]; calls
             <div className="join-qr">
               <QrCode text={`sms:${joined.assigned_number}?&body=JOIN%20EMBER`} />
               <p>
-                Player {joined.player}: from your iPhone (iMessage), text <b>JOIN EMBER</b> to {joined.assigned_number}. You get a real home in the flood zone, and the plan has to save you.
+                Player {joined.player}: from your iPhone (iMessage), text <b>JOIN EMBER</b> to {joined.assigned_number} and EMBER calls you. You get a real home in the flood zone, and the plan has to save you.
                 <button className="join-again" onClick={reset}>Another phone</button>
               </p>
             </div>
@@ -263,7 +263,7 @@ export function Sources(props: { synthetic: string[]; onClose: () => void }) {
             <li key={line}>{line}</li>
           ))}
           <li>household names and members are generated from ids</li>
-          <li>players get a real town building in the forecast flood zone, chosen by us; their needs are what they text</li>
+          <li>players get a real town building in the forecast flood zone, chosen by us; their needs are what they say on the call or text</li>
           <li>neighbours on foot, people gathering at doors and passers-by are illustrative (not simulated, not in any metric)</li>
           <li>everyday street traffic and the traffic-light timing are illustrative; the signal locations are OpenStreetMap's, and the evacuation traffic the vans feel is the engine's staged-evacuation run</li>
           <li>vehicles, pickups, deadlines, facility states and overflow come from the engine's simulation of {scenario.scenario_id}</li>

@@ -18,6 +18,7 @@ This module knows nothing about Ember state; `messaging.py` decides what an inbo
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import random
 import time
@@ -194,7 +195,8 @@ class PhotonListener:
         for t in self._tasks:
             t.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
-        await self._close_sio()
+        with contextlib.suppress(asyncio.CancelledError):  # its read loop went down with the tasks: a clean shutdown anyway
+            await self._close_sio()
 
     # ---------- socket ----------
     def _make_sio(self) -> Any:

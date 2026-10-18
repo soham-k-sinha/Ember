@@ -9,8 +9,9 @@ A phone registered with `locate` has no household. Its texts come here (Messenge
    if they already said, makes an offer. From then on the normal path (Intake) handles their texts.
 Nothing is guessed: no place, or a place outside the town → we ask again.
 
-A drill player (registered with POST /join, then texted the shared line, D89) isn't asked: we choose where
-they live, a free town building the forecast flood reaches, and a burst of joins shares one replan.
+A player (registered with POST /join, then texted the shared line, D89; or who simply called the voice number,
+D100) isn't asked: we choose where they live, a free town building the forecast flood reaches, and a burst of joins
+shares one replan. A player who takes calls is then called (first contact, D100); the text says so.
 """
 
 from __future__ import annotations
@@ -33,18 +34,19 @@ from .threads import player, unplaced
 log = logging.getLogger("residents.locate")
 
 AREA = "Allston and the Cambridge riverside, around Harvard Business School and the Treehouse"
-WELCOME = ("Welcome to the EMBER flood drill. Where are you right now? Reply with your street address "
-           "(e.g. 125 Western Ave) or the nearest intersection (e.g. Western Ave and N Harvard St).")
+WELCOME = ("Where are you right now? Reply with your street address (e.g. 125 Western Ave) or the nearest "
+           "intersection (e.g. Western Ave and N Harvard St).")
 ASK = "Where are you right now? Send your street address or the nearest intersection (e.g. Putnam Ave and Western Ave)."
 ASK_AFTER_NEEDS = "Thanks, noted. Where are you right now? Send your street address or the nearest intersection."
-NOT_FOUND = ("We couldn't find \"{q}\" in the drill area ({area}). Send a street address or the two nearest "
+NOT_FOUND = ("We couldn't find \"{q}\" in the area we cover ({area}). Send a street address or the two nearest "
              "cross streets there.")
-OUTSIDE = "That spot is outside the drill area ({area}). Send an address or intersection inside it."
+OUTSIDE = "That spot is outside the area we cover ({area}). Send an address or intersection inside it."
 NO_BUILDING = "We couldn't match that spot to a building on our map. Send your street address, please."
 PLACED = "Got it: we have you at {label}."
 PICKUP = " Your nearest pickup point is {corner}."
 ASK_FIRST = "We can tell you exactly what to do once we know where you are. "  # a question before a place (D60)
-JOINED = "Welcome to the EMBER flood drill. You're Player {n}: for this drill you live by {corner}, your pickup point."
+JOINED = "You're Player {n}, living by {corner}"
+CALLING = " We're calling you now."
 JOIN_LEAD_S = 1200.0    # a player's building floods at least this long after they join, so they can still be saved
 JOIN_DEBOUNCE_S = 2.0   # joins this close together share one replan
 
@@ -135,7 +137,7 @@ class Locator:
         last = next((m["text"] for m in reversed(self.messenger.lobby_log(handle)) if m["direction"] == "out"), None)
         try:
             log_ = self.messenger.lobby_log(handle)
-            history = [{"from": "them" if m["direction"] == "in" else "EMBER", "text": m["text"].removeprefix("[EMBER drill] ")}
+            history = [{"from": "them" if m["direction"] == "in" else "EMBER", "text": m["text"]}
                        for m in log_[:-1][-8:]]
             ex = await self.llm(SYSTEM, build_prompt(text, "resident", {}, last,
                                                      {"kind": "location", "note": "we don't know where the sender is yet"},
@@ -163,8 +165,14 @@ class Locator:
     def _taken(self) -> set[int]:
         return {h["household_id"] for h in self.store.households()} | {h["household_id"] for h in self.planner.extra_households()}
 
-    async def _join(self, phone: dict) -> None:
-        """A drill player lives in a free town building the forecast flood reaches more than JOIN_LEAD_S from
+    async def join_now(self, phone: dict) -> None:
+        """A player who called in (D100): placed like any player, and replanned right away, so the call can ask its
+        question on this turn."""
+        async with self._lock:
+            await self._join(phone, now=True)
+
+    async def _join(self, phone: dict, now: bool = False) -> None:
+        """A player lives in a free town building the forecast flood reaches more than JOIN_LEAD_S from
         now, at the pickup corner with the fewest households so far (players spread out), earliest flood first."""
         bridge = self.planner.bridge
         taken = self._taken()
@@ -177,7 +185,8 @@ class Locator:
             return
         _, _, hid, node = min(free)
         lon, lat = next((x, y) for h, x, y, _ in self.places.households if h == hid)
-        await self.place(phone, Place(lon, lat, self.places.corner_label(node), "player"), player(self.store, phone["handle"]))
+        await self.place(phone, Place(lon, lat, self.places.corner_label(node), "player"), player(self.store, phone["handle"]),
+                         now=now)
 
     def _replan_soon(self, n: int) -> None:
         self._last_join = time.monotonic()
@@ -195,9 +204,9 @@ class Locator:
         except Exception:  # noqa: BLE001 - placed; the next replan picks them up
             log.exception("replan after players joined failed")
 
-    async def place(self, phone: dict, where: Place, as_player: int | None = None) -> dict | None:
+    async def place(self, phone: dict, where: Place, as_player: int | None = None, now: bool = False) -> dict | None:
         """Bind `phone` to the nearest free building at `where` and replan (a player: once their burst of joins
-        is over). Returns the new thread."""
+        is over, unless `now`). Returns the new thread."""
         handle = phone["handle"]
         bridge = self.planner.bridge
         hit = self.places.nearest_household(where.lon, where.lat, exclude=self._taken())
@@ -210,20 +219,26 @@ class Locator:
         await self.planner.add_household({"household_id": hid, "label": label, "needs": "unknown",
                                           "lon": where.lon, "lat": where.lat, "handle": handle})
         deadline = bridge.deadline(hid)
-        now = self.planner.now()
+        t_now = self.planner.now()
         if deadline is None:
             flood = " Your street is outside the forecast flood area."
             corners = bridge.flood_corners(1) if self.drill_tips else []
             if corners:
-                flood += (f" (Drill tip: to test an evacuation, start over from a spot the water reaches, "
+                flood += (f" (Tip: to try an evacuation, start over from a spot the water reaches, "
                           f"e.g. {corners[0][1]}.)")
-        elif (m := round((deadline + bridge.margin_s - now) / 60)) > 0:
-            flood = f" Water is forecast to reach your street in about {m} min."
+        elif (m := round((deadline + bridge.margin_s - t_now) / 60)) > 0:
+            flood = f" The river reaches your street in about {m} min."
         else:
             flood = " Your street is flooding now."
         pickup = "" if corner.endswith(where.label) else PICKUP.format(corner=corner)  # they named that corner
-        intro = JOINED.format(n=as_player, corner=corner) if as_player else PLACED.format(label=where.label) + pickup
-        await self.messenger.send_to_phone(handle, intro + flood)
+        voice = self.messenger.voice
+        if as_player:  # one sentence: who they are, where, when the water comes; then the call (D100)
+            intro = JOINED.format(n=as_player, corner=corner) + ";" + flood[:2].lower() + flood[2:]
+            if voice is not None and voice.calls_first(handle) and voice.live(handle) is None:
+                intro += CALLING
+        else:
+            intro = PLACED.format(label=where.label) + pickup + flood
+        await self.messenger.send_to_phone(handle, intro)
         thread = {"household_id": hid}
         self.store.kv_set(f"located:{handle}", json.dumps({"household_id": hid, "lon": where.lon, "lat": where.lat,
                                                           "label": where.label, "source": where.source,
@@ -238,11 +253,12 @@ class Locator:
                                               "confidence": 1.0, "text": "(from their first texts)"}, replan=False)
         elif needs:  # e.g. "my mom uses a wheelchair" but no head count: the plan's question completes it
             self.store.kv_set(f"pending:{thread_key(thread)}", json.dumps({"kind": "need", **needs}))
-        if as_player:
+        if as_player and not now:
             self._replan_soon(as_player)
             return thread
         try:
-            await self.planner.replan(trigger=f"New resident texted in ({where.label})")
+            await self.planner.replan(trigger=f"Player {as_player} joined by phone" if as_player
+                                      else f"New resident texted in ({where.label})")
         except Exception:  # noqa: BLE001 - placed; the next text or replan picks it up
             log.exception("replan after placing %s failed", handle)
         return thread

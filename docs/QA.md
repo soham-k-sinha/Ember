@@ -62,8 +62,8 @@ worlds**; the scatter and a throughput tile).
 ## 5 · EMBER calls first (2:30–2:55)
 | # | Who | Action | Expected | Blocker / fallback | ✓ |
 |---|---|---|---|---|---|
-| 5.1 | X | `POST /calls {"handle": …}` to X's opted-in phone, on speaker | rings in < 10 s; roster shows **on call**; EMBER opens "Hi, this is EMBER, an automated assistant for the flood drill" and that thread's open question | no ring → read the Margaret excerpt (`docs/voice_transcripts.md`) | |
-| 5.2 | X | answer "yes", hang up | "As promised" text arrives after the call | | |
+| 5.1 | X | `POST /calls {"handle": …}` to X's opted-in phone, on speaker | rings in < 10 s; roster shows **on call**; the first call opens "This is EMBER, an automated assistant in a live flood simulation." and asks how many people and whether anyone needs medical or mobility help | no ring → read Maria's first-contact excerpt (`docs/voice_transcripts.md`) | |
+| 5.2 | X | give the head count and care needs, then hang up | the computed instruction is spoken; a "From our call:" text follows; no YES/DONE needed | | |
 | 5.3 | X | total time | ≤ 3:00 | | |
 
 ## 6 · Reset between rehearsals

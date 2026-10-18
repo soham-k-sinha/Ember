@@ -401,3 +401,11 @@ What: the header reads "Allston flood · live simulation", the join card reads "
 Interfaces: none.
 Status: web tsc + build + npm test pass. Label stacking not yet seen with live players. PR #55 open.
 Next: merge once CI is green and the user approves; confirm fps in real Chrome with ?perf.
+
+## 2026-10-18 · Calls-first takeover, integration and delivery fixes (D100–D101) · branch codex/call-first-takeover
+What: at Aryaman's request, Codex preserved the unfinished aryaman/call-first diff, applied it onto main c0ca991, kept the latest stage/traffic work, and renumbered the colliding D99 voice decision to D100. Calls first, one retry, clock-driven guidance without required YES/DONE, first-contact disclosure and speech revision guards are integrated. Reproduced and fixed duplicate concurrent dials, updates lost during dialing, discarded first caller needs, idle calls without follow-ups, and obsolete queued arrival warnings; six regression tests include retry with a paused clock. Aligned engine/fixture questions and rehearsal docs.
+Files: residents/ (call flow + tests), engine/ember_engine/{allocator/explain,state}.py (wording only), contracts/fixtures + state schema description, scenario facility names, web join/feed copy, docs/CALLS_FIRST_HANDOFF.md, docs/{DEMO,QA,HANDOFF,voice_transcripts,DECISIONS}.md, README.md.
+Run: full residents suite 307 passed; full engine suite 106 passed + smoke; web build + all four npm checks; e2e.py --skip-optimize 74/74 against an isolated keyless backend; sim_calls.py five-person scenario completed; ruff + diff check clean.
+Interfaces: no contract shape change; state schema description corrected. D100 adds VOICE_POLL_S (5 wall-s) and defaults VOICE_MAX_CONCURRENT to 3. Snapshot remains ember-engine-d9ea4508c1.
+Status: done locally on the takeover branch; original Claude worktrees and main untouched. No real calls/texts, provider reconfiguration, paid model calls or Daytona runs.
+Next: docs/CALLS_FIRST_HANDOFF.md lists the precise real-phone/provider checks; resume from this worktree rather than the older unfinished branches.

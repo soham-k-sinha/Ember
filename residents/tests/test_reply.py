@@ -1,7 +1,7 @@
 """The AI talks, the planner decides (D76). Each inbound turn's computed messages are still the record (offers,
 YES/NO bookkeeping, steps); the person gets one natural reply written from them, which a deterministic guard checks
 (no invented numbers, vehicles, streets, safety claims; every ask kept). Anything the guard rejects → the computed
-messages go out as before. Replays Soham's 2026-10-17 call, where "No, I'm stuck in my house and can't get out"
+messages go out as before; never an ask for a yes or an official voice (D100). Replays Soham's 2026-10-17 call, where "No, I'm stuck in my house and can't get out"
 declined three vans in a row."""
 import json
 from dataclasses import replace
@@ -10,25 +10,29 @@ import pytest
 from fastapi.testclient import TestClient
 
 from residents.app import create_app
+from residents.messaging import DISCLOSURE
+from residents.outbound import ASK_NEEDS
 from residents.reply import check
 from tests.helpers import PUTNAM, R1, SCENARIO, SCRIPT, FakeLLM, Tap, ex, fact, register, text, thread_of
 
-NAMES = ["Van 1", "Van 2", "Accessible Van 3", "Utility truck", "David Rubenstein Treehouse (drill shelter)"]
-OFFER = ("[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 min and take "
-         "you to David Rubenstein Treehouse (drill shelter). Reply YES to confirm, or tell us what changed. (plan v3)")
+NAMES = ["Van 1", "Van 2", "Accessible Van 3", "Utility truck", "David Rubenstein Treehouse"]
+OFFER = (f"{DISCLOSURE} Van 2 picks you up in about 3 min. Pack medications, ID and your phone, then go out to the "
+         "pickup point right outside: the corner of Putnam Avenue and Western Avenue. (plan v3)")
 
 
 # ---------- the guard ----------
 @pytest.mark.parametrize("reply,ok,why", [
-    ("Thanks. Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 min and take you to "
-     "David Rubenstein Treehouse (drill shelter). Reply YES to confirm.", True, ""),
-    ("Van 2 is the only one coming; it'll be there in about 3 min. Reply YES to confirm.", True, ""),
-    ("Van 2 will be there in about 5 min. Reply YES to confirm.", False, "numbers"),
-    ("Van 1 will pick you up in about 3 min. Reply YES to confirm.", False, "Van 1"),
-    ("Van 2 will meet you at Memorial Drive in about 3 min. Reply YES to confirm.", False, "Memorial Drive"),
-    ("Van 2 will pick you up in about 3 min.", False, "YES"),
-    ("Van 2 is coming in about 3 min, you're safe now. Reply YES to confirm.", False, "safe"),
-    ("If it gets bad call 911. Van 2 comes in about 3 min. Reply YES to confirm.", False, "911"),
+    ("Thanks. Van 2 picks you up in about 3 min. Pack medications, ID and your phone, then go out to the corner of "
+     "Putnam Avenue and Western Avenue.", True, ""),
+    ("Van 2 is the only one coming; it'll be at the corner of Putnam Avenue and Western Avenue in about 3 min.", True, ""),
+    ("Van 2 will be there in about 5 min.", False, "numbers"),
+    ("Van 1 will pick you up in about 3 min.", False, "Van 1"),
+    ("Van 2 will meet you at Memorial Drive in about 3 min.", False, "Memorial Drive"),
+    ("Van 2 picks you up in about 3 min. Reply YES to confirm.", False, "asks for a yes"),
+    ("Van 2 picks you up in about 3 min. Say done when you're outside.", False, "asks for a yes or a done"),
+    ("Van 2 is coming in about 3 min, you're safe now.", False, "safe"),
+    ("If it gets bad call 911. Van 2 comes in about 3 min.", False, "911"),
+    ("This is an official alert: Van 2 comes in about 3 min.", False, "official"),
     ("", False, "empty"),
 ])
 def test_guard(reply, ok, why):
@@ -37,9 +41,9 @@ def test_guard(reply, ok, why):
 
 
 def test_guard_keeps_a_question():
-    q = "[EMBER drill] How many people are with you, and does anyone need a wheelchair-accessible vehicle?"
+    q = f"{DISCLOSURE} {ASK_NEEDS}"
     assert not check("I'm sorry you're stuck. We're getting a vehicle ready.", [q], "", NAMES).ok
-    assert check("I'm sorry you're stuck. How many people are with you, and does anyone need a wheelchair?", [q], "", NAMES).ok
+    assert check("I'm sorry you're stuck. How many people are with you, and is anyone hurt or in a wheelchair?", [q], "", NAMES).ok
 
 
 # ---------- one reply per turn ----------
@@ -78,13 +82,13 @@ def test_a_turn_gets_one_reply_and_the_record_is_unchanged(settings, solo_bridge
         n = len(tap.outs(R1))
         text(c, R1, "2 of us")
         [reply] = tap.outs(R1)[n:]                                   # one message for the turn
-        assert reply.startswith("Thanks, got it. ") and " will pick you up at " in reply
+        assert reply.startswith("Thanks, got it. ") and " picks you up in about " in reply
         assert w.inputs[-1]["they_said"] == "2 of us" and w.inputs[-1]["conversation_so_far"]
         key = f"household:{thread_of(c, R1)['household_id']}"
         conv = c.app.state.store.conversation(key)
         assert conv[-1]["text"] == reply                             # the conversation shows what they got
-        text(c, R1, "yes")                                           # bookkeeping intact: the offer was offered
-        assert any("Step 1 of 4" in x for x in tap.outs(R1)[-1:]), tap.outs(R1)[-1]
+        text(c, R1, "yes")                                           # bookkeeping intact: the pickup is under way
+        assert " gets to you in about " in tap.outs(R1)[-1], tap.outs(R1)[-1]
 
 
 def test_a_rejected_reply_falls_back_to_the_computed_messages(settings, solo_bridge):
@@ -104,7 +108,7 @@ def test_writer_down_falls_back(settings, solo_bridge):
         register(c)
         text(c, R1, PUTNAM)
         text(c, R1, "2 of us")
-        assert " will pick you up at " in tap.outs(R1)[-1]
+        assert " picks you up in about " in tap.outs(R1)[-1]
 
 
 def test_understanding_sees_the_conversation(settings, solo_bridge):
@@ -137,7 +141,7 @@ def test_stuck_at_home_is_a_door_pickup_not_a_decline(settings, solo_bridge, tmp
         assert "Van 2" in tap.outs(R1)[-1] or "Van 1" in tap.outs(R1)[-1]
         text(c, R1, STUCK)
         last = tap.outs(R1)[-1]
-        assert "Accessible Van 3" in last and "at your door" in last, last
+        assert "Accessible Van 3" in last and "to your door" in last, last
         text(c, R1, LEG)
         t = thread_of(c, R1)
         assert c.app.state.store.kv_get(f"rejected:household:{t['household_id']}") in (None, "[]")  # nothing declined
@@ -159,7 +163,7 @@ def test_a_bare_yes_to_an_offer_needs_no_model(settings, solo_bridge):
         before = len(c.app.state.intake.llm.prompts)
         text(c, R1, "Yes.")
         assert len(c.app.state.intake.llm.prompts) == before    # no model call
-        assert "Step 1 of 4" in tap.outs(R1)[-1]
+        assert " gets to you in about " in tap.outs(R1)[-1]
 
 
 def test_over_photon_a_turn_is_one_imessage(settings, solo_bridge, monkeypatch):
@@ -180,10 +184,10 @@ def test_over_photon_a_turn_is_one_imessage(settings, solo_bridge, monkeypatch):
         sends = fp.sends()[n:]
         assert len(sends) == 1, [x["content"]["text"] for x in sends]          # placed + the plan's question: one text
         t = sends[0]["content"]["text"]
-        assert t.startswith("[EMBER drill] Thanks, got it. ") and "How many people" in t
+        assert t.startswith("Thanks, got it. ") and "How many people" in t     # the notice was on the first text only
         n = len(fp.sends())
         deliver(c, received("m-3", R1, "2 of us"))
         [offer] = fp.sends()[n:]
-        assert " will pick you up at " in offer["content"]["text"]
+        assert " picks you up in about " in offer["content"]["text"] and "Reply" not in offer["content"]["text"]
         deliver(c, received("m-4", R1, "yes"))
-        assert "Step 1 of 4" in fp.sends()[-1]["content"]["text"]               # the YES confirmed the real offer
+        assert " gets to you in about " in fp.sends()[-1]["content"]["text"]   # understood, never needed

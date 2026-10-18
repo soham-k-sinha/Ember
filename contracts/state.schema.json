@@ -206,7 +206,7 @@
             {"type": "object", "required": ["facility_id"], "additionalProperties": false, "properties": {"facility_id": {"type": "string"}}}
           ]},
           "direction": {"enum": ["in", "out"]},
-          "text": {"type": "string", "description": "Outbound text starts with '[EMBER drill]'."},
+          "text": {"type": "string", "description": "The first text to a phone carries the simulation disclosure; later messages use the computed plan (D100)."},
           "t_s": {"type": "number", "minimum": 0},
           "plan_version": {"type": ["integer", "null"]},
           "assignment_id": {"type": ["string", "null"]},

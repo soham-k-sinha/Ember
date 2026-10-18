@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from residents.app import create_app
 from residents.intake import PLANNER_DOWN
+from residents.messaging import plain
 from residents.photon import PhotonListener, parse_inbound
 from tests.fake_photon import FakePhoton, received
 from tests.helpers import JUDGE, SCENARIO, FakeLLM, ex, fact
@@ -68,7 +69,7 @@ def test_planner_failure_is_told_and_survived(rc):
     try:
         r = rc.post("/dev/inbound", json={"role": "resident", "text": "2 of us, wheelchair"})
         assert r.status_code == 200
-        assert outs(rc)[-1]["text"] == f"[EMBER drill] {PLANNER_DOWN}"
+        assert plain(outs(rc)[-1]["text"]) == PLANNER_DOWN
         st = rc.get("/state").json()
         rep = next(x for x in st["reports"] if x["kind"] == "need" and x["source"] == "resident")
         assert rep["resolved"] is False and st["plan_version"] == 1

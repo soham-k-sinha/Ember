@@ -1,5 +1,7 @@
 # HANDOFF — read this first in a fresh session
 
+Calls-first continuation (D100): see `docs/CALLS_FIRST_HANDOFF.md`. That branch adds proactive calls and clock-driven steps without required YES/DONE; the round-3 measurements below are the earlier main-branch integration.
+
 Last updated: **Sun 2026-10-18, round 3** (backend D92, web D93 and the second hazard D94 merged and checked together on `aryaman/round3`, D95). Submission: **Sunday 8:00 AM** on Devpost.
 Then read: `README.md` (judge landing page), `CLAUDE.md`, `docs/DECISIONS.md`, all of `docs/log/*.md`, `docs/TECHNICAL.md` (the plan), `residents/README.md` (backend, API, drill, calls).
 

@@ -13,6 +13,7 @@ from residents.contracts import validate_report
 from residents.engine_bridge import normalize_street, street_matches
 from residents.extract import make_llm
 from residents.intake import SORRY
+from residents.messaging import plain
 from tests.helpers import JUDGE, SCENARIO, FakeLLM, ex, fact, outcome
 
 def complete(r):  # what planner.submit_report adds before validating
@@ -153,7 +154,7 @@ def test_missing_count_asks_then_reply_completes(make_client):
         c.post("/dev/inbound", json={"role": "resident", "text": "we need a wheelchair van"})
         st = c.get("/state").json()
         assert st["plan_version"] == 1 and st["messages"][-1]["direction"] == "out"
-        assert st["messages"][-1]["text"].startswith("[EMBER drill] How many people")
+        assert plain(st["messages"][-1]["text"]).startswith("How many people")
         c.post("/dev/inbound", json={"role": "resident", "text": "2"})
         st = c.get("/state").json()
         assert st["plan_version"] == 2 and judge(st)["needs"] == {"people": 2, "mobility": True, "accessible_vehicle": True}
@@ -168,7 +169,7 @@ def test_llm_failure_asks_politely_and_keeps_running(make_client):
         assert r.status_code == 200
         st = c.get("/state").json()
         # unreadable even for the keyword parser: the plan's open question again, not a generic apology (D74)
-        assert st["plan_version"] == 1 and st["messages"][-1]["text"].startswith("[EMBER drill] Sorry, I didn't catch that.")
+        assert st["plan_version"] == 1 and plain(st["messages"][-1]["text"]).startswith("Sorry, I didn't catch that.")
         assert SORRY not in st["messages"][-1]["text"]
 
 

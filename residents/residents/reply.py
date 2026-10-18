@@ -6,8 +6,10 @@ person receives for that turn: Claude Haiku rewrites the turn's computed message
 to what they actually said, acknowledging it, and a deterministic guard checks the result before it is sent:
 
 - every number, vehicle, facility and street it mentions appears in the drafts or the fact sheet;
-- every ask in the drafts survives ("reply YES" → it still asks for yes; "reply DONE" → done; a question stays);
-- no safety claim the drafts don't make ("you're safe", "no need to leave", "stay put", "911");
+- every question in the drafts survives, and it adds no ask of its own ("reply YES", "say done": D100, we go ahead
+  unless told otherwise);
+- no safety claim the drafts don't make ("you're safe", "no need to leave", "stay put", "911"), and never an official
+  voice ("official", "emergency alert", police, FEMA);
 - not much longer than the drafts.
 
 Anything the guard rejects, a timeout, an API error or a refusal → the drafts go out as they are. So the worst
@@ -24,23 +26,25 @@ from typing import Awaitable, Callable
 
 from .config import Settings
 from .extract import anthropic_client
+from .messaging import plain
 
 log = logging.getLogger("residents.reply")
 
 TIMEOUT_S = 8.0
 
-SYSTEM = """You are EMBER, the voice of a flood-evacuation drill coordinator in Allston/Cambridge, talking with one resident (or a facility operator) by text message or on a phone call.
+SYSTEM = """You are EMBER, an automated flood-evacuation assistant in a live flood simulation in Allston/Cambridge, talking with one resident (or a facility operator) by text message or on a phone call. Lives are at stake in the scenario: be warm, calm and decisive.
 
 Each turn you get what they just said, the recent conversation, and DRAFTS: the messages our planner computed for this turn. Write the ONE reply we send instead of the drafts.
 
 How to write it:
 - Answer what they actually said first, briefly and humanly. If they're hurt, scared or stuck, acknowledge it in a few words ("I'm sorry about your leg.") and say what we're doing about it, using the drafts.
-- Then carry every fact and every instruction in the drafts: vehicle names, times, places, steps, what they should do. Keep the drafts' order of importance.
-- Keep every time and number attached to exactly what the drafts attach it to: "you should be at the shelter in about 16 min" is when they arrive, not how long the ride takes; "within about 135 min" is a deadline, not an arrival time. Don't convert, add up or re-explain times.
-- Never add a fact: no time, number, vehicle, street, place, shelter, promise or reassurance that is not written in the drafts or the facts. Don't guess, don't estimate, don't invent a reason. If the drafts don't answer something they asked, say a coordinator has their question only if the drafts say so.
-- If a draft asks them to reply YES / NO / DONE, end with that ask (e.g. "Reply YES to confirm."). If a draft asks a question, end with that question.
-- Plain sentences, no lists, no markdown, no emoji. Short: usually 2-4 sentences. On a call, it will be read aloud.
-- Don't start with "[EMBER drill]" and don't mention plan versions; we add what's needed."""
+- Then carry every fact and every instruction in the drafts: vehicle names, times, places, what they should do now. Keep the drafts' order of importance.
+- Keep every time and number attached to exactly what the drafts attach it to: "you should be at the shelter in about 16 min" is when they arrive, not how long the ride takes. Don't convert, add up or re-explain times.
+- Never add a fact: no time, number, vehicle, street, place, shelter, promise or reassurance that is not written in the drafts or the facts. Don't guess, don't estimate, don't invent a reason or a resource. If the drafts don't answer something they asked, say a coordinator has their question only if the drafts say so.
+- State instructions as instructions. Never ask them to confirm, to reply yes or to say done: we go ahead unless they tell us otherwise. If a draft asks a question, end with that question.
+- Never claim to be, or to speak for, an official authority (no "official alert", police, fire department, FEMA, weather service).
+- Plain sentences, no lists, no markdown, no emoji. Text: usually 2-3 sentences. Phone call (read aloud): at most 2 short sentences.
+- Don't add or repeat the simulation notice and don't mention plan versions; we add what's needed."""
 
 Writer = Callable[[str, str], Awaitable[str | None]]  # (system, user) → reply text or None
 
@@ -63,7 +67,7 @@ def make_writer(settings: Settings, timeout_s: float = TIMEOUT_S) -> Writer:
 
 def build_input(said: str, history: list[dict], drafts: list[str], facts: str, channel: str) -> str:
     return json.dumps({"channel": channel, "they_said": said, "conversation_so_far": history,
-                       "drafts": [d.removeprefix("[EMBER drill] ") for d in drafts], "facts": facts}, indent=1)
+                       "drafts": [plain(d) for d in drafts], "facts": facts}, indent=1)
 
 
 # ---------- the guard ----------
@@ -72,7 +76,9 @@ _NUMWORDS = {"two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "
 _SUFFIX = r"(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Place|Pl|Square|Sq|Boulevard|Blvd|Way|Parkway|Bridge|Lane|Court)"
 STREET = re.compile(r"\b((?:[A-Z][a-z]+ ){1,3}" + _SUFFIX + r")\b")
 UNSAFE = ("you're safe", "you are safe", "no need to leave", "no need to evacuate", "stay put", "stay where you are",
-          "911", "nine one one", "guarantee", "definitely", "for sure", "promise")
+          "911", "nine one one", "guarantee", "definitely", "for sure", "promise",
+          # never an official voice (D100): these reach real phones
+          "official", "emergency alert", "police", "fire department", "fema", "weather service")
 _SFX = {"st": "street", "ave": "avenue", "rd": "road", "dr": "drive", "pl": "place", "sq": "square", "blvd": "boulevard"}
 
 
@@ -116,6 +122,9 @@ def check(reply: str, drafts: list[str], facts: str, names: list[str]) -> Check:
     for word in ("yes", "done", "no"):
         if re.search(rf"\breply {word}\b|\bsay {word}\b", srclow) and not re.search(rf"\b{word}\b", low):
             return Check(False, f"drops the ask for {word.upper()}")
+    if re.search(r"\b(reply|say|text|tell me) (yes|done)\b|\bto confirm\b", low) and not re.search(
+            r"\b(reply|say|text|tell me) (yes|done)\b|\bto confirm\b", srclow):
+        return Check(False, "asks for a yes or a done the drafts don't (D100: we go ahead unless told otherwise)")
     if any(d.rstrip().endswith("?") for d in drafts) and "?" not in reply:
         return Check(False, "drops the question we need answered")
     if len(reply) > max(2 * len(" ".join(drafts)), 400):
@@ -138,7 +147,7 @@ async def compose(writer: Writer | None, *, said: str, history: list[dict], draf
         return None, "writer failed"
     if reply is None:
         return None, "refused"
-    reply = reply.strip().removeprefix("[EMBER drill]").strip()
+    reply = plain(reply.strip())
     c = check(reply, drafts, facts, names)
     if not c.ok:
         log.warning("reply rejected by the guard (%s): %r", c.why, reply[:200])

@@ -432,7 +432,7 @@
    "role": "resident",
    "text": "what happens now?",
    "context": {
-    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse (drill shelter). Reply YES to confirm, or tell us what changed. (plan v3)"
+    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse. Reply YES to confirm, or tell us what changed. (plan v3)"
    },
    "expect": {
     "kinds": [
@@ -471,7 +471,7 @@
    "role": "resident",
    "text": "will the water reach my street?",
    "context": {
-    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse (drill shelter). Reply YES to confirm, or tell us what changed. (plan v3)"
+    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse. Reply YES to confirm, or tell us what changed. (plan v3)"
    },
    "expect": {
     "kinds": [
@@ -484,7 +484,7 @@
    "role": "resident",
    "text": "is River St open?",
    "context": {
-    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse (drill shelter). Reply YES to confirm, or tell us what changed. (plan v3)"
+    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse. Reply YES to confirm, or tell us what changed. (plan v3)"
    },
    "expect": {
     "kinds": [
@@ -512,7 +512,7 @@
    "role": "resident",
    "text": "is it safe to drive to my sister's place?",
    "context": {
-    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse (drill shelter). Reply YES to confirm, or tell us what changed. (plan v3)"
+    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse. Reply YES to confirm, or tell us what changed. (plan v3)"
    },
    "expect": {
     "kinds": [
@@ -551,7 +551,7 @@
    "role": "resident",
    "text": "can I bring my cat?",
    "context": {
-    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse (drill shelter). Reply YES to confirm, or tell us what changed. (plan v3)"
+    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse. Reply YES to confirm, or tell us what changed. (plan v3)"
    },
    "expect": {
     "kinds": [
@@ -564,7 +564,7 @@
    "role": "resident",
    "text": "what should I pack?",
    "context": {
-    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse (drill shelter). Reply YES to confirm, or tell us what changed. (plan v3)"
+    "last_outbound": "[EMBER drill] Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 12 min and take you to David Rubenstein Treehouse. Reply YES to confirm, or tell us what changed. (plan v3)"
    },
    "expect": {
     "kinds": [
@@ -577,7 +577,7 @@
    "role": "resident",
    "text": "Um, we are three people, and no one needs a, a vehi- uh, no one needs an accessible vehicle.",
    "context": {
-    "last_outbound": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed.",
+    "last_outbound": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed.",
     "history": [
      {
       "from": "EMBER",
@@ -589,7 +589,7 @@
      },
      {
       "from": "EMBER",
-      "text": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
+      "text": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
      }
     ]
    },
@@ -605,7 +605,7 @@
    "role": "resident",
    "text": "No, uh, that's not okay because I'm currently stuck in my house and I can't get out.",
    "context": {
-    "last_outbound": "Van 1 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed.",
+    "last_outbound": "Van 1 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed.",
     "history": [
      {
       "from": "EMBER",
@@ -617,7 +617,7 @@
      },
      {
       "from": "EMBER",
-      "text": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
+      "text": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
      },
      {
       "from": "them",
@@ -625,7 +625,7 @@
      },
      {
       "from": "EMBER",
-      "text": "Van 1 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
+      "text": "Van 1 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
      }
     ]
    },
@@ -640,7 +640,7 @@
    "role": "resident",
    "text": "No, um, actually, I'm injured right now. I've got, like, I've got a broken leg. I can't walk, so I can't make it out of the house.",
    "context": {
-    "last_outbound": "Accessible Van 3 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed.",
+    "last_outbound": "Accessible Van 3 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed.",
     "history": [
      {
       "from": "EMBER",
@@ -652,7 +652,7 @@
      },
      {
       "from": "EMBER",
-      "text": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
+      "text": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
      }
     ]
    },
@@ -668,7 +668,7 @@
    "role": "resident",
    "text": "no thanks, we'll drive ourselves to my sister's",
    "context": {
-    "last_outbound": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed.",
+    "last_outbound": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed.",
     "history": [
      {
       "from": "EMBER",
@@ -680,7 +680,7 @@
      },
      {
       "from": "EMBER",
-      "text": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
+      "text": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
      }
     ]
    },
@@ -694,7 +694,7 @@
    "role": "resident",
    "text": "No.",
    "context": {
-    "last_outbound": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed.",
+    "last_outbound": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed.",
     "history": [
      {
       "from": "EMBER",
@@ -706,7 +706,7 @@
      },
      {
       "from": "EMBER",
-      "text": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
+      "text": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
      }
     ]
    },
@@ -720,7 +720,7 @@
    "role": "resident",
    "text": "no, it's actually 4 of us",
    "context": {
-    "last_outbound": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed.",
+    "last_outbound": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed.",
     "history": [
      {
       "from": "EMBER",
@@ -732,7 +732,7 @@
      },
      {
       "from": "EMBER",
-      "text": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse (drill shelter). Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
+      "text": "Van 2 will pick you up at the corner of Putnam Avenue and Western Avenue in about 3 minutes and take you to David Rubenstein Treehouse. Plan to be out within about 135 minutes, before the water reaches your street. Say yes to confirm, or tell us what changed."
      }
     ]
    },
