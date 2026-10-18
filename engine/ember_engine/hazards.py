@@ -53,14 +53,14 @@ class _Cached:
 class GrowingEllipseHazard(_Cached):
     """Wind-driven front: an ellipse that grows from an ignition point and drifts downwind.
 
-    center: (lon, lat); heading_deg: compass direction the front moves toward;
-    speed_mps: growth of the semi-major axis; ratio: length/breadth.
+    origin: (lon, lat) of the local frame (the world's center); center: (lon, lat) of ignition;
+    heading_deg: compass direction the front moves toward; speed_mps: growth of the semi-major axis; ratio: length/breadth.
     """
 
-    def __init__(self, world, center_lonlat, start_t_s=0.0, speed_mps=0.6, heading_deg=90.0, ratio=2.5, min_radius_m=60.0):
+    def __init__(self, origin_lonlat, center_lonlat, start_t_s=0.0, speed_mps=0.6, heading_deg=90.0, ratio=2.5, min_radius_m=60.0):
         super().__init__()
         from .geo import local_projector
-        to_xy, _ = local_projector(*world.center)
+        to_xy, _ = local_projector(*origin_lonlat)
         cx, cy = to_xy(center_lonlat[0], center_lonlat[1])
         self.cx, self.cy = float(cx), float(cy)
         self.start, self.speed, self.heading, self.ratio, self.min_r = start_t_s, speed_mps, heading_deg, ratio, min_radius_m
@@ -110,13 +110,17 @@ class NoHazard(_Cached):
         return None
 
 
+def ellipse_from(origin_lonlat, h: dict) -> GrowingEllipseHazard:
+    """An `ellipse` hazard spec (job or scenario contract) in the local frame around origin."""
+    return GrowingEllipseHazard(origin_lonlat, h.get("center", origin_lonlat), start_t_s=h.get("start_t_s", 0.0),
+                                speed_mps=h.get("speed_mps", 0.6), heading_deg=h.get("heading_deg", 90.0), ratio=h.get("ratio", 2.5))
+
+
 def hazard_from_scenario(world, scenario: dict) -> Hazard:
     h = scenario.get("hazard", {"type": "none"})
     typ = h.get("type", "none")
     if typ == "ellipse":
-        return GrowingEllipseHazard(world, center_lonlat=h.get("center", world.meta["center"]),
-                                    start_t_s=h.get("start_t_s", 0.0), speed_mps=h.get("speed_mps", 0.6),
-                                    heading_deg=h.get("heading_deg", 90.0), ratio=h.get("ratio", 2.5))
+        return ellipse_from(world.center, h)
     if typ == "keyframes":
         return KeyframePolygonHazard(world, h["keyframes"])
     if typ == "flood_keyframes":   # scenario.schema.json: [{t_s, geometry: GeoJSON Polygon|MultiPolygon}]

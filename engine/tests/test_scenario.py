@@ -1,8 +1,9 @@
-"""validate-scenario: the example passes; broken references are caught; flood keyframes close roads."""
+"""validate-scenario: the example passes; broken references are caught; flood keyframes close roads; the plume runs too."""
 
 from __future__ import annotations
 
 import copy
+import gzip
 import json
 from pathlib import Path
 
@@ -12,7 +13,8 @@ from ember_engine.hazards import hazard_from_scenario
 from ember_engine.scenario import deadlines, load_scenario, validate
 from ember_engine.world import World
 
-FX = Path(__file__).resolve().parents[2] / "contracts" / "fixtures"
+ROOT = Path(__file__).resolve().parents[2]
+FX = ROOT / "contracts" / "fixtures"
 
 
 @pytest.fixture(scope="module")
@@ -91,3 +93,20 @@ def test_deadline_is_flood_time_minus_margin(town, scn):
     times = {k["t_s"] for k in scn["hazard"]["keyframes"]}
     m = scn["deadline_margin_s"]
     assert all(v is None or v + m in times for v in d.values())
+
+
+def test_plume_runs_on_the_same_engine():
+    """D94: an ellipse hazard is sampled into keyframes; the plume scenario validates against the shared town, its
+    GrowingEllipseHazard closes more roads over time, and EMBER reaches more people than the baseline."""
+    from ember_engine.allocator import allocate
+    from ember_engine.baseline import baseline_plan
+    from ember_engine.sim import simulate
+    town = json.loads(gzip.decompress((ROOT / "engine" / "data" / "town.json.gz").read_bytes()))
+    scn = load_scenario(ROOT / "scenarios" / "allston_plume_v1" / "scenario.json")
+    r = validate(scn, town)
+    assert r.ok, r.errors
+    w = World.from_dict(town)
+    hz = hazard_from_scenario(w, scn)
+    assert 0 == hz.closed_mask_at(0.0, w).sum() < hz.closed_mask_at(1800.0, w).sum() < hz.closed_mask_at(7200.0, w).sum()
+    b, e = (simulate(w, scn, p, record=False).metrics["people_reached_before_deadline"] for p in (baseline_plan(w, scn), allocate(w, scn)))
+    assert e > b

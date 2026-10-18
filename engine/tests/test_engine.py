@@ -92,8 +92,8 @@ def test_closures_reroute_and_block(world):
 
 
 def test_hazard_grows_and_heading_matters(world):
-    east = GrowingEllipseHazard(world, CENTER, speed_mps=1.0, heading_deg=90.0)
-    north = GrowingEllipseHazard(world, CENTER, speed_mps=1.0, heading_deg=0.0)
+    east = GrowingEllipseHazard(world.center, CENTER, speed_mps=1.0, heading_deg=90.0)
+    north = GrowingEllipseHazard(world.center, CENTER, speed_mps=1.0, heading_deg=0.0)
     a0, a1 = east.closed_mask_at(0.0, world).sum(), east.closed_mask_at(300.0, world).sum()
     assert 0 < a0 < a1
     assert (east.closed_mask_at(300.0, world) != north.closed_mask_at(300.0, world)).any()

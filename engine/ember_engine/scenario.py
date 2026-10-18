@@ -19,7 +19,8 @@ VEHICLE_KINDS = {"van", "accessible_van", "truck"}
 
 # ---------- loading ----------
 def load_scenario(path: str | Path) -> dict:
-    """Read scenario.json; inline `hazard.keyframes_file` (GeoJSON FeatureCollection, properties.t_s)."""
+    """Read scenario.json; inline `hazard.keyframes_file` (GeoJSON FeatureCollection, properties.t_s), or sample an
+    `ellipse` hazard into keyframes: the planner and simulator read every hazard as timed extents."""
     path = Path(path)
     scn = json.loads(path.read_text())
     hz = scn.get("hazard", {})
@@ -27,7 +28,23 @@ def load_scenario(path: str | Path) -> dict:
         fc = json.loads((path.parent / hz.pop("keyframes_file")).read_text())   # pop: schema allows one or the other
         hz["keyframes"] = [{"t_s": float(f["properties"]["t_s"]), "label": f["properties"].get("label", ""),
                             "geometry": f["geometry"]} for f in fc["features"]]
+    if hz.get("type") == "ellipse":
+        hz["keyframes"] = ellipse_keyframes(hz, float(scn["t_end_s"]))
     return scn
+
+
+def ellipse_keyframes(hz: dict, t_end_s: float) -> list[dict]:
+    """hazards.GrowingEllipseHazard (a plume or fire front) sampled every keyframe_every_s from its start."""
+    from .geo import local_projector
+    from .hazards import ellipse_from
+
+    e = ellipse_from(hz["center"], hz)
+    _, to_ll = local_projector(*hz["center"])
+    out = []
+    for t in np.arange(e.start, t_end_s + 1e-9, float(hz.get("keyframe_every_s", 300))):
+        ring = np.c_[to_ll(*np.asarray(e.polygon_at(t).exterior.coords).T)].round(6).tolist()
+        out.append({"t_s": float(t), "geometry": {"type": "Polygon", "coordinates": [ring]}})
+    return out
 
 
 def schema_errors(scn: dict) -> list[str]:
