@@ -3,7 +3,7 @@ import { createClock, useClock, type Clock } from "./clock";
 import { MapView } from "./components/MapView";
 import { Panels, type PanelId } from "./components/Panels";
 import { JoinCard, Latest, ScoreCard, Sources, Toasts, useToasts } from "./components/Hud";
-import { API_BASE, fixturePlaybacks, JOIN_NUMBER, publishedComparison, publishedScatter, publishedState, scenario, town } from "./fixtures";
+import { API_BASE, fixturePlaybacks, publishedComparison, publishedScatter, publishedState, scenario, town } from "./fixtures";
 import { buildGraph, planWalkers, type BgHousehold } from "./people";
 import { asPlayback, stateFromPlayback, type Playback } from "./playback";
 import { loadFullTown, type FullTown } from "./townFull";
@@ -31,7 +31,7 @@ type Mode = "fixture" | "live";
 type Replay = "ember" | "baseline";
 
 const SPEEDS = [30, 60, 180, 600];
-const MAX_PLAYERS = 30;
+const MAX_PLAYERS = 25;
 const NO_CALLS: Calls = { live: [], recent: [] };
 
 type Model = {
@@ -272,7 +272,7 @@ export function App() {
   const t = useClock(clock, 250);
   const [toasts, toast] = useToasts();
   const [sources, setSources] = useState(false);
-  const [health, setHealth] = useState<{ join_number?: string | null; max_players?: number }>({});
+  const [health, setHealth] = useState<{ max_players?: number }>({});
   const settings = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
     const close = (event: PointerEvent) => {
@@ -394,7 +394,7 @@ export function App() {
         if (!cancelled) dispatch({ type: "live-status", status: "error", detail: error instanceof Error ? error.message : "GET /state failed." });
       }
       if (cancelled) return;
-      // the drill line and its cap, and the last robust optimisation (a later replan drops it from the plan)
+      // the drill's player cap, and the last robust optimisation (a later replan drops it from the plan)
       getJson(`${root}/health`).then((body) => setHealth(body as typeof health)).catch(() => undefined);
       getJson(`${root}/optimize`)
         .then((body) => dispatch({ type: "robust", robust: robustOf({ search: (body as { last?: unknown }).last }) }))
@@ -603,7 +603,7 @@ export function App() {
       else if (robust) {
         toast(robust.chosen !== robust.nominal_best
           ? `Chose ${robust.chosen} over the forecast's best ${robust.nominal_best}: fewer people missed in the worst 20% of worlds.`
-          : `Kept ${robust.chosen}: the forecast's best plan is also the most robust.`, "plan");
+          : `Kept the forecast plan ${robust.chosen}: no candidate beats it by ≥ 1 person in the worst 20%.`, "plan");
       }
     } catch (error) {
       toast(error instanceof Error ? `Optimize failed: ${error.message}` : "Optimize failed.", "error");
@@ -735,7 +735,7 @@ export function App() {
             <p className="replay-chip muted">No live replay yet · vehicles step between snapshots</p>
           ) : null}
           <Toasts toasts={toasts} />
-          <JoinCard number={health.join_number ?? JOIN_NUMBER} phones={phones} calls={calls} state={emberNow} max={health.max_players ?? MAX_PLAYERS} />
+          <JoinCard apiBase={live ? root : null} phones={phones} calls={calls} state={emberNow} max={health.max_players ?? MAX_PLAYERS} />
         </section>
         <Panels
           tab={model.tab}

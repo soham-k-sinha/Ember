@@ -1,8 +1,9 @@
 /** What floats over the stage: the score card, the latest change, toasts, the join card, and the sources drawer. */
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, type FormEvent } from "react";
 import qrcode from "qrcode-generator";
 import { scenario } from "../fixtures";
+import { postJson } from "../live";
 import { formatNumber, maskHandle, planCause, planDiff, planTiming, shortName, statusLabel } from "../format";
 import { facilityById, peopleCount, resourceById } from "../model";
 import type { Calls, Phone, PlanMetrics, PlanSnapshot, StateSnapshot } from "../types";
@@ -151,27 +152,56 @@ function QrCode(props: { text: string }) {
   );
 }
 
-export function JoinCard(props: { number: string | null; phones: Phone[]; calls: Calls; state: StateSnapshot; max: number }) {
+type Joined = { player: number; assigned_number: string };
+
+/** Multiplayer (D89): a shared iMessage line only hears phones registered with it, so a player enters their number
+ * here first (POST /join), then texts JOIN EMBER to the line it returns; that first text places them. */
+export function JoinCard(props: { apiBase: string | null; phones: Phone[]; calls: Calls; state: StateSnapshot; max: number }) {
   const [open, setOpen] = useState(true);
+  const [handle, setHandle] = useState("");
+  const [joined, setJoined] = useState<Joined | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const players = props.phones.filter((phone) => phone.player != null).sort((a, b) => a.player! - b.player!);
   const onCall = new Set(props.calls.live.map((call) => call.handle));
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!props.apiBase || !handle.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setJoined((await postJson(`${props.apiBase}/join`, { handle: handle.trim() }, 15000)) as Joined);
+    } catch (err) {
+      const text = err instanceof Error ? err.message : "Join failed";
+      setError(text.startsWith("409") && text.includes("full") ? "The drill is full." : text.startsWith("422") ? "Enter a mobile number, e.g. +1 617 555 0123." : text);
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <section className={open ? "join open" : "join"}>
       <button className="join-head" onClick={() => setOpen(!open)} aria-expanded={open}>
-        <strong>Scan to join the flood drill</strong>
+        <strong>Join the flood drill</strong>
         <span>{players.length}/{props.max}</span>
       </button>
       {open ? (
         <div className="join-body">
-          {props.number ? (
+          {joined ? (
             <div className="join-qr">
-              <QrCode text={`sms:${props.number}?&body=JOIN%20EMBER`} />
+              <QrCode text={`sms:${joined.assigned_number}?&body=JOIN%20EMBER`} />
               <p>
-                Or text <b>JOIN EMBER</b> to {props.number}. You get a real home in the flood zone, and the plan has to save you.
+                Player {joined.player}: text <b>JOIN EMBER</b> to {joined.assigned_number}. You get a real home in the flood zone, and the plan has to save you.
+                <button className="join-again" onClick={() => { setJoined(null); setHandle(""); }}>Another phone</button>
               </p>
             </div>
+          ) : props.apiBase ? (
+            <form className="join-form" onSubmit={submit}>
+              <input type="tel" inputMode="tel" autoComplete="tel" placeholder="Your mobile, e.g. +1 617 555 0123" value={handle} onChange={(event) => setHandle(event.target.value)} aria-label="Your mobile number" />
+              <button type="submit" disabled={busy || !handle.trim()}>{busy ? "…" : "Join"}</button>
+              {error ? <p className="join-error">{error}</p> : null}
+            </form>
           ) : (
-            <p className="muted">Text JOIN EMBER to the drill line to become a household in this flood.</p>
+            <p className="muted">Switch to Live to join the drill from your phone.</p>
           )}
           {players.length > 0 ? (
             <ol className="roster">
@@ -181,7 +211,7 @@ export function JoinCard(props: { number: string | null; phones: Phone[]; calls:
                   <li key={phone.handle}>
                     <b>Player {phone.player}</b>
                     <span>{maskHandle(phone.handle)}</span>
-                    {household ? <span className={`pill ${household.status}`}>{statusLabel(household.status)}</span> : <span className="muted">placing…</span>}
+                    {household ? <span className={`pill ${household.status}`}>{statusLabel(household.status)}</span> : <span className="muted">waiting for text</span>}
                     {onCall.has(phone.handle) ? <span className="pill call">on call</span> : null}
                   </li>
                 );

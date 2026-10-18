@@ -242,6 +242,12 @@ figure { margin: 0; }
 .qr { width: 104px; height: 104px; flex: none; border-radius: 6px; }
 .join-qr p { font-size: 13px; line-height: 1.4; color: #c9d3e1; }
 .join-qr b { color: var(--accent); }
+.join-form { display: flex; flex-wrap: wrap; gap: 6px; }
+.join-form input { flex: 1; min-width: 0; font: inherit; font-size: 14px; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--line); background: #0b0e14; color: inherit; }
+.join-form button, .join-again { font: inherit; font-size: 13px; padding: 7px 12px; border-radius: 8px; border: 1px solid var(--accent); background: #262011; color: var(--accent); cursor: pointer; }
+.join-form button:disabled { opacity: 0.5; cursor: default; }
+.join-again { display: block; margin-top: 6px; padding: 3px 8px; }
+.join-error { flex-basis: 100%; margin: 0; font-size: 13px; color: #ffb3ac; }
 .roster { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 150px; overflow: auto; }
 .roster li { display: flex; align-items: center; gap: 6px; font-size: 13px; }
 .roster li span:nth-child(2) { color: var(--muted); font-family: "IBM Plex Mono", ui-monospace, monospace; }

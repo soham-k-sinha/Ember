@@ -757,9 +757,12 @@ function throughput(robust: RobustSummary): string {
 function Verdict(props: { robust: RobustSummary }) {
   const r = props.robust;
   const worst = (candidate: string) => r.ranking?.find((row) => row.candidate === candidate)?.worst20_people_unreached;
+  const top = r.ranking?.find((row) => row.candidate !== "baseline")?.candidate;
   const rows: Array<{ label: string; value?: number; tone: string }> = [
     { label: `Chosen · ${r.chosen}`, value: worst(r.chosen), tone: "chosen" },
     ...(r.nominal_best !== r.chosen ? [{ label: `Best on the forecast · ${r.nominal_best}`, value: worst(r.nominal_best), tone: "candidate" }] : []),
+    // D86: the most robust candidate may win by less than 1 person; then the forecast plan is kept and both are shown
+    ...(top && top !== r.chosen && top !== r.nominal_best ? [{ label: `Most robust · ${top}`, value: worst(top), tone: "candidate" }] : []),
     { label: "Baseline", value: worst("baseline"), tone: "baseline" },
   ];
   return (
@@ -772,7 +775,7 @@ function Verdict(props: { robust: RobustSummary }) {
           </li>
         ))}
       </ul>
-      <p className="meta">People not reached in the worst 20% of {r.seeds} worlds. {r.nominal_best !== r.chosen ? "EMBER keeps the plan that holds up when things go wrong, not the one that looks best on the forecast." : "The best plan on the forecast is also the most robust."}</p>
+      <p className="meta">People not reached in the worst 20% of {r.seeds} worlds. {r.nominal_best !== r.chosen ? "EMBER keeps the plan that holds up when things go wrong, not the one that looks best on the forecast." : "Kept the forecast plan: no candidate beats it by ≥ 1 person in the worst 20%."}</p>
     </>
   );
 }
