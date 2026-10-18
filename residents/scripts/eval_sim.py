@@ -20,6 +20,7 @@ import asyncio
 import copy
 import json
 import sys
+from functools import partial
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -90,12 +91,8 @@ async def run(ev: Eval, samples: list[dict], read) -> list[dict]:
         role, ctx = s["role"], s.get("context", {})
         thread = {"household_id": JUDGE} if role == "resident" else {"facility_id": HOSPITAL}
         last = ev.offered(role) if ctx.get("last_outbound") else None
-
-        def outcome(e: Extraction):
-            return to_outcome(e, role=role, thread=thread, text=s["text"], pending=ctx.get("pending"),
-                              resolve_road=ev.b.resolve_road, last_assignment_id=last,
-                              known_needs=KNOWN if role == "resident" else None)
-
+        outcome = partial(to_outcome, role=role, thread=thread, text=s["text"], pending=ctx.get("pending"),
+                          resolve_road=ev.b.resolve_road, last_assignment_id=last, known_needs=KNOWN if role == "resident" else None)
         ex = await read(s)  # None: nothing readable → the backend asks the plan's open question, no report
         x = outcome(ex or Extraction(facts=[], confidence=1.0, clarifying_question=None))
         truth, g_rej = ev.reports(role, outcome(gold(s)), "g")

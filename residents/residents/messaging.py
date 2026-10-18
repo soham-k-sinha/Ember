@@ -333,12 +333,11 @@ class Messenger:
             if on_call:
                 self.voice.capture(handle, text)
             elif delivery == "sent" and self.photon is not None:
-                delivery = await self._photon_send(handle, text, f"{live[-1]['id']}-r")
+                delivery = await self._send_or_call(handle, text, f"{live[-1]['id']}-r")
                 if delivery == "failed":
                     for d in live:
                         if d["id"]:
                             self.store.set_delivery(d["id"], "failed")
-                    await self._undelivered(handle, text)
             thread_ids = [d["id"] for d in live if d["id"]]
             if thread_ids:
                 self.store.set_said(thread_ids, text)
@@ -354,33 +353,30 @@ class Messenger:
                 if on_call:
                     self.voice.capture(handle, d["text"])
                 elif delivery == "sent" and self.photon is not None:
-                    delivery = await self._photon_send(handle, d["text"], d["id"] or new_message_id())
-                    if d["id"]:
-                        self.store.set_delivery(d["id"], delivery)
-                    if delivery == "failed":
-                        await self._undelivered(handle, d["text"])
+                    delivery = await self._send_or_call(handle, d["text"], d["id"] or new_message_id(), d["id"])
             self._tap({"direction": "out", "who": d["thread"] or handle, "text": d["text"],
                        "delivery": "voice" if on_call and delivery in ("sent", "dev") else delivery})
 
-    async def _photon_send(self, handle: str, text: str, key: str) -> str:
+    async def _send_or_call(self, handle: str, text: str, key: str, message_id: str | None = None) -> str:
+        """Text an opted-in phone through Photon (Idempotency-Key `ember-<key>`), recording the delivery on `message_id`.
+        A text Photon refuses after its retries goes to the voice manager, which may call them with it instead (D90)."""
         phone = self.store.phone(handle=handle)
         if phone is None or not self.opted_in(phone):
             return "not_opted_in"
         try:
-            await self.photon.send_text(phone["space_id"], phone["agent_user_id"], text, idempotency_key=f"ember-{key}")
-            return "sent"
-        except Exception as e:  # noqa: BLE001 - a failed send must not break the turn
+            res = await self.photon.send_text(phone["space_id"], phone["agent_user_id"], text, idempotency_key=f"ember-{key}")
+            delivery = "sent"
+        except Exception as e:  # noqa: BLE001 - a failed send must not break the turn or the replan loop
             log.error("send to %s failed: %s", handle, e)
-            return "failed"
-
-    async def _undelivered(self, handle: str, text: str) -> None:
-        """D90: Photon refused a text after its retries: the voice manager may call them with it instead."""
-        if self.voice is None:
-            return
-        try:
-            await self.voice.undelivered(handle, text)
-        except Exception:  # noqa: BLE001 - the text stays failed and is retried; the plan goes on
-            log.exception("call-back for an undelivered text to %s failed", handle)
+            res, delivery = None, "failed"
+        if message_id:
+            self.store.set_delivery(message_id, delivery, external_id=(res or {}).get("id"))
+        if delivery == "failed" and self.voice is not None:
+            try:
+                await self.voice.undelivered(handle, text)
+            except Exception:  # noqa: BLE001 - the text stays failed and is retried; the plan goes on
+                log.exception("call-back for an undelivered text to %s failed", handle)
+        return delivery
 
     def _route(self, phone: dict | None) -> str:
         """Where a message to this phone goes now: "voice" (its call is live, D74), "dev" (Photon off),
@@ -425,9 +421,7 @@ class Messenger:
             self.voice.capture(handle, text)
             delivery = "sent"  # said on the live call
         elif route == "photon":
-            delivery = await self._photon_send(handle, text, new_message_id())
-            if delivery == "failed":
-                await self._undelivered(handle, text)
+            delivery = await self._send_or_call(handle, text, new_message_id())
         else:
             delivery = route
         self._lobby_append(handle, {"direction": "out", "text": text, "t_s": self._t_s(), "delivery": delivery})
@@ -507,16 +501,7 @@ class Messenger:
                 log.warning("%s phone hasn't texted the line yet; message %s not sent", thread_key(thread), msg["id"])
             self._tap({"direction": "out", "who": thread, "text": msg["text"], "delivery": "voice" if route == "voice" else delivery})
             return msg, delivery
-        try:
-            res = await self.photon.send_text(phone["space_id"], phone["agent_user_id"], msg["text"],  # type: ignore[union-attr]
-                                              idempotency_key=f"ember-{msg['id']}")
-            delivery = "sent"
-            self.store.set_delivery(msg["id"], delivery, external_id=(res or {}).get("id"))
-        except (PhotonError, Exception) as e:  # noqa: BLE001 - a failed send must not break the replan loop
-            delivery = "failed"
-            log.error("send %s to %s failed: %s", msg["id"], thread_key(thread), e)
-            self.store.set_delivery(msg["id"], delivery)
+        delivery = await self._send_or_call(phone["handle"], msg["text"], msg["id"], msg["id"])
         self._tap({"direction": "out", "who": thread, "text": msg["text"], "delivery": delivery})
-        if delivery == "failed":
-            await self._undelivered(phone["handle"], msg["text"])  # type: ignore[index]
         return msg, delivery
+

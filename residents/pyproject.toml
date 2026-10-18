@@ -1,7 +1,7 @@
 [project]
 name = "ember-residents"
 version = "0.1.0"
-description = "Ember backend: shared-state DB, HTTP/WS API, Photon threads, the one LLM extraction call, replan loop"
+description = "Ember backend: shared-state DB, HTTP/WS API, Photon threads, the two guarded model calls (read a text, word a reply), replan loop"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "anthropic>=1.15.0",
@@ -28,6 +28,16 @@ packages = ["residents"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 140
+
+[tool.ruff.lint]
+select = ["E9", "F", "B"]
+ignore = ["B905"]   # zip() lengths are equal by construction here
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["F811"]
 
 [tool.uv.sources]
 ember-engine = { path = "../engine", editable = true }
